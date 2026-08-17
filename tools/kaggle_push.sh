@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Заливка в Kaggle одной командой. Требует только ~/.kaggle/kaggle.json.
+# Заливка в Kaggle одной командой.
 #
 #   tools/kaggle_push.sh            # датасет + ядро шага 0 (baseline, без обучения)
 #   tools/kaggle_push.sh run1       # то же + запуск прогона 1 (обучение с EOS)
@@ -7,6 +7,13 @@
 #
 # Прогон 2 (с нуля на train_merged) отсюда НЕ запускается намеренно: он дорогой
 # по квоте, решение о нём принимается отдельно. См. docs/RUNBOOK_EOS.md.
+#
+# Ключ: поддержаны ОБА формата, потому что Kaggle сменил их в процессе работы
+# над этим проектом (17.08.2026 выдавали уже только новый).
+#   старый  ~/.kaggle/kaggle.json        {"username": "...", "key": "..."}
+#   новый   ~/.kaggle/access_token       KGAT_... (или переменная KAGGLE_API_TOKEN)
+# У нового username в файле не лежит — его отдаёт `kaggle config view` уже
+# после того, как CLI сходил на сервер и опознал токен.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,33 +22,47 @@ BUILD="$ROOT/build/kaggle"
 PY="${PY:-$ROOT/.venv/bin/python}"
 MODE="${1:-step0}"
 
-# --- ключ ------------------------------------------------------------------
-CREDS="${KAGGLE_CONFIG_DIR:-$HOME/.kaggle}/kaggle.json"
-if [[ ! -f "$CREDS" ]]; then
+# --- CLI ---------------------------------------------------------------
+# Ставится ДО определения username: у нового формата username узнаёт сам
+# kaggle CLI, инструмента без него ещё нет.
+if ! "$PY" -c "import kaggle" 2>/dev/null; then
+  echo "ставлю kaggle CLI в .venv (единственная новая зависимость)"
+  "$PY" -m pip install -q kaggle
+fi
+KG=("$PY" -m kaggle)
+
+# --- ключ ----------------------------------------------------------------
+CONFIG_DIR="${KAGGLE_CONFIG_DIR:-$HOME/.kaggle}"
+LEGACY_CREDS="$CONFIG_DIR/kaggle.json"
+TOKEN_FILE="$CONFIG_DIR/access_token"
+
+if [[ -f "$LEGACY_CREDS" ]]; then
+  chmod 600 "$LEGACY_CREDS" 2>/dev/null || true
+  USER_NAME="$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['username'])" "$LEGACY_CREDS")"
+elif [[ -f "$TOKEN_FILE" || -n "${KAGGLE_API_TOKEN:-}" ]]; then
+  chmod 600 "$TOKEN_FILE" 2>/dev/null || true
+  USER_NAME="$("${KG[@]}" config view 2>/dev/null | sed -n 's/^- username: //p')"
+  if [[ -z "$USER_NAME" ]]; then
+    echo "токен есть, но 'kaggle config view' не назвал username — токен" \
+         "недействителен или сервис недоступен" >&2
+    exit 1
+  fi
+else
   cat >&2 <<'EOF'
-Нет ~/.kaggle/kaggle.json.
+Нет ни ~/.kaggle/kaggle.json (старый формат), ни ~/.kaggle/access_token (новый).
 
   1. kaggle.com -> Settings -> API -> Create New Token
-  2. скачается kaggle.json, положить его сюда:
-       mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/
-       chmod 600 ~/.kaggle/kaggle.json
+  2. страница покажет команду вида:
+       mkdir -p ~/.kaggle && echo KGAT_... > ~/.kaggle/access_token \
+         && chmod 600 ~/.kaggle/access_token
+     выполнить её (или export KAGGLE_API_TOKEN=KGAT_...)
   3. запустить эту команду снова
 
 Всё остальное уже готово: build/kaggle собран, скрипты ядер написаны.
 EOF
   exit 1
 fi
-chmod 600 "$CREDS" 2>/dev/null || true
-
-USER_NAME="$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['username'])" "$CREDS")"
 echo "пользователь Kaggle: $USER_NAME"
-
-# --- CLI -------------------------------------------------------------------
-if ! "$PY" -c "import kaggle" 2>/dev/null; then
-  echo "ставлю kaggle CLI в .venv (единственная новая зависимость)"
-  "$PY" -m pip install -q kaggle
-fi
-KG=("$PY" -m kaggle)
 
 # --- сборка ----------------------------------------------------------------
 "$PY" tools/kaggle_prep.py

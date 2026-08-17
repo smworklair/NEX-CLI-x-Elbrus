@@ -51,6 +51,41 @@ ADAPTER_FILES = ("adapter_config.json", "adapter_model.safetensors",
                  "tokenizer.json", "tokenizer_config.json",
                  "chat_template.jinja")
 
+# Общий пролог для обоих ядер: находит датасет в /kaggle/input с ретраями.
+# Понадобился не для перестраховки — два реальных прогона подряд упали именно
+# здесь, по двум РАЗНЫМ причинам:
+#   v1: `kaggle datasets status` отчитался "ready", а контейнер ядра, запущенный
+#       сразу за этим, стартовал с пустым /kaggle/input — маунт ещё не успел
+#       прикрепиться. Лечится ретраями с паузой.
+#   v2: с ретраями дождались непустого /kaggle/input, но `glob("*/marker")`
+#       (один уровень) всё равно не находил ничего. Диагностика показала
+#       почему: верхний уровень — не сам датасет, а папка `datasets`. Kaggle
+#       сменил структуру монтирования, `/kaggle/input/<slug>/...` (плоско)
+#       больше не гарантия. Лечится рекурсивным glob вместо одноуровневого.
+# Если структура сменится в третий раз — упадёт с полным деревом на 3 уровня
+# в сообщении, а не с "не нашёл и всё".
+FIND_DATASET = '''\
+def _find_dataset(marker_file, tries=6, pause=10):
+    import glob, os, time
+    for i in range(tries):
+        hits = glob.glob(f"/kaggle/input/**/{marker_file}", recursive=True)
+        if hits:
+            return os.path.dirname(hits[0])
+        if i < tries - 1:
+            print(f"  датасет ещё не примонтирован (попытка {i+1}/{tries}), "
+                  f"жду {pause}с...", flush=True)
+            time.sleep(pause)
+    tree = []
+    for root, dirs, files in os.walk("/kaggle/input"):
+        depth = root.count(os.sep) - "/kaggle/input".count(os.sep)
+        tree.append(root + (" [" + ", ".join(files) + "]" if files else ""))
+        if depth >= 4:   # печатаем и этот уровень, вглубь просто не идём дальше
+            dirs[:] = []
+    raise AssertionError(
+        f"датасет не подключён: {marker_file!r} не найден в /kaggle/input "
+        f"(рекурсивно, {tries} попыток). Дерево:\\n  " + "\\n  ".join(tree))
+'''
+
 STEP0 = '''\
 """Шаг 0: baseline текущего адаптера. Обучения нет, только инференс.
 
@@ -62,11 +97,10 @@ STEP0 = '''\
 Сравнение свежего замера с той цифрой дало бы прирост, наполовину состоящий
 из смены ярлыков.
 """
-import subprocess, sys, glob, os
+import subprocess, sys, os
 
-IN = glob.glob("/kaggle/input/*/validate_kaggle.py")
-assert IN, "датасет не подключён: не вижу validate_kaggle.py в /kaggle/input"
-BASE = os.path.dirname(IN[0])
+''' + FIND_DATASET + '''
+BASE = _find_dataset("validate_kaggle.py")
 print("датасет:", BASE, flush=True)
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
@@ -94,11 +128,10 @@ RUN1 = '''\
 Стоп-условие встроено: если самопроверка EOS не прошла, обучение не
 запускается и ядро падает, не сжигая квоту.
 """
-import subprocess, sys, glob, os
+import subprocess, sys, os
 
-IN = glob.glob("/kaggle/input/*/train_qlora.py")
-assert IN, "датасет не подключён: не вижу train_qlora.py в /kaggle/input"
-BASE = os.path.dirname(IN[0])
+''' + FIND_DATASET + '''
+BASE = _find_dataset("train_qlora.py")
 OUT = "/kaggle/working/lora-eos"
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
@@ -145,11 +178,18 @@ for data, dump in (("eval.jsonl", "eos_eval.jsonl"),
                     f"{BASE}/{data}"], check=True)
 '''
 
+# Заголовок ядра ОБЯЗАН слагифицироваться ровно в тот же slug, что и id, иначе
+# Kaggle молча создаёт ядро по адресу, вычисленному из заголовка, а не по
+# заданному id — ровно так и вышло на первом заливе: заголовок был кириллицей
+# ("Шаг 0: baseline адаптера без обучения"), Kaggle срезал всё нелатинское и
+# получил slug `0-baseline` вместо `vliw-step0-baseline`. CLI об этом
+# предупреждает («title does not resolve to id»), но не отказывается —
+# создаёт по-своему. Поэтому заголовок здесь = слова из slug через пробел,
+# без пунктуации: человекочитаемое описание — в докстринге самого скрипта
+# ядра и в RUNBOOK_EOS.md, а не в title.
 KERNELS = [
-    ("vliw-step0-baseline", "step0.py", STEP0,
-     "Шаг 0: baseline адаптера без обучения"),
-    ("vliw-run1-eos", "run1_eos.py", RUN1,
-     "Прогон 1: изолированный EOS на старых данных"),
+    ("vliw-step0-baseline", "step0.py", STEP0, "vliw step0 baseline"),
+    ("vliw-run1-eos", "run1_eos.py", RUN1, "vliw run1 eos"),
 ]
 
 
@@ -207,6 +247,15 @@ def main() -> None:
             "kernel_type": "script",
             "is_private": True,
             "enable_gpu": True,
+            # Явно T4, а не «любой enable_gpu=True». Без этого Kaggle иногда
+            # выдаёт P100 (Pascal, sm_60) — стандартный образ ставит torch без
+            # ядер под sm_60, PeftModel.from_pretrained падает с
+            # `CUDA error: no kernel image is available for execution on the
+            # device`. Это не гипотеза: ровно так упал первый реальный прогон
+            # шага 0. Собственная документация Kaggle (kernels_metadata.md)
+            # прямо предупреждает: NvidiaTeslaP100 несовместима со стандартным
+            # образом, рекомендация — NvidiaTeslaT4.
+            "machine_shape": "NvidiaTeslaT4",
             "enable_internet": True,
             "dataset_sources": [f"USERNAME/{DATASET_SLUG}"],
             "competition_sources": [],

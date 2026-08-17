@@ -1,0 +1,1 @@
+{"repos": [{"repoId": "Qwen/Qwen2.5-3B-Instruct", "repoType": "model", "commitHash": "aa8e72537993ba99e69dfaafa59ed015b17504d1", "filePaths": ["model-00002-of-00002.safetensors", "tokenizer.json", "merges.txt", "model-00001-of-00002.safetensors", "config.json", "model.safetensors.index.json", "vocab.json", "tokenizer_config.json", "generation_config.json"]}]}

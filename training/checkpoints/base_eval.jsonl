@@ -1,0 +1,300 @@
+{"i": 1, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 25, "gap": 3}
+{"i": 2, "kind": "сдвиг", "errs": ["9 выдана в 16, операнд 3 готов к 17", "10 выдана в 17, операнд 7 готов к 18", "11 выдана в 17, операнд 7 готов к 18", "12 выдана в 17, операнд 7 готов к 18", "конфликт на канале 1 в такте 17: 7 и 12"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 28}
+{"i": 3, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 14, "gap": 0}
+{"i": 4, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 27, "gap": 1}
+{"i": 5, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 0: 0 и 6"], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 15}
+{"i": 6, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 20, "gap": 0}
+{"i": 7, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 8, "gap": 0}
+{"i": 8, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 11, "gap": 0}
+{"i": 9, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 8, "gap": 0}
+{"i": 10, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 16, "gap": 0}
+{"i": 11, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20], "n_decoded": 19, "n_graph": 8, "gold": 5, "gap": 0}
+{"i": 12, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 0}
+{"i": 13, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 18, "gap": 0}
+{"i": 14, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 17, "gap": 0}
+{"i": 15, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 12, "gap": 0}
+{"i": 16, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 0}
+{"i": 17, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 11, "gap": 0}
+{"i": 18, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 19, "gap": 0}
+{"i": 19, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21], "n_decoded": 20, "n_graph": 6, "gold": 4, "gap": 0}
+{"i": 20, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16], "n_decoded": 17, "n_graph": 10, "gold": 7, "gap": 0}
+{"i": 21, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 16, "gap": 0}
+{"i": 22, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 14, "gap": 0}
+{"i": 23, "kind": "сдвиг", "errs": ["8 выдана в 12, операнд 5 готов к 16", "9 выдана в 12, операнд 4 готов к 15", "9 выдана в 12, операнд 5 готов к 16"], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 18}
+{"i": 24, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 16, "gap": 0}
+{"i": 25, "kind": "сдвиг", "errs": ["9 выдана в 13, операнд 4 готов к 14"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 18}
+{"i": 26, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 12, "gap": 0}
+{"i": 27, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 13, "gap": 1}
+{"i": 28, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 22, "gap": 1}
+{"i": 29, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 27, "gap": 0}
+{"i": 30, "kind": "сдвиг", "errs": ["5 выдана в 2, операнд 4 готов к 3", "конфликт на канале 3 в такте 1: 3 и 8"], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 10}
+{"i": 31, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 36, "gap": 0}
+{"i": 32, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 10, "gap": 0}
+{"i": 33, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 11, "gap": 0}
+{"i": 34, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 17, "gap": 0}
+{"i": 35, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 2}
+{"i": 36, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 12, "gap": 0}
+{"i": 37, "kind": "сдвиг", "errs": ["8 выдана в 14, операнд 4 готов к 18", "1 (LOAD) на канале 1, который её не исполняет", "5 (DIV) на канале 0, который её не исполняет"], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 20}
+{"i": 38, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 10: 4 и 5"], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 16}
+{"i": 39, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 11, "gap": 0}
+{"i": 40, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 1: 2 и 3"], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 4}
+{"i": 41, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 0}
+{"i": 42, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 10, "gap": 0}
+{"i": 43, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 6}
+{"i": 44, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 1}
+{"i": 45, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 21, "gap": 2}
+{"i": 46, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 9, "gap": 0}
+{"i": 47, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7, "gap": 0}
+{"i": 48, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 16, "gap": 3}
+{"i": 49, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 16, "gap": 4}
+{"i": 50, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 23, "gap": 1}
+{"i": 51, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 31, "gap": 1}
+{"i": 52, "kind": "галлюцинация", "errs": ["не размещены инструкции: [11]"], "extra": [], "n_decoded": 13, "n_graph": 14, "gold": 26}
+{"i": 53, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 0: 0 и 1", "конфликт на канале 2 в такте 0: 3 и 5"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 16}
+{"i": 54, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 9, "gap": 0}
+{"i": 55, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 5, "gap": 0}
+{"i": 56, "kind": "сдвиг", "errs": ["9 выдана в 19, операнд 6 готов к 20", "11 выдана в 19, операнд 6 готов к 20"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 24}
+{"i": 57, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 9, "gap": 0}
+{"i": 58, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 14, "gap": 0}
+{"i": 59, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 18, "gap": 0}
+{"i": 60, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 11, "gap": 0}
+{"i": 61, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 0: 0 и 4"], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7}
+{"i": 62, "kind": "ресурс", "errs": ["5 (DIV) на канале 0, который её не исполняет", "конфликт на канале 3 в такте 2: 2 и 7"], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 14}
+{"i": 63, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 15, "gap": 0}
+{"i": 64, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 17, "gap": 0}
+{"i": 65, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 6, "gap": 0}
+{"i": 66, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 29, "gap": 0}
+{"i": 67, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 25, "gap": 0}
+{"i": 68, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 12, "gap": 0}
+{"i": 69, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 18, "gap": 0}
+{"i": 70, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 22, "gap": 0}
+{"i": 71, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 5: 1 и 5", "конфликт на канале 1 в такте 28: 7 и 8"], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 22}
+{"i": 72, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 7, "gap": 0}
+{"i": 73, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 26, "gap": 0}
+{"i": 74, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 16, "gap": 0}
+{"i": 75, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 17, "gap": 4}
+{"i": 76, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 30, "gap": 0}
+{"i": 77, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 11, "gap": 0}
+{"i": 78, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 23, "gap": 0}
+{"i": 79, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 33, "gap": 0}
+{"i": 80, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 17, "gap": 0}
+{"i": 81, "kind": "сдвиг", "errs": ["11 выдана в 20, операнд 7 готов к 21"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 33}
+{"i": 82, "kind": "сдвиг", "errs": ["12 выдана в 21, операнд 7 готов к 22", "3 (DIV) на канале 0, который её не исполняет"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 25}
+{"i": 83, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 11, "gap": 0}
+{"i": 84, "kind": "ресурс", "errs": ["конфликт на канале 2 в такте 0: 12 и 13", "такт 0: 7 операций при ширине 6"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 11}
+{"i": 85, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 6, "gold": 19, "gap": 0}
+{"i": 86, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 7, "gap": 0}
+{"i": 87, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 16, "gap": 0}
+{"i": 88, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 0: 0 и 2"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 15}
+{"i": 89, "kind": "сдвиг", "errs": ["4 выдана в 13, операнд 3 готов к 14"], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 22}
+{"i": 90, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 14, "gap": 0}
+{"i": 91, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 14, "gap": 0}
+{"i": 92, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 33, "gap": 0}
+{"i": 93, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 19, "gap": 5}
+{"i": 94, "kind": "сдвиг", "errs": ["6 выдана в 14, операнд 4 готов к 15", "8 выдана в 14, операнд 4 готов к 15", "конфликт на канале 1 в такте 14: 4 и 6"], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 24}
+{"i": 95, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 28, "gap": 0}
+{"i": 96, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 16, "gap": 2}
+{"i": 97, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 2}
+{"i": 98, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33], "n_decoded": 32, "n_graph": 6, "gold": 9, "gap": 0}
+{"i": 99, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 27, "gap": 0}
+{"i": 100, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 10, "gap": 0}
+{"i": 101, "kind": "ресурс", "errs": ["2 (MUL) на канале 2, который её не исполняет", "5 (MUL) на канале 5, который её не исполняет"], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7}
+{"i": 102, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 18, "gap": 0}
+{"i": 103, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 17, "gap": 0}
+{"i": 104, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 17, "gap": 0}
+{"i": 105, "kind": "сдвиг", "errs": ["8 выдана в 16, операнд 4 готов к 17"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 26}
+{"i": 106, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 18, "gap": 0}
+{"i": 107, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 17, "gap": 0}
+{"i": 108, "kind": "хвост", "errs": [], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 14, "gap": 2}
+{"i": 109, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7, "gap": 0}
+{"i": 110, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 11, "gap": 0}
+{"i": 111, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 19, "gap": 0}
+{"i": 112, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 10, "n_graph": 10, "gold": 37, "gap": 0}
+{"i": 113, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 8, "gold": 13, "gap": 0}
+{"i": 114, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 21, "gap": 0}
+{"i": 115, "kind": "сдвиг", "errs": ["8 выдана в 14, операнд 4 готов к 18", "конфликт на канале 5 в такте 7: 9 и 4"], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 17}
+{"i": 116, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 11, "gap": 0}
+{"i": 117, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 22, "gap": 0}
+{"i": 118, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 21, "gap": 6}
+{"i": 119, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 9, "gap": 0}
+{"i": 120, "kind": "сдвиг", "errs": ["9 выдана в 14, операнд 8 готов к 20", "7 (DIV) на канале 0, который её не исполняет", "конфликт на канале 0 в такте 2: 2 и 6"], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 21}
+{"i": 121, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 0}
+{"i": 122, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 16, "gap": 2}
+{"i": 123, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 16, "gap": 0}
+{"i": 124, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 12, "gap": 0}
+{"i": 125, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 11, "gap": 0}
+{"i": 126, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 9, "gap": 0}
+{"i": 127, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 11, "gap": 0}
+{"i": 128, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 10, "gap": 0}
+{"i": 129, "kind": "ресурс", "errs": ["0 (DIV) на канале 1, который её не исполняет"], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 16}
+{"i": 130, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16], "n_decoded": 17, "n_graph": 8, "gold": 6, "gap": 0}
+{"i": 131, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 14, "gap": 0}
+{"i": 132, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 0}
+{"i": 133, "kind": "сдвиг", "errs": ["7 выдана в 17, операнд 6 готов к 21", "10 выдана в 18, операнд 6 готов к 21"], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 22}
+{"i": 134, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 11, "gap": 0}
+{"i": 135, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 20, "gap": 1}
+{"i": 136, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 6, "gap": 0}
+{"i": 137, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 18, "gap": 3}
+{"i": 138, "kind": "хвост", "errs": [], "extra": [10, 11], "n_decoded": 12, "n_graph": 10, "gold": 7, "gap": 0}
+{"i": 139, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 14, "gap": 0}
+{"i": 140, "kind": "ресурс", "errs": ["5 (LOAD) на канале 7, который её не исполняет", "6 (SUB) на канале 6, который её не исполняет", "7 (SUB) на канале 8, который её не исполняет", "конфликт на канале 3 в такте 1: 3 и 8"], "extra": [10, 11, 12], "n_decoded": 13, "n_graph": 10, "gold": 6}
+{"i": 141, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 30, "gap": 1}
+{"i": 142, "kind": "ресурс", "errs": ["9 (DIV) на канале 1, который её не исполняет"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 24}
+{"i": 143, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 16, "gap": 0}
+{"i": 144, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 15, "gap": 0}
+{"i": 145, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 12, "gap": 0}
+{"i": 146, "kind": "сдвиг", "errs": ["11 выдана в 17, операнд 5 готов к 18"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 21}
+{"i": 147, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 11, "gap": 0}
+{"i": 148, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 34, "gap": 1}
+{"i": 149, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 22, "gap": 0}
+{"i": 150, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 9, "gap": 0}
+{"i": 151, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 10, "gap": 0}
+{"i": 152, "kind": "хвост", "errs": [], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 18, "gap": 0}
+{"i": 153, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7, "gap": 0}
+{"i": 154, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 9, "gap": 0}
+{"i": 155, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 5, "gap": 0}
+{"i": 156, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 0}
+{"i": 157, "kind": "хвост", "errs": [], "extra": [12], "n_decoded": 13, "n_graph": 12, "gold": 12, "gap": 0}
+{"i": 158, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 17, "gap": 0}
+{"i": 159, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 6, "gap": 0}
+{"i": 160, "kind": "хвост", "errs": [], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 13, "gap": 1}
+{"i": 161, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 13, "gap": 1}
+{"i": 162, "kind": "ресурс", "errs": ["2 (DIV) на канале 0, который её не исполняет", "конфликт на канале 0 в такте 5: 2 и 5"], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 22}
+{"i": 163, "kind": "сдвиг", "errs": ["7 выдана в 5, операнд 1 готов к 6"], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 15}
+{"i": 164, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 22, "gap": 0}
+{"i": 165, "kind": "сдвиг", "errs": ["11 выдана в 7, операнд 5 готов к 13"], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 31}
+{"i": 166, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 4, "gap": 0}
+{"i": 167, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 0}
+{"i": 168, "kind": "сдвиг", "errs": ["10 выдана в 14, операнд 8 готов к 15", "конфликт на канале 0 в такте 0: 0 и 9"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 27}
+{"i": 169, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 17, "gap": 3}
+{"i": 170, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 10, "gap": 0}
+{"i": 171, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 12, "gap": 0}
+{"i": 172, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 32, "gap": 0}
+{"i": 173, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 10, "gap": 0}
+{"i": 174, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 17, "gap": 0}
+{"i": 175, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 13, "gap": 0}
+{"i": 176, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 16, "gap": 0}
+{"i": 177, "kind": "ресурс", "errs": ["2 (MUL) на канале 2, который её не исполняет", "5 (MUL) на канале 2, который её не исполняет", "конфликт на канале 0 в такте 0: 0 и 10"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 21}
+{"i": 178, "kind": "сдвиг", "errs": ["9 выдана в 16, операнд 3 готов к 17", "12 выдана в 21, операнд 7 готов к 22", "12 выдана в 21, операнд 10 готов к 22", "конфликт на канале 0 в такте 17: 7 и 10"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 27}
+{"i": 179, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 0}
+{"i": 180, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 14, "gap": 2}
+{"i": 181, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 15, "gap": 0}
+{"i": 182, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 17, "gap": 0}
+{"i": 183, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 17, "gap": 0}
+{"i": 184, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 9, "gap": 0}
+{"i": 185, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 7, "gap": 0}
+{"i": 186, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 13, "gap": 12}
+{"i": 187, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 5: 3 и 6"], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 12}
+{"i": 188, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 17, "gap": 0}
+{"i": 189, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 23, "gap": 0}
+{"i": 190, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 18, "gap": 0}
+{"i": 191, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 9, "gap": 0}
+{"i": 192, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 4: 1 и 2"], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 17}
+{"i": 193, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 15, "gap": 0}
+{"i": 194, "kind": "сдвиг", "errs": ["5 выдана в 12, операнд 2 готов к 13"], "extra": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 6, "gold": 13}
+{"i": 195, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 6, "gold": 13, "gap": 0}
+{"i": 196, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 4, "gap": 0}
+{"i": 197, "kind": "ресурс", "errs": ["5 (DIV) на канале 1, который её не исполняет"], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 25}
+{"i": 198, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 22, "gap": 1}
+{"i": 199, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 10, "gap": 0}
+{"i": 200, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 15, "gap": 0}
+{"i": 201, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 10, "gap": 0}
+{"i": 202, "kind": "хвост", "errs": [], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 17, "gap": 4}
+{"i": 203, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 11, "gap": 0}
+{"i": 204, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 13, "gap": 0}
+{"i": 205, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 6, "gap": 0}
+{"i": 206, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 13, "gap": 0}
+{"i": 207, "kind": "ресурс", "errs": ["2 (DIV) на канале 1, который её не исполняет"], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 14}
+{"i": 208, "kind": "ресурс", "errs": ["конфликт на канале 1 в такте 0: 0 и 11"], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 21}
+{"i": 209, "kind": "сдвиг", "errs": ["8 выдана в 11, операнд 4 готов к 12", "9 выдана в 16, операнд 3 готов к 21", "конфликт на канале 1 в такте 11: 4 и 8"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 32}
+{"i": 210, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 17, "gap": 4}
+{"i": 211, "kind": "ресурс", "errs": ["7 (MUL) на канале 2, который её не исполняет", "конфликт на канале 0 в такте 4: 3 и 4"], "extra": [8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 8, "gold": 15}
+{"i": 212, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 16, "gap": 0}
+{"i": 213, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 15, "gap": 3}
+{"i": 214, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 13, "gap": 4}
+{"i": 215, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 9, "gap": 0}
+{"i": 216, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 8, "gap": 0}
+{"i": 217, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 19, "gap": 0}
+{"i": 218, "kind": "ресурс", "errs": ["конфликт на канале 3 в такте 6: 3 и 7"], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 14}
+{"i": 219, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 5, "gap": 0}
+{"i": 220, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 18, "gap": 2}
+{"i": 221, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 12, "gap": 0}
+{"i": 222, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 25, "gap": 1}
+{"i": 223, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 16, "gap": 2}
+{"i": 224, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 9, "gap": 0}
+{"i": 225, "kind": "сдвиг", "errs": ["8 выдана в 21, операнд 7 готов к 26", "9 (MUL) на канале 5, который её не исполняет"], "extra": [10, 11], "n_decoded": 12, "n_graph": 10, "gold": 24}
+{"i": 226, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 8, "gold": 16, "gap": 0}
+{"i": 227, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 10, "gap": 0}
+{"i": 228, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 13, "gap": 2}
+{"i": 229, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 21, "gap": 0}
+{"i": 230, "kind": "ресурс", "errs": ["1 (DIV) на канале 1, который её не исполняет", "конфликт на канале 1 в такте 5: 1 и 9"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 40}
+{"i": 231, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 20, "gap": 1}
+{"i": 232, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 8, "gap": 4}
+{"i": 233, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 20, "gap": 0}
+{"i": 234, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 22, "gap": 0}
+{"i": 235, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 14, "gap": 0}
+{"i": 236, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 10, "gap": 0}
+{"i": 237, "kind": "хвост", "errs": [], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 19, "gap": 0}
+{"i": 238, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 14, "gap": 0}
+{"i": 239, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 23, "gap": 0}
+{"i": 240, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7, "gap": 0}
+{"i": 241, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 0}
+{"i": 242, "kind": "ресурс", "errs": ["конфликт на канале 2 в такте 12: 8 и 11"], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 23}
+{"i": 243, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 10, "n_graph": 10, "gold": 9, "gap": 0}
+{"i": 244, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 16, "gap": 0}
+{"i": 245, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 16, "gap": 0}
+{"i": 246, "kind": "ресурс", "errs": ["конфликт на канале 3 в такте 2: 2 и 3"], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 7}
+{"i": 247, "kind": "ресурс", "errs": ["2 (DIV) на канале 1, который её не исполняет"], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 27}
+{"i": 248, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 8, "gap": 0}
+{"i": 249, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 12, "gap": 1}
+{"i": 250, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 14, "gap": 2}
+{"i": 251, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 12, "gap": 0}
+{"i": 252, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 11, "gap": 0}
+{"i": 253, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 11, "gap": 0}
+{"i": 254, "kind": "сдвиг", "errs": ["1 выдана в 0, операнд 0 готов к 1"], "extra": [10, 11, 12, 13], "n_decoded": 14, "n_graph": 10, "gold": 8}
+{"i": 255, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 22, "gap": 0}
+{"i": 256, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 5, "gap": 0}
+{"i": 257, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 17, "gap": 0}
+{"i": 258, "kind": "сдвиг", "errs": ["11 выдана в 18, операнд 10 готов к 21"], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 25}
+{"i": 259, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 7, "gap": 0}
+{"i": 260, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 18, "gap": 3}
+{"i": 261, "kind": "сдвиг", "errs": ["9 выдана в 13, операнд 5 готов к 15"], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 14}
+{"i": 262, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 20, "gap": 0}
+{"i": 263, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 15, "gap": 1}
+{"i": 264, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 14, "gap": 0}
+{"i": 265, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11], "n_decoded": 12, "n_graph": 8, "gold": 14, "gap": 0}
+{"i": 266, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 8, "gap": 0}
+{"i": 267, "kind": "сдвиг", "errs": ["8 выдана в 6, операнд 2 готов к 7"], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 13}
+{"i": 268, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 7, "gap": 0}
+{"i": 269, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 15, "gap": 0}
+{"i": 270, "kind": "сдвиг", "errs": ["9 выдана в 3, операнд 4 готов к 6", "10 выдана в 8, операнд 8 готов к 11", "11 выдана в 9, операнд 8 готов к 11", "12 выдана в 10, операнд 8 готов к 11"], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 15}
+{"i": 271, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 18, "gap": 0}
+{"i": 272, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 28, "gap": 2}
+{"i": 273, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 6, "gap": 0}
+{"i": 274, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 8, "gap": 0}
+{"i": 275, "kind": "ресурс", "errs": ["6 (DIV) на канале 1, который её не исполняет"], "extra": [], "n_decoded": 8, "n_graph": 8, "gold": 26}
+{"i": 276, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 9, "gap": 0}
+{"i": 277, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 18, "gap": 4}
+{"i": 278, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 13, "gap": 0}
+{"i": 279, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 15, "gap": 0}
+{"i": 280, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15, 16, 17], "n_decoded": 18, "n_graph": 10, "gold": 12, "gap": 0}
+{"i": 281, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 6, "gap": 0}
+{"i": 282, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 18, "gap": 0}
+{"i": 283, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11], "n_decoded": 12, "n_graph": 6, "gold": 14, "gap": 0}
+{"i": 284, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 12, "gap": 0}
+{"i": 285, "kind": "хвост", "errs": [], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 11, "gap": 0}
+{"i": 286, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 5, "gap": 0}
+{"i": 287, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 7, "gap": 0}
+{"i": 288, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 6, "gold": 14, "gap": 0}
+{"i": 289, "kind": "ресурс", "errs": ["1 (DIV) на канале 1, который её не исполняет", "6 (DIV) на канале 0, который её не исполняет", "7 (DIV) на канале 0, который её не исполняет"], "extra": [12, 13], "n_decoded": 14, "n_graph": 12, "gold": 23}
+{"i": 290, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 8, "gold": 21, "gap": 0}
+{"i": 291, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 12, "gap": 0}
+{"i": 292, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12], "n_decoded": 13, "n_graph": 6, "gold": 11, "gap": 0}
+{"i": 293, "kind": "ресурс", "errs": ["6 (DIV) на канале 0, который её не исполняет"], "extra": [10, 11, 12, 13, 14, 15], "n_decoded": 16, "n_graph": 10, "gold": 18}
+{"i": 294, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 21, "gap": 0}
+{"i": 295, "kind": "хвост", "errs": [], "extra": [8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 8, "gold": 4, "gap": 0}
+{"i": 296, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 16, "gap": 0}
+{"i": 297, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 20, "gap": 0}
+{"i": 298, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 14, "n_graph": 14, "gold": 15, "gap": 0}
+{"i": 299, "kind": "валидно", "errs": [], "extra": [], "n_decoded": 12, "n_graph": 12, "gold": 15, "gap": 2}
+{"i": 300, "kind": "хвост", "errs": [], "extra": [6, 7, 8, 9, 10, 11, 12, 13], "n_decoded": 14, "n_graph": 6, "gold": 11, "gap": 0}

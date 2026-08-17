@@ -2,8 +2,15 @@
 # Заливка в Kaggle одной командой.
 #
 #   tools/kaggle_push.sh            # датасет + ядро шага 0 (baseline, без обучения)
-#   tools/kaggle_push.sh run1       # то же + запуск прогона 1 (обучение с EOS)
+#   tools/kaggle_push.sh run1       # датасет + ТОЛЬКО прогон 1 (обучение с EOS)
+#   tools/kaggle_push.sh all        # датасет + оба ядра разом
 #   tools/kaggle_push.sh pull       # забрать дампы обратно в training/checkpoints
+#
+# Каждый режим заливает ТОЛЬКО своё ядро — раньше `run1` тянул за собой ещё и
+# повторный прогон step0 (уместно было, пока step0 ни разу не отработал; после
+# первого успешного прогона это лишние ~8 часов GPU впустую на детерминированный
+# повтор — do_sample=False, тот же адаптер, тот же результат). Обнаружено
+# 17.08.2026: `run1` перезапустил step0 версией 5 без всякой пользы.
 #
 # Прогон 2 (с нуля на train_merged) отсюда НЕ запускается намеренно: он дорогой
 # по квоте, решение о нём принимается отдельно. См. docs/RUNBOOK_EOS.md.
@@ -85,8 +92,8 @@ case "$MODE" in
     echo "дальше: $PY tools/report_runs.py"
     exit 0
     ;;
-  step0|run1) ;;
-  *) echo "неизвестный режим: $MODE (step0 | run1 | pull)" >&2; exit 2 ;;
+  step0|run1|all) ;;
+  *) echo "неизвестный режим: $MODE (step0 | run1 | all | pull)" >&2; exit 2 ;;
 esac
 
 # --- датасет ---------------------------------------------------------------
@@ -113,13 +120,16 @@ push_kernel () {
   echo "  следить: https://www.kaggle.com/code/$USER_NAME/$slug"
 }
 
-push_kernel vliw-step0-baseline
-[[ "$MODE" == "run1" ]] && push_kernel vliw-run1-eos
+case "$MODE" in
+  step0) push_kernel vliw-step0-baseline ;;
+  run1)  push_kernel vliw-run1-eos ;;
+  all)   push_kernel vliw-step0-baseline; push_kernel vliw-run1-eos ;;
+esac
 
 cat <<EOF
 
 Готово. Ядра считаются на стороне Kaggle, ждать здесь нечего.
-Проверить статус:   $PY -m kaggle kernels status $USER_NAME/vliw-step0-baseline
+Проверить статус:   $PY -m kaggle kernels status $USER_NAME/vliw-<slug>
 Забрать результаты: tools/kaggle_push.sh pull
 Свести в таблицу:   $PY tools/report_runs.py
 EOF

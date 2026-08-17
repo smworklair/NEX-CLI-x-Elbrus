@@ -1,0 +1,15 @@
+# Только для Kaggle/Colab (train_qlora.py, validate.py --model). Локально/на
+# Deepnote эти зависимости НЕ нужны — generate_dataset.py и encode.py гоняют
+# только на vliw.core + стандартной библиотеке.
+#
+# БЕЗ ВЕРСИЙ НАМЕРЕННО. Первая попытка фиксировала версии (trl==0.9.6,
+# transformers==4.44.2 и т.д.), чтобы обойти баг в новом trl — но откат
+# потянул за собой откат numpy, а тот сломал ABI уже собранных в образе
+# Kaggle torch/bitsandbytes. train_qlora.py переписан БЕЗ trl (обычный
+# transformers.Trainer), поэтому версии можно ставить самые свежие —
+# те, что уже в образе Kaggle по умолчанию, трогать не нужно вообще.
+transformers
+peft
+bitsandbytes
+accelerate
+datasets

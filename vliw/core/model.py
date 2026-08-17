@@ -1,0 +1,452 @@
+"""Игрушечная модель VLIW-машины.
+
+Числа сняты с настоящего компилятора e2k (`lcc-1.29.16`, кросс-сборка под
+`e2k-v6`) тремя независимыми способами — у каждого параметра ниже проставлено,
+каким именно:
+
+  1. МАТРИЦА ПОРТОВ — спрошена у АССЕМБЛЕРА, а не угадана по одному листингу.
+     Для каждой пары (операция, канал) собирается крошечный `.s` с этой
+     операцией ровно в этом канале. Если аппаратно так нельзя, ассемблер
+     отвечает прямым отказом вида `'muls' cannot be encoded in ALC2`. Это
+     ответ про САМО ЖЕЛЕЗО (кодировку широкой команды), а не про то, что
+     решил сделать планировщик компилятора.
+
+  2. ЛАТЕНТНОСТИ — по ЦЕПОЧКЕ ЗАВИСИМЫХ операций (`x = x * b` пять раз
+     подряд). Каждая следующая обязана ждать результат предыдущей, поэтому
+     компилятор ВЫНУЖДЕН развести их ровно на латентность, и разница номеров
+     bundle читается напрямую.
+
+  3. ЗАНЯТИЕ ПОРТА (occupancy) — по ПОТОКУ НЕЗАВИСИМЫХ операций (8–16 штук,
+     операнды готовы заранее). Шаг между выдачами и есть темп, с которым
+     устройство принимает новую работу.
+
+ПОЧЕМУ ЭТО ВАЖНО: ПЕРВАЯ ВЕРСИЯ МОДЕЛИ БЫЛА НЕВЕРНА. Она построена по одному
+листингу `probe.c` с четырьмя независимыми делениями и четырьмя умножениями. В
+нём все `muls` легли на канал `,0` подряд — и это прочли как «умножитель один,
+держит порт 8 тактов». На самом деле четырёх операций просто не хватило, чтобы
+у планировщика lcc появился повод разложить их по каналам: он жадный и не
+парадлелит, пока и так укладывается. Проверка ассемблером показала, что
+умножение исполнимо на ЧЕТЫРЁХ каналах, а поток из 16 независимых умножений
+идёт по одному в такт. Мораль общая: по выводу компилятора видно то, что
+компилятор ЗАХОТЕЛ сделать, а не то, что железо МОЖЕТ.
+
+Что получилось в итоге (всё проверено, см. источники у каждого параметра):
+
+  * умножение (`muls`/`muld`) — каналы `,0 ,1 ,3 ,4`; четыре штуки собираются
+    в ОДНУ широкую команду; латентность 4, порт свободен уже в следующем такте;
+  * деление (`sdivs`) — ЕДИНСТВЕННЫЙ канал `,5` (ассемблер отвергает все
+    остальные пять); латентность 11, новое деление принимается раз в 2 такта;
+  * простая арифметика и логика (`adds`/`subs`/`ands`/`shls`) — все шесть
+    каналов, латентность 1;
+  * загрузка (`ldw`/`ldd`) — каналы `,0 ,2 ,3 ,5`, латентность 5;
+  * запись (`stw`/`std`) — только `,2` и `,5`.
+
+Вывод, ради которого модель и существует: у e2k не «шесть взаимозаменяемых
+АЛУ», а МАТРИЦА ВОЗМОЖНОСТЕЙ порт → допустимые операции. Но узкое место в ней
+ровно одно и настоящее — делитель. Умножитель, вопреки первой версии, узким
+местом не является.
+
+Модель намеренно маленькая. Её задача — не воспроизвести e2k, а дать честный
+полигон, на котором видно разницу между эвристикой и оптимальным расписанием.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Mapping
+
+# Источники параметров — печатаются в отчёте, чтобы демо не выглядело
+# как набор магических констант. Разные способы проверки — разная сила
+# утверждения, и это видно прямо в таблице `/model`.
+ASM = "проверено ассемблером (кодировка ALC)"
+CHAIN = "измерено (цепочка зависимых, lcc -O3)"
+BURST = "измерено (поток независимых, lcc -O3)"
+ASSUMED = "допущение"
+
+# Оставлено ради обратной совместимости со старыми отчётами/текстами.
+MEASURED = CHAIN
+PROBED = BURST
+
+
+@dataclass(frozen=True)
+class OpClass:
+    """Класс операций: сколько ждать результата и сколько держать порт."""
+
+    name: str
+
+    latency: int
+    """Через сколько тактов результат доступен потребителю.
+
+    Если операция выдана в такте t, то зависимая может быть выдана не раньше
+    t + latency.
+    """
+
+    occupancy: int = 1
+    """Сколько тактов операция удерживает свой порт монопольно.
+
+    1 = порт полностью конвейеризован и свободен уже в следующем такте.
+    >1 = устройство занято, следующая такая операция на этом порту ждёт
+    (наблюдалось у деления и умножения: единственный делитель/умножитель).
+    """
+
+    latency_source: str = ASSUMED
+    occupancy_source: str = ASSUMED
+
+    def blocks_channel(self) -> bool:
+        return self.occupancy > 1
+
+
+@dataclass(frozen=True)
+class Port:
+    """Один порт (слот) широкой команды и что он умеет исполнять.
+
+    `label` — как порт называется в `.s`-выводе lcc (например, `,5`).
+    `ops` — множество классов операций, которые физически исполнимы на порту.
+    Это и есть строка матрицы возможностей.
+    """
+
+    index: int
+    label: str
+    ops: frozenset[str]
+
+    def can(self, op_name: str) -> bool:
+        return op_name in self.ops
+
+
+@dataclass(frozen=True)
+class MachineModel:
+    """Конфигурация широкой команды: набор операций + матрица возможностей.
+
+    Ресурс машины описывается не числом «одинаковых каналов», а списком портов,
+    у каждого — свой набор допустимых операций (`Port.ops`). Ширина широкой
+    команды = число портов.
+    """
+
+    name: str
+    description: str
+    ops: Mapping[str, OpClass]
+    ports: tuple[Port, ...]
+    matrix_source: str = ASSUMED
+
+    # --- размеры ----------------------------------------------------------
+
+    @property
+    def width(self) -> int:
+        return len(self.ports)
+
+    # --- запросы к модели -------------------------------------------------
+
+    def op(self, op_name: str) -> OpClass:
+        try:
+            return self.ops[op_name]
+        except KeyError:
+            raise KeyError(
+                f"операция {op_name!r} не описана в модели {self.name!r}; "
+                f"известны: {', '.join(sorted(self.ops))}"
+            ) from None
+
+    def latency(self, op_name: str) -> int:
+        return self.op(op_name).latency
+
+    def occupancy(self, op_name: str) -> int:
+        return self.op(op_name).occupancy
+
+    def channels_for(self, op_name: str) -> tuple[int, ...]:
+        """Индексы портов, на которых операция вообще исполнима."""
+        return tuple(p.index for p in self.ports if op_name in p.ops)
+
+    def port_label(self, index: int) -> str:
+        for p in self.ports:
+            if p.index == index:
+                return p.label
+        return f",{index}"
+
+    def sole_host_ops(self) -> dict[int, list[str]]:
+        """Порт → операции, для которых он ЕДИНСТВЕННЫЙ исполнитель.
+
+        Именно эти порты нельзя занимать посторонним: другого места для их
+        монопольных операций в машине нет.
+        """
+        out: dict[int, list[str]] = {}
+        for op_name in self.ops:
+            hosts = [p.index for p in self.ports if op_name in p.ops]
+            if len(hosts) == 1:
+                out.setdefault(hosts[0], []).append(op_name)
+        return out
+
+    def uniform_channels(self) -> bool:
+        """Все ли операции исполнимы на любом порту."""
+        return all(len(self.channels_for(o)) == self.width for o in self.ops)
+
+    def has_blocking_ops(self) -> bool:
+        return any(o.blocks_channel() for o in self.ops.values())
+
+    def with_width(self, width: int) -> "MachineModel":
+        """Та же матрица, но суженная/расширенная до `width` портов.
+
+        Незаменимые порты (единственные носители какой-либо операции —
+        умножитель, делитель) сохраняются всегда, иначе часть графов стала бы
+        непланируемой. Урезаются/добираются только универсальные порты.
+        Нужно для массовых прогонов на машинах разной ширины (sweep, selfcheck).
+        """
+        if width == self.width:
+            return self
+
+        sole = set(self.sole_host_ops())
+        specialized = [p for p in self.ports if p.index in sole]
+        generic = [p for p in self.ports if p.index not in sole]
+        # Набор операций «универсального» порта — то, что доступно не на одном
+        # порту (на случай, если придётся достраивать порты сверх исходного).
+        generic_ops = frozenset(
+            op for op in self.ops
+            if sum(op in p.ops for p in self.ports) != 1
+        )
+
+        kept: list[Port] = list(specialized[:width])
+        i = 0
+        while len(kept) < width:
+            if i < len(generic):
+                kept.append(generic[i])
+                i += 1
+            else:
+                kept.append(Port(0, "", generic_ops))
+
+        # Страховка: после сужения у КАЖДОЙ операции должен остаться хотя бы
+        # один исполнитель, иначе часть графов станет непланируемой. Операции с
+        # узкой матрицей (запись — всего два порта, умножение — четыре) легко
+        # теряют все свои порты при width 1-2, поэтому недостающее доводим
+        # руками, а не надеемся, что «обычно везёт».
+        homeless = [op for op in self.ops if not any(op in p.ops for p in kept)]
+        if homeless:
+            kept[-1] = Port(kept[-1].index, kept[-1].label,
+                            kept[-1].ops | frozenset(homeless))
+
+        ports = tuple(
+            Port(idx, f",{idx}", p.ops) for idx, p in enumerate(kept)
+        )
+        return replace(self, ports=ports, name=f"{self.name}/w{width}")
+
+
+# --------------------------------------------------------------------------
+# Классы операций (латентности и монопольное занятие)
+# --------------------------------------------------------------------------
+
+_OPS: dict[str, OpClass] = {
+    "ADD": OpClass("ADD", latency=1, latency_source=CHAIN, occupancy_source=BURST),
+    "SUB": OpClass("SUB", latency=1, latency_source=CHAIN, occupancy_source=BURST),
+    "AND": OpClass("AND", latency=1, latency_source=ASSUMED),
+    "SHL": OpClass("SHL", latency=1, latency_source=ASSUMED),
+    # Умножение. Цепочка `x = x * b` разложилась с шагом 4 такта — это и есть
+    # латентность. Поток из 16 независимых умножений вышел ПО ОДНОМУ В ТАКТ
+    # подряд, без единого разрыва, значит устройство конвейеризовано и порт
+    # свободен уже в следующем такте (occupancy = 1).
+    # ВНИМАНИЕ: в первой версии здесь стояло 8/8 «по probe.c» — неверно, см.
+    # разбор в шапке файла.
+    "MUL": OpClass(
+        "MUL", latency=4, occupancy=1,
+        latency_source=CHAIN, occupancy_source=BURST,
+    ),
+    # Деление. Цепочка зависимых делений дала шаг 11 тактов (латентность), а
+    # поток независимых — шаг 2 такта (темп приёма). То есть делитель ДЕРЖИТ
+    # свой единственный порт всего 2 такта, а не 13, как считалось раньше;
+    # единственность канала `,5` при этом подтвердилась.
+    "DIV": OpClass(
+        "DIV", latency=11, occupancy=2,
+        latency_source=CHAIN, occupancy_source=BURST,
+    ),
+    # Загрузка. Цепочка разыменований (`p = *p`) дала шаг 5 тактов. Раньше
+    # стояло 2 — это была нижняя оценка «не меньше двух», снятая с листинга,
+    # где загрузка и её потребитель просто оказались рядом.
+    "LOAD": OpClass("LOAD", latency=5, latency_source=CHAIN, occupancy_source=BURST),
+    # Запись результата никто не потребляет, поэтому латентность записи из
+    # листингов не читается — оставлена допущением.
+    "STORE": OpClass("STORE", latency=1, latency_source=ASSUMED),
+}
+
+# --------------------------------------------------------------------------
+# Матрица портов: спрошена у ассемблера (см. шапку файла).
+#
+#     операция              каналы          отказ ассемблера на остальных
+#     adds/subs/ands/shls   0 1 2 3 4 5     —
+#     muls / muld           0 1   3 4       "cannot be encoded in ALC2/ALC5"
+#     sdivs                         5       "cannot be encoded in ALC0..ALC4"
+#     ldw / ldd             0   2 3   5     "cannot be encoded in ALC1/ALC4"
+#     stw / std               2       5     "cannot be encoded in ALC0/1/3/4"
+# --------------------------------------------------------------------------
+
+_ALU_PORTS = (0, 1, 2, 3, 4, 5)     # простая арифметика и логика — везде
+MUL_PORTS = (0, 1, 3, 4)            # умножитель НЕ один: четыре канала
+DIV_PORTS = (5,)                    # делитель действительно единственный
+LOAD_PORTS = (0, 2, 3, 5)
+STORE_PORTS = (2, 5)
+
+_PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
+    "ADD": _ALU_PORTS,
+    "SUB": _ALU_PORTS,
+    "AND": _ALU_PORTS,
+    "SHL": _ALU_PORTS,
+    "MUL": MUL_PORTS,
+    "DIV": DIV_PORTS,
+    "LOAD": LOAD_PORTS,
+    "STORE": STORE_PORTS,
+}
+
+# Оставлено ради старых ссылок в тексте: «тот самый» порт делителя.
+DIV_PORT = DIV_PORTS[0]
+
+
+# --------------------------------------------------------------------------
+# Профили
+# --------------------------------------------------------------------------
+
+
+def _measured_ports() -> tuple[Port, ...]:
+    """Матрица возможностей, подтверждённая ассемблером (см. шапку файла).
+
+        порт    ADD SUB AND SHL  LOAD STORE  MUL  DIV
+        ,0       •   •   •   •    •            •
+        ,1       •   •   •   •                 •
+        ,2       •   •   •   •    •     •
+        ,3       •   •   •   •    •            •
+        ,4       •   •   •   •                 •
+        ,5       •   •   •   •    •     •           •   ← единственный делитель
+
+    Умножение исполнимо на четырёх портах (и четыре штуки собираются в одну
+    широкую команду), поэтому монополии умножителя НЕТ. Единственное настоящее
+    узкое место — делитель на `,5`.
+    """
+    ports = []
+    for idx in range(6):
+        ops = {op for op, chans in _PORTS_FOR_OP.items() if idx in chans}
+        ports.append(Port(idx, f",{idx}", frozenset(ops)))
+    return tuple(ports)
+
+
+E2K_V6_MEASURED = MachineModel(
+    name="e2k-v6-measured",
+    description=(
+        "Матрица возможностей, спрошенная у ассемблера lcc: 6 портов "
+        "(`,0`…`,5`). Простая арифметика и логика — на всех шести; умножение — "
+        "на четырёх (`,0 ,1 ,3 ,4`), загрузка — на четырёх (`,0 ,2 ,3 ,5`), "
+        "запись — на двух (`,2 ,5`), а деление — на ЕДИНСТВЕННОМ порту `,5`. "
+        "Делитель и есть единственное настоящее узкое место машины: умножитель "
+        "конвейеризован и монополии не создаёт."
+    ),
+    ops=_OPS,
+    ports=_measured_ports(),
+    matrix_source=ASM,
+)
+
+
+# Старый наивный профиль: шесть полностью равноправных каналов. Оставлен как
+# явный baseline для контраста — на нём видно, как выглядела бы задача, если бы
+# все порты действительно были взаимозаменяемы (и почему тогда планировать
+# нечего: любой свободный порт подошёл бы).
+def _homogeneous_ports() -> tuple[Port, ...]:
+    allops = frozenset(_OPS)
+    return tuple(Port(idx, f",{idx}", allops) for idx in range(6))
+
+
+NAIVE_HOMOGENEOUS = MachineModel(
+    name="naive_homogeneous",
+    description=(
+        "УСТАРЕВШЕЕ допущение (оставлено для контраста): 6 полностью "
+        "равноправных каналов, любая операция на любом канале. Ассемблер это "
+        "опровергает: деление кодируется только в `,5`, умножение — в четырёх "
+        "каналах, запись — в двух. Профиль полезен как baseline: показывает "
+        "вырожденный случай, где выбор порта вообще не является решением."
+    ),
+    ops=_OPS,
+    ports=_homogeneous_ports(),
+    matrix_source=ASSUMED,
+)
+
+
+# --------------------------------------------------------------------------
+# ОПРОВЕРГНУТЫЙ профиль первой версии. Оставлен НАМЕРЕННО, а не забыт: на нём
+# видно, как одна неверно прочитанная проба меняет все выводы. Именно из него
+# следовала «монополия умножителя», которой в железе нет.
+# --------------------------------------------------------------------------
+
+_FIRSTPROBE_OPS: dict[str, OpClass] = dict(_OPS) | {
+    "MUL": OpClass("MUL", latency=8, occupancy=8,
+                   latency_source=ASSUMED, occupancy_source=ASSUMED),
+    "DIV": OpClass("DIV", latency=13, occupancy=13,
+                   latency_source=ASSUMED, occupancy_source=ASSUMED),
+    "LOAD": OpClass("LOAD", latency=2, latency_source=ASSUMED,
+                    occupancy_source=ASSUMED),
+}
+
+
+def _firstprobe_ports() -> tuple[Port, ...]:
+    universal = {"ADD", "SUB", "AND", "SHL", "LOAD", "STORE"}
+    ports = []
+    for idx in range(6):
+        ops = set(universal)
+        if idx == 0:
+            ops.add("MUL")      # «единственный умножитель» — как считалось
+        if idx == 5:
+            ops.add("DIV")
+        ports.append(Port(idx, f",{idx}", frozenset(ops)))
+    return tuple(ports)
+
+
+E2K_V6_FIRSTPROBE = MachineModel(
+    name="e2k-v6-firstprobe",
+    description=(
+        "ОПРОВЕРГНУТАЯ первая версия модели — оставлена, чтобы было с чем "
+        "сравнить. Построена по одному листингу probe.c с четырьмя умножениями: "
+        "все легли на `,0` подряд, и это прочли как «умножитель один, держит "
+        "порт 8 тактов». Проверка ассемблером показала, что умножение "
+        "кодируется в четырёх каналах, а поток независимых умножений идёт по "
+        "одному в такт. Здесь же завышены латентности DIV (13 против 11) и "
+        "занижена LOAD (2 против 5). Прогоните один сценарий на обоих профилях "
+        "— увидите, насколько выводы зависят от качества модели."
+    ),
+    ops=_FIRSTPROBE_OPS,
+    ports=_firstprobe_ports(),
+    matrix_source=ASSUMED,
+)
+
+
+PROFILES: dict[str, MachineModel] = {
+    E2K_V6_MEASURED.name: E2K_V6_MEASURED,
+    E2K_V6_FIRSTPROBE.name: E2K_V6_FIRSTPROBE,
+    NAIVE_HOMOGENEOUS.name: NAIVE_HOMOGENEOUS,
+}
+
+DEFAULT_PROFILE = E2K_V6_MEASURED.name
+
+
+def get_profile(name: str) -> MachineModel:
+    try:
+        return PROFILES[name]
+    except KeyError:
+        raise SystemExit(
+            f"неизвестный профиль {name!r}; доступны: {', '.join(PROFILES)}"
+        ) from None
+
+
+def describe_model(model: MachineModel) -> list[tuple[str, str, str]]:
+    """Таблица параметров модели: (параметр, значение, источник)."""
+    rows: list[tuple[str, str, str]] = [
+        ("портов в команде", str(model.width), model.matrix_source),
+    ]
+    for name in sorted(model.ops, key=lambda n: (model.ops[n].latency, n)):
+        op = model.ops[name]
+        val = f"{op.latency} т."
+        if op.blocks_channel():
+            val += f", порт занят {op.occupancy}"
+        rows.append((f"латентность {name}", val, op.latency_source))
+    return rows
+
+
+def capability_matrix(model: MachineModel) -> tuple[list[str], list[list[bool]]]:
+    """Матрица возможностей в виде (порядок операций, строки-порты).
+
+    Возвращает список операций (столбцы) и для каждого порта — булев вектор
+    «умеет / не умеет». Отдельно от описания — для табличной/цветной отрисовки.
+    """
+    op_names = sorted(model.ops, key=lambda n: (model.ops[n].latency, n))
+    grid = [[op in p.ops for op in op_names] for p in model.ports]
+    return op_names, grid

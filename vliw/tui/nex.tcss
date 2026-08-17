@@ -1,0 +1,364 @@
+/* ------------------------------------------------------------------------
+   NEX — оформление интерфейса.
+
+   Цвета сюда попадают из палитры проекта (vliw/ui/themes/*.json) через
+   переменные $nex-*: одна и та же тема красит и построчный вывод, и этот
+   экран. Здесь задаётся только вёрстка и иерархия поверхностей.
+
+   Поверхности:  canvas (полотно) < panel (панель) < raised (активное).
+   Акцент ($primary) свой у каждого режима и приходит из темы приложения.
+   ------------------------------------------------------------------------ */
+
+Screen {
+    background: $nex-canvas;
+    color: $nex-text;
+}
+
+/* --- шапка режима ------------------------------------------------------ */
+
+TopBar {
+    dock: top;
+    height: 1;
+    width: 100%;
+    padding: 0 2;
+    background: $nex-shadow;
+}
+
+/* --- док ввода --------------------------------------------------------- */
+
+#dock {
+    dock: bottom;
+    height: auto;
+    width: 100%;
+    background: $nex-shadow;
+}
+
+PromptBar {
+    height: auto;
+    width: 100%;
+}
+
+#prompt-field {
+    height: 3;
+    width: 100%;
+    margin: 0 1;
+    padding: 0 1;
+    background: $nex-raised;
+    border: round $nex-line;
+}
+
+#prompt-field:focus-within {
+    border: round $primary;
+}
+
+#prompt-mark {
+    width: 6;
+    height: 1;
+    content-align: left middle;
+}
+
+#prompt-input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $nex-title;
+    text-style: bold;
+}
+
+#prompt-input > .input--placeholder {
+    color: $nex-faint;
+    text-style: none;
+}
+
+#prompt-side {
+    width: auto;
+    height: 1;
+    padding: 0 1;
+    content-align: right middle;
+}
+
+HintBar {
+    height: 1;
+    width: 100%;
+    padding: 0 2;
+    background: $nex-shadow;
+}
+
+/* --- палитра команд ---------------------------------------------------- */
+
+Palette {
+    max-height: 12;
+    height: auto;
+    width: 100%;
+    background: $nex-panel;
+    border: none;
+    border-left: thick $primary;
+    padding: 0;
+    scrollbar-size-vertical: 1;
+}
+
+Palette > .option-list--option-highlighted {
+    background: $primary 25%;
+    color: $nex-title;
+    text-style: bold;
+}
+
+/* --- панели ------------------------------------------------------------ */
+
+Panel {
+    border: round $nex-line;
+    border-title-align: left;
+    border-title-style: bold;
+    border-title-color: $nex-dim;
+    background: $nex-panel;
+    padding: 0 1;
+    height: 1fr;
+}
+
+Panel:focus-within {
+    border: round $primary;
+    border-title-color: $primary;
+}
+
+Console {
+    background: transparent;
+    scrollbar-size-vertical: 1;
+    padding: 0;
+}
+
+/* --- ЯДРО: верстак интерпретатора -------------------------------------- */
+
+#core-body {
+    height: 1fr;
+    width: 100%;
+}
+
+#core-left {
+    width: 1fr;
+    height: 100%;
+}
+
+#core-right {
+    width: 46;
+    height: 100%;
+}
+
+#p-tape { height: 1fr; }
+
+#p-kernels {
+    height: 4;
+    padding: 0 1;
+}
+
+#kernel-chips, #verb-chips {
+    height: 1;
+    width: 100%;
+}
+
+.chip-label {
+    width: 6;
+    height: 1;
+    color: $nex-faint;
+}
+
+#p-names { height: 1fr; min-height: 6; }
+#p-mem   { height: 9; }
+#p-prog  { height: 2fr; min-height: 8; }
+
+.chip {
+    height: 1;
+    width: auto;
+    padding: 0 1;
+    margin-right: 1;
+    background: $nex-raised;
+    color: $nex-dim;
+}
+
+.chip:hover {
+    background: $primary 30%;
+    color: $nex-title;
+    text-style: bold;
+}
+
+.chip-kernel { color: $nex-accent-soft; }
+
+/* --- РАЗБОР: расписание, которое можно потрогать ------------------------ */
+
+#lab-body { height: 1fr; width: 100%; }
+#lab-left { width: 1fr; height: 100%; }
+#lab-right { width: 42; height: 100%; }
+
+#p-scen {
+    height: auto;
+    max-height: 7;
+    padding: 0 1;
+}
+
+#view-chips { height: 1; width: 100%; }
+#scenario-chips { height: auto; width: 100%; grid-gutter: 0; }
+
+.chip-view { color: $nex-dim; }
+
+.chip-on {
+    background: $primary 30%;
+    color: $nex-title;
+    text-style: bold;
+}
+
+.chip-scen {
+    width: 1fr;
+    margin-right: 1;
+    background: transparent;
+    color: $nex-dim;
+}
+
+#p-grid { height: 1fr; min-height: 8; }
+#p-detail { height: 9; }
+#p-console { height: 10; }
+
+#grid {
+    background: transparent;
+    height: 100%;
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+}
+
+#grid > .datatable--header {
+    background: transparent;
+    color: $nex-dim;
+    text-style: none;
+}
+
+#grid > .datatable--cursor {
+    background: $primary 35%;
+    color: $nex-title;
+}
+
+#grid > .datatable--hover {
+    background: $nex-raised;
+}
+
+#p-numbers  { height: 9; }
+#p-diag     { height: 1fr; min-height: 8; }
+#p-machine  { height: auto; min-height: 6; max-height: 10; }
+
+/* --- АГЕНТ: диалог, у которого видно основание -------------------------- */
+
+#mind-body { height: 1fr; width: 100%; }
+#mind-left { width: 1fr; height: 100%; }
+#mind-right { width: 42; height: 100%; }
+
+#p-chat { height: 1fr; }
+#p-questions { height: auto; max-height: 6; padding: 0 1; }
+#question-chips { height: auto; width: 100%; }
+
+.chip-question {
+    width: 1fr;
+    margin-right: 1;
+    background: transparent;
+    color: $nex-mind-soft;
+}
+
+#chat {
+    height: 100%;
+    scrollbar-size-vertical: 1;
+}
+
+.msg-you {
+    height: auto;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+.msg-mark { height: 1; width: 100%; }
+
+.msg-nex {
+    height: auto;
+    width: 100%;
+    padding-left: 2;
+    margin-bottom: 1;
+}
+
+.msg-note {
+    height: auto;
+    width: 100%;
+    color: $nex-dim;
+    margin-bottom: 1;
+}
+
+#p-seen  { height: 12; }
+#p-trace { height: 1fr; min-height: 6; }
+#p-mind-console { height: 12; }
+
+/* --- узкое окно --------------------------------------------------------- */
+
+ModeScreen.narrow #core-right,
+ModeScreen.narrow #lab-right,
+ModeScreen.narrow #mind-right { width: 38; }
+
+ModeScreen.narrow #p-detail { height: 8; }
+ModeScreen.narrow #p-console { height: 7; }
+ModeScreen.narrow #p-mind-console { height: 8; }
+ModeScreen.narrow #p-seen { height: 11; }
+
+ModeScreen.tight #core-right,
+ModeScreen.tight #lab-right,
+ModeScreen.tight #mind-right { width: 34; }
+
+ModeScreen.tight #p-kernels,
+ModeScreen.tight #p-scen,
+ModeScreen.tight #p-questions { display: none; }
+
+ModeScreen.tight #p-console { height: 5; }
+
+/* --- выбор режима ------------------------------------------------------ */
+
+#picker-wrap {
+    align: center middle;
+    height: 1fr;
+    width: 100%;
+}
+
+#picker-logo {
+    height: auto;
+    width: auto;
+    margin-bottom: 1;
+}
+
+#picker-tagline {
+    height: auto;
+    width: auto;
+    text-align: center;
+    margin-bottom: 2;
+}
+
+#picker-cards {
+    width: 78;
+    height: auto;
+    align-horizontal: center;
+}
+
+.mode-card {
+    height: 6;
+    width: 100%;
+    padding: 0 2;
+    margin-bottom: 1;
+    background: $nex-panel;
+    border: round $nex-line;
+}
+
+.mode-card.selected {
+    background: $nex-raised;
+}
+
+.mode-card:hover {
+    background: $nex-raised;
+}
+
+#picker-hint {
+    height: 1;
+    width: auto;
+    margin-top: 1;
+}

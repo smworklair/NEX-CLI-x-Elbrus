@@ -1,0 +1,59 @@
+{
+  "name": "classic",
+  "description": "Прежняя палитра проекта на базовых 8 цветах — запасной вариант для терминалов без поддержки 256 цветов.",
+
+  "_comment_colors": "Здесь используются базовые цвета 0..7, которые понимает любой терминал: 1 красный, 2 зелёный, 3 жёлтый, 4 синий, 5 пурпурный, 6 голубой, 7 белый.",
+
+  "roles": {
+    "text":       { "color": 7 },
+    "dim":        { "color": 7, "attrs": ["dim"] },
+    "faint":      { "color": 7, "attrs": ["dim"] },
+
+    "accent":     { "color": 6, "attrs": ["bold"] },
+    "accent_soft":{ "color": 6 },
+    "accent2":    { "color": 3, "attrs": ["bold"] },
+    "accent2_soft":{ "color": 3 },
+
+    "success":    { "color": 2 },
+    "warning":    { "color": 3 },
+    "error":      { "color": 1, "attrs": ["bold"] },
+
+    "banner":     { "color": 6, "attrs": ["bold"] },
+    "banner_alt": { "color": 3, "attrs": ["bold"] },
+    "mountain":   { "color": 6 },
+    "snow":       { "color": 7, "attrs": ["bold"] },
+
+    "border":     { "color": 6 },
+    "border_hi":  { "color": 6, "attrs": ["bold"] },
+    "title":      { "color": 7, "attrs": ["bold"] },
+    "prompt":     { "color": 6, "attrs": ["bold"] },
+    "selection":  { "color": 7, "attrs": ["reverse"] },
+
+    "sidebar_head": { "color": 6, "attrs": ["bold"] },
+    "sidebar_key":  { "color": 7, "attrs": ["dim"] },
+    "sidebar_val":  { "color": 7 },
+
+    "crit":       { "color": 3, "attrs": ["bold", "underline"] },
+    "diverge":    { "color": 1, "attrs": ["bold"] },
+
+    "work":       { "color": 2, "attrs": ["bold"] },
+    "work_soft":  { "color": 2 },
+    "lab":        { "color": 3, "attrs": ["bold"] },
+    "lab_soft":   { "color": 3 },
+    "mind":       { "color": 5, "attrs": ["bold"] },
+    "mind_soft":  { "color": 5 },
+    "hud":        { "color": 7, "attrs": ["dim"] },
+    "dock":       { "color": 7 }
+  },
+
+  "ops": {
+    "DIV":   { "color": 5, "attrs": ["bold"] },
+    "MUL":   { "color": 6, "attrs": ["bold"] },
+    "ADD":   { "color": 2 },
+    "SUB":   { "color": 2 },
+    "LOAD":  { "color": 3 },
+    "STORE": { "color": 3 },
+    "AND":   { "color": 6, "attrs": ["dim"] },
+    "SHL":   { "color": 6, "attrs": ["dim"] }
+  }
+}

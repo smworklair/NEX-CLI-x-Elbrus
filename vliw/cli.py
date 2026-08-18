@@ -769,6 +769,60 @@ def cmd_report(session: Session, arg: str) -> None:
         return False
 
 
+def cmd_learned(session: Session, arg: str) -> None:
+    """Запустить обученный адаптер на текущем графе — локально, без Kaggle.
+
+    Без аргументов и без готовых весов/зависимостей — печатает отчёт о том,
+    чего не хватает, и не падает: это самый частый случай на чужой машине.
+    """
+    from .learned import runtime
+    from .ui import learned_view
+
+    toks = arg.split()
+    want_raw = "--raw" in toks
+    want_status = "--status" in toks
+    name = next((t for t in toks if not t.startswith("--")), None)
+
+    ready, lines = runtime.status(name)
+    if want_status or not ready:
+        print(rule("обученный планировщик"))
+        _out(learned_view.render_status(ready, lines))
+        return None if want_status else False
+
+    from .learned import LearnedScheduler
+
+    adapter = runtime.resolve_adapter(name)
+    if adapter is None:
+        print(paint("error", f"адаптер {name!r} не найден; доступны: "
+                             + ", ".join(a.name for a in runtime.find_adapters())))
+        return False
+
+    dag, machine = session.dag_obj, session.model()
+    print(rule(f"обученный планировщик · {adapter.name} · {session.scenario}"))
+    print("  " + _header(session))
+    print()
+    print(Style.dim(f"  поднимаю {adapter.base} + LoRA {adapter.name} — "
+                    "первый запуск долгий (веса грузятся с диска)"))
+    sys.stdout.flush()
+
+    sch = LearnedScheduler(adapter=adapter)
+    try:
+        res = sch.schedule(dag, machine)
+    except (RuntimeError, OSError, ImportError) as e:
+        print(paint("error", f"не удалось запустить модель: {e}"))
+        return False
+    print()
+    # Сравниваем только с тем, что уже посчитано: гонять точный поиск ради
+    # сравнения с заведомо незаконным расписанием — впустую.
+    base = orc = None
+    if res.search_stats.get("valid"):
+        base, orc, _ = session.results()
+    _out(learned_view.render_result(res, dag, orc, base))
+    if want_raw:
+        print()
+        _out(learned_view.render_raw(res))
+
+
 def cmd_kaggle(session: Session, arg: str) -> None:
     """Залить/забрать/проверить Kaggle — тонкая обёртка над tools/kaggle_push.sh.
 
@@ -813,6 +867,7 @@ COMMANDS = [
     {"name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
     {"name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
     {"name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
+    {"name": "learned", "arg": "[адаптер] [--raw]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
     {"name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
     {"name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
     {"name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},
@@ -860,7 +915,18 @@ _ARG_COMPLETIONS = {
     "asm": lambda: ["baseline", "oracle"],
     "doctor": lambda: ["baseline", "oracle"],
     "kaggle": lambda: ["step0", "run1", "all", "pull", "status"],
+    "learned": lambda: [a.name for a in _learned_adapters()],
 }
+
+
+def _learned_adapters():
+    """Имена найденных адаптеров — для Tab-дополнения. Молча пусто, если нет."""
+    try:
+        from .learned import runtime
+
+        return runtime.find_adapters()
+    except Exception:
+        return []
 
 
 def _completer(text: str, state: int):

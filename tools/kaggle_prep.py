@@ -10,13 +10,21 @@
 (120 МБ safetensors). Значит грузить его всё равно придётся. А раз так, то и
 данные, и `validate_kaggle.py` с `train_qlora.py` кладутся туда же: у ядра
 получается один `dataset_sources`, и в путях `/kaggle/input/...` нечего
-перепутать. Слаг датасета и имя пользователя берутся из `~/.kaggle/kaggle.json`
-в момент заливки, поэтому здесь не надо ничего подставлять руками.
+перепутать.
 
 Прогон 2 (с нуля на train_merged) намеренно НЕ готовится: он дорогой по квоте
 и запускается отдельным решением. См. docs/RUNBOOK_EOS.md.
 
     python tools/kaggle_prep.py
+
+ВНИМАНИЕ: эта команда сама по себе НЕ заливает ничего на Kaggle и не знает
+твоего логина — id в dataset-metadata.json / kernel-metadata.json остаются
+заглушкой `"USERNAME/..."`. Реальный логин подставляет и заливает
+`tools/kaggle_push.sh` (он же вызывает этот скрипт сам, первым шагом). Раньше
+здесь было сказано «подставлять руками не надо» без уточнения, что это верно
+только при запуске через kaggle_push.sh — прямой `kaggle datasets create -p
+build/kaggle/dataset` после голого `python tools/kaggle_prep.py` упал бы на
+несуществующем пользователе "USERNAME".
 """
 
 from __future__ import annotations
@@ -86,6 +94,38 @@ def _find_dataset(marker_file, tries=6, pause=10):
         f"(рекурсивно, {tries} попыток). Дерево:\\n  " + "\\n  ".join(tree))
 '''
 
+# Самопроверка GPU: ловит несовместимость железа/сборки torch ДО того, как
+# потрачены минуты на pip install и скачивание базовой модели (~6 ГБ).
+# `machine_shape: NvidiaTeslaT4` в kernel-metadata.json чинит СИМПТОМ уже
+# случившегося инцидента (Kaggle выдал P100/sm_60, стандартный образ ставит
+# torch без ядер под эту архитектуру — крах был на PeftModel.from_pretrained,
+# через много минут после старта). Пин не проверяет, что Kaggle реально
+# выдал совместимую карту, и не ловит следующую несовместимость той же
+# природы (например, если Kaggle обновит сборку torch в самом T4-образе).
+# Эта проверка — не про конкретную карту, а про реальную CUDA-операцию:
+# ловит именно то падение, что уже было, и любое похожее, дёшево и рано.
+CHECK_GPU = '''\
+def _check_gpu():
+    import torch
+    if not torch.cuda.is_available():
+        raise SystemExit("нет GPU: torch.cuda.is_available() == False")
+    name = torch.cuda.get_device_name(0)
+    cap = torch.cuda.get_device_capability(0)
+    print(f"GPU: {name}, compute capability {cap[0]}.{cap[1]}", flush=True)
+    try:
+        (torch.zeros(8, 8, device="cuda") @ torch.zeros(8, 8, device="cuda")).sum().item()
+    except RuntimeError as e:
+        raise SystemExit(
+            f"GPU {name} (capability {cap[0]}.{cap[1]}) не подходит для этой "
+            f"сборки torch: {e}\\n"
+            f"Так падал P100 (sm_60) под стандартным образом Kaggle — "
+            f"kernel-metadata.json просит NvidiaTeslaT4, но если Kaggle всё "
+            f"равно выдал несовместимую карту, лучше узнать это сейчас, за "
+            f"секунды, а не после pip install и скачивания базовой модели."
+        ) from e
+    print("GPU: базовая CUDA-операция прошла — совместимость подтверждена", flush=True)
+'''
+
 STEP0 = '''\
 """Шаг 0: baseline текущего адаптера. Обучения нет, только инференс.
 
@@ -99,9 +139,10 @@ STEP0 = '''\
 """
 import subprocess, sys, os
 
-''' + FIND_DATASET + '''
+''' + FIND_DATASET + CHECK_GPU + '''
 BASE = _find_dataset("validate_kaggle.py")
 print("датасет:", BASE, flush=True)
+_check_gpu()
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
                 "transformers", "peft", "bitsandbytes", "accelerate"], check=True)
@@ -130,9 +171,10 @@ RUN1 = '''\
 """
 import subprocess, sys, os
 
-''' + FIND_DATASET + '''
+''' + FIND_DATASET + CHECK_GPU + '''
 BASE = _find_dataset("train_qlora.py")
 OUT = "/kaggle/working/lora-eos"
+_check_gpu()
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
                 "transformers", "peft", "bitsandbytes", "accelerate", "datasets"],
@@ -150,9 +192,13 @@ proc = subprocess.Popen(
 eos_ok = None
 for line in proc.stdout:
     print(line, end="", flush=True)
-    if "EOS попадает в loss" in line:
+    # Матчим на однозначный маркер train_qlora.py::check_eos(), а не на
+    # совпадение подстрок "ВНИМАНИЕ"+"EOS" — та пара могла совпасть с
+    # ЛЮБОЙ чужой строкой лога (например, из transformers/peft), убив
+    # здоровое обучение ложным срабатыванием.
+    if "EOS_SELFCHECK: OK" in line:
         eos_ok = True
-    elif "ВНИМАНИЕ" in line and "EOS" in line:
+    elif "EOS_SELFCHECK: FAIL" in line:
         eos_ok = False
         print("\\n!! Самопроверка EOS не прошла — глушу обучение, квоту не жжём.",
               flush=True)
@@ -205,26 +251,30 @@ def main() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
 
     missing = [src for src, _ in PAYLOAD if not (ROOT / src).exists()]
+    missing += [f"{ADAPTER_SRC}/{name}" for name in ADAPTER_FILES
+               if not (ROOT / ADAPTER_SRC / name).exists()]
     if missing:
         raise SystemExit("нет файлов: " + ", ".join(missing))
 
+    # Копируем БЕЗУСЛОВНО, не по mtime. Раньше было "копировать, только если
+    # source новее" — но strict-greater по mtime на WSL/смонтированных дисках
+    # (грубая гранулярность, git checkout, переизвлечение из архива) может не
+    # продвинуться после перетренировки, и тогда на Kaggle тихо уезжает
+    # СТАРЫЙ адаптер без единой ошибки — а обнаруживается это только после
+    # целого дорогого GPU-прогона на не тех весах. Payload здесь весь целиком
+    # меньше 200 МБ, лишняя копия — секунды; это дешевле, чем ещё раз
+    # разбираться, почему прогон 2 продолжил не тот адаптер.
     total = 0
     for src, dst in PAYLOAD:
         s, d = ROOT / src, DATA / dst
-        if not d.exists() or s.stat().st_mtime > d.stat().st_mtime:
-            shutil.copy2(s, d)
+        shutil.copy2(s, d)
         total += d.stat().st_size
 
     adir = DATA / ADAPTER_DST
     adir.mkdir(exist_ok=True)
     for name in ADAPTER_FILES:
-        s = ROOT / ADAPTER_SRC / name
-        if not s.exists():
-            print(f"  ! нет {s.relative_to(ROOT)} — пропускаю")
-            continue
-        d = adir / name
-        if not d.exists() or s.stat().st_mtime > d.stat().st_mtime:
-            shutil.copy2(s, d)
+        s, d = ROOT / ADAPTER_SRC / name, adir / name
+        shutil.copy2(s, d)
         total += d.stat().st_size
 
     # Слаг дописывается при заливке: username берётся из kaggle.json, чтобы

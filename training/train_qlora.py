@@ -113,6 +113,14 @@ def check_eos(tok, rows: list[dict], collator) -> None:
     Три места, где он может пропасть молча: не приклеился к тексту; приклеился
     строкой, но токенизатор разбил его на куски вместо одного спец-токена;
     доехал до батча, но получил -100 в labels. Печатаем факт, а не намерение.
+
+    Помимо человекочитаемых строк печатается машинно-разбираемый маркер
+    `EOS_SELFCHECK: OK|FAIL` — на нём, а не на подстроках "ВНИМАНИЕ"+"EOS",
+    держится стоп-условие удалённого ядра (kaggle_prep.py, RUN1). Подстрочный
+    матч ловил бы и любую чужую строку лога, где эти два слова случайно
+    встретились рядом (например, из transformers/peft/bitsandbytes), и убивал
+    бы здоровое обучение по ложному срабатыванию. Маркер — фиксированная,
+    ни на что не похожая строка, ложных срабатываний не даёт.
     """
     ids = tok(rows[0]["text"], truncation=True, max_length=4096)["input_ids"]
     last = ids[-1]
@@ -121,6 +129,7 @@ def check_eos(tok, rows: list[dict], collator) -> None:
     if last != tok.eos_token_id:
         print("  !! ВНИМАНИЕ: пример не заканчивается EOS — модель не научится "
               "останавливаться (категория «хвост» в eval)")
+        print("EOS_SELFCHECK: FAIL")
         return
 
     batch = collator([tok(r["text"], truncation=True, max_length=4096)
@@ -130,8 +139,10 @@ def check_eos(tok, rows: list[dict], collator) -> None:
     if masked:
         print("  !! ВНИМАНИЕ: EOS замаскирован в labels (-100) и в loss не "
               "попадает — модель не научится останавливаться")
+        print("EOS_SELFCHECK: FAIL")
     else:
         print("  EOS попадает в loss (labels != -100) — ОК")
+        print("EOS_SELFCHECK: OK")
 
 
 def _silence_torchao() -> None:

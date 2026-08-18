@@ -32,32 +32,39 @@ import argparse
 import collections
 import json
 import re
+import sys
 from pathlib import Path
 
-KINDS = ("валидно", "хвост", "сдвиг", "ресурс", "галлюцинация", "мусор")
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+# Импортируем classify()/_KIND из validate_kaggle.py, а не держим вторую
+# ручную копию. Раньше здесь была именно копия — оправдана она была тем, что
+# validate_kaggle.py самодостаточен РАДИ KAGGLE (там нет пакета training).
+# Но report_runs.py работает только локально, этого ограничения у него нет,
+# а validate_kaggle.py на верхнем уровне и так тянет только stdlib (torch и
+# соседи — ленивый импорт внутри main()), так что импорт almost free. Копия
+# уже расходилась однажды: см. докстринг ниже про дамп от 15.08 22:40 —
+# именно тогда classify() в validate_kaggle.py чинили, а старая копия
+# осталась бы с прежним (неверным) поведением, если бы она тут была.
+from training.validate_kaggle import _KIND, classify              # noqa: E402
+
+KINDS = tuple(_KIND)
 
 # Ярлыки, при которых префикс 0..n-1 законен: расписание настоящих инструкций
-# верное, вопрос только в том, остановилась модель или нет.
+# верное, вопрос только в том, остановилась модель или нет. Эта группировка
+# не выводится из _KIND автоматически (там корзины "валидно"/"хвост"/"почти"/
+# "мимо", а не булев "легален ли префикс") — validate_kaggle.py сам её
+# держит явным списком в _print_composition(), здесь то же самое явно.
 PREFIX_OK = ("валидно", "хвост")
 
+# Подстрока из текста ошибки "несуществующие id инструкций в ответе модели:
+# ...", который печатает Schedule.validate() (через validate_kaggle.py). Не
+# импортируется — это не именованная константа там, а текст внутри f-строки;
+# трогать структуру validate_kaggle.py ради этого не стоит (самодостаточность
+# ради Kaggle). Если формулировка ошибки там изменится, поправить и здесь.
 _STRAY = "несуществующие id"
-
-
-def classify(errs: list[str], n_keep: int, n_extra: int) -> str:
-    """Копия classify() из validate_kaggle.py — ярлык по ПРЕФИКСУ.
-
-    Держится копией намеренно: validate_kaggle.py самодостаточен ради Kaggle
-    и импортировать из него нечего, а тащить сюда его целиком незачем.
-    """
-    if n_keep == 0:
-        return "мусор"
-    if any(e.startswith("не размещены") for e in errs):
-        return "галлюцинация"
-    if not errs:
-        return "хвост" if n_extra else "валидно"
-    if any("выдана в" in e for e in errs):
-        return "сдвиг"
-    return "ресурс"
 
 
 class Run:
@@ -81,14 +88,32 @@ class Run:
             errs = rec.get("errs", [])
 
             # Сколько строк ответа пришлось на id вне графа. В свежих дампах
-            # это поле есть; в старых восстанавливаем по разнице.
+            # это поле есть (список настоящих значений); в старых (без
+            # "extra") приходится восстанавливать по одним лишь счётчикам —
+            # а по счётчикам это ОДНОЗНАЧНО восстановимо только когда модель
+            # выдала НЕ МЕНЬШЕ строк, чем в графе (n_decoded >= n_graph):
+            # тогда "лишнее сверху" и есть хвост. Если n_decoded < n_graph,
+            # формула max(0, n_decoded-n_graph) даёт n_extra=0 независимо от
+            # того, СКОЛЬКО из decoded id реально вне графа — 0 или все — и
+            # правильный n_keep этим не восстановить (проверено на примере:
+            # n_graph=10, decoded={50,51} — реально n_keep=0/"мусор", формула
+            # даёт n_keep=2 и классификатор уходит в "галлюцинация"). Честнее
+            # не гадать: в этом случае ярлык берём из дампа как есть, не
+            # пересчитываем, и помечаем ненадёжным.
             if "extra" in rec:
                 n_extra = len(rec["extra"])
+                n_keep = max(0, rec["n_decoded"] - n_extra)
+                reclassify_this = reclassify
+            elif rec["n_decoded"] >= n_graph:
+                n_extra = rec["n_decoded"] - n_graph
+                n_keep = n_graph
+                reclassify_this = reclassify
             else:
-                n_extra = max(0, rec["n_decoded"] - n_graph)
-            n_keep = max(0, rec["n_decoded"] - n_extra)
+                n_extra = n_keep = 0   # не используются — reclassify_this=False
+                reclassify_this = False
+                self.unreliable += 1
 
-            if reclassify:
+            if reclassify_this:
                 # Ошибки про лишние id к префиксу отношения не имеют.
                 pref_errs = [e for e in errs if _STRAY not in e]
                 # Страховка: в старых дампах errs считались по ВСЕМУ ответу,

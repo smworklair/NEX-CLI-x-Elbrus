@@ -74,16 +74,43 @@ echo "пользователь Kaggle: $USER_NAME"
 # --- сборка ----------------------------------------------------------------
 "$PY" tools/kaggle_prep.py
 
-# Подставляем настоящий username вместо заглушки — метаданные пересобираются
-# каждый запуск, поэтому правка идемпотентна.
-for f in "$BUILD/dataset/dataset-metadata.json" "$BUILD"/*/kernel-metadata.json; do
-  [[ -f "$f" ]] && sed -i "s|USERNAME/|$USER_NAME/|g" "$f"
-done
+# Подставляем настоящий username в id/dataset_sources ТОЧЕЧНО через JSON, а
+# не глобальным sed по всему файлу. Раньше здесь стоял
+# `sed -i "s|USERNAME/|$USER_NAME/|g"` — небезопасен в обе стороны: (а) не
+# экранировал $USER_NAME в шаблоне замены (метасимволы sed вроде `&`/`|`
+# сломали бы подстановку, если бы когда-нибудь оказались в имени), (б) бил по
+# ЛЮБОМУ вхождению строки "USERNAME/" во всём файле, а не только по полям
+# id/dataset_sources — будущий title/description с тем же текстом испортился
+# бы молча. Оба класса регрессии сюда больше не попадут: правим только
+# конкретные JSON-поля, значение подставляем как данные, а не как текст sed.
+"$PY" - "$USER_NAME" "$BUILD/dataset/dataset-metadata.json" "$BUILD"/*/kernel-metadata.json <<'PYEOF'
+import json, sys
+user, *paths = sys.argv[1:]
+for p in paths:
+    d = json.load(open(p, encoding="utf-8"))
+    if d.get("id", "").startswith("USERNAME/"):
+        d["id"] = user + d["id"][len("USERNAME"):]
+    for s in ("dataset_sources", "competition_sources", "kernel_sources"):
+        if s in d:
+            d[s] = [user + v[len("USERNAME"):] if v.startswith("USERNAME/") else v
+                    for v in d[s]]
+    json.dump(d, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PYEOF
+
+# Слаг датасета и список ядер — из того, что реально лежит в build/kaggle/,
+# а не отдельные литералы, которые легко забыть поправить при переименовании
+# или добавлении нового ядра (так уже вышло однажды: kaggle_push.sh молча
+# продолжал пушить только два старых ядра). id датасета теперь уже "user/slug"
+# — подставлен строкой выше.
+DATASET_ID="$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" \
+             "$BUILD/dataset/dataset-metadata.json")"
+mapfile -t KERNEL_SLUGS < <(find "$BUILD" -mindepth 1 -maxdepth 1 -type d \
+                            -not -name dataset -exec basename {} \; | sort)
 
 case "$MODE" in
   pull)
     mkdir -p training/checkpoints
-    for k in vliw-step0-baseline vliw-run1-eos; do
+    for k in "${KERNEL_SLUGS[@]}"; do
       echo "забираю вывод $k"
       "${KG[@]}" kernels output "$USER_NAME/$k" -p training/checkpoints || \
         echo "  (ещё нет вывода — ядро не отработало)"
@@ -105,12 +132,32 @@ if ! "${KG[@]}" datasets version -p "$BUILD/dataset" -m "обновление $(
 fi
 
 echo "жду, пока Kaggle распакует датасет (обычно 1-3 минуты)"
+# Раньше эта проверка не гейтила ничего после себя: таймаут молча проваливался
+# в запуск ядра против датасета, который мог быть ещё не готов, а любая
+# НАСТОЯЩАЯ ошибка API (протухший токен, rate limit, сеть) неотличимо
+# сливалась с обычным "ещё не готово" через `2>/dev/null || echo pending` —
+# оба случая жгли полные 10 минут впустую и всё равно запускали GPU-ядро.
+# Теперь: настоящая ошибка — стоп сразу; таймаут без "ready" — тоже стоп,
+# ядро не запускается вообще.
+ready=0
 for _ in $(seq 1 30); do
-  st="$("${KG[@]}" datasets status "$USER_NAME/vliw-eos-run" 2>/dev/null || echo pending)"
+  if ! st="$("${KG[@]}" datasets status "$DATASET_ID" 2>&1)"; then
+    echo "!! ошибка проверки статуса датасета (не 'ещё не готов', настоящий сбой API):" >&2
+    echo "$st" >&2
+    exit 1
+  fi
   echo "  статус: $st"
-  [[ "$st" == "ready" ]] && break
+  if [[ "$st" == "ready" ]]; then
+    ready=1
+    break
+  fi
   sleep 20
 done
+if [[ "$ready" != 1 ]]; then
+  echo "!! датасет не стал 'ready' за 10 минут — ядро НЕ запускаю, квоту не жгу." >&2
+  echo "   проверить вручную: $PY -m kaggle datasets status $DATASET_ID" >&2
+  exit 1
+fi
 
 # --- ядро ------------------------------------------------------------------
 push_kernel () {
@@ -120,10 +167,19 @@ push_kernel () {
   echo "  следить: https://www.kaggle.com/code/$USER_NAME/$slug"
 }
 
+pick_kernel () {   # находит слаг, содержащий имя режима (step0 / run1)
+  local mode="$1" match
+  match="$(printf '%s\n' "${KERNEL_SLUGS[@]}" | grep -m1 "$mode")" || {
+    echo "!! не нашёл ядро для режима '$mode' среди: ${KERNEL_SLUGS[*]}" >&2
+    exit 1
+  }
+  echo "$match"
+}
+
 case "$MODE" in
-  step0) push_kernel vliw-step0-baseline ;;
-  run1)  push_kernel vliw-run1-eos ;;
-  all)   push_kernel vliw-step0-baseline; push_kernel vliw-run1-eos ;;
+  step0) push_kernel "$(pick_kernel step0)" ;;
+  run1)  push_kernel "$(pick_kernel run1)" ;;
+  all)   for k in "${KERNEL_SLUGS[@]}"; do push_kernel "$k"; done ;;
 esac
 
 cat <<EOF

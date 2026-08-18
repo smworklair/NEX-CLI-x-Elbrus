@@ -116,18 +116,18 @@ def check_file(path: Path, profile: str, show: int) -> bool:
     return ok
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="+", type=Path)
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--show", type=int, default=3,
                     help="сколько первых сбойных примеров распечатать")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     ok = all([check_file(p, args.profile, args.show) for p in args.files])
-    raise SystemExit(0 if ok else 1)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

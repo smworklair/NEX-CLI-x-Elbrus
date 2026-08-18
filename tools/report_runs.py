@@ -240,32 +240,9 @@ DEFAULT_RUNS = [
 ]
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run", action="append", nargs="+", metavar=("ИМЯ ДАМП"),
-                    help="ИМЯ дамп_eval [дамп_eval_wide]; можно несколько раз")
-    ap.add_argument("--dir", type=Path, default=Path("training/checkpoints"),
-                    help="где искать дампы, если --run не задан")
-    ap.add_argument("--as-dumped", action="store_true",
-                    help="взять ярлыки из дампа как есть, без пересчёта "
-                         "(осторожно: старые дампы путают хвост с галлюцинацией)")
-    args = ap.parse_args()
-
-    reclassify = not args.as_dumped
-    specs: list[tuple[str, Path | None, Path | None]] = []
-
-    if args.run:
-        for item in args.run:
-            if len(item) < 2:
-                raise SystemExit(f"--run нужен хотя бы ИМЯ и один дамп: {item}")
-            name, narrow, *rest = item
-            specs.append((name, Path(narrow), Path(rest[0]) if rest else None))
-    else:
-        for name, narrow, wide in DEFAULT_RUNS:
-            p, w = args.dir / narrow, args.dir / wide
-            specs.append((name, p if p.exists() else None, w if w.exists() else None))
-
+def build_rows(specs: list[tuple[str, Path | None, Path | None]], reclassify: bool
+              ) -> tuple[list[tuple[str, Run | None, Run | None]], list[str]]:
+    """Загрузить дампы из specs, попутно печатая состав ошибок каждого."""
     rows: list[tuple[str, Run | None, Run | None]] = []
     missing: list[str] = []
     for name, narrow, wide in specs:
@@ -279,11 +256,18 @@ def main() -> None:
             print_composition(name + "  [eval 6..14]", r_n)
         if r_w:
             print_composition(name + "  [eval_wide 4..24]", r_w)
+    return rows, missing
 
+
+def report(specs: list[tuple[str, Path | None, Path | None]], reclassify: bool = True) -> bool:
+    """Свести дампы в таблицу с дельтами. True — нашлось хоть что-то.
+
+    Вынесено из main() отдельно, чтобы `vliw/cli.py` (команда `/report`) могло
+    вызвать ровно ту же сводку в процессе, без второго питона subprocess'ом.
+    """
+    rows, missing = build_rows(specs, reclassify)
     if not rows:
-        raise SystemExit(
-            f"дампов не найдено в {args.dir}. Забери их с Kaggle "
-            f"(--dump в validate_kaggle.py) или укажи пути через --run.")
+        return False
 
     print_matrix(rows)
     print_by_size(rows)
@@ -293,7 +277,49 @@ def main() -> None:
     if reclassify:
         print("\nЯрлыки пересчитаны текущим classify() — с ярлыками из дампа "
               "сравнение было бы нечестным (см. докстринг).")
+    return True
+
+
+def default_specs(checkpoints_dir: Path) -> list[tuple[str, Path | None, Path | None]]:
+    """specs для «обычного цикла» — по именам из RUNBOOK_EOS.md."""
+    specs = []
+    for name, narrow, wide in DEFAULT_RUNS:
+        p, w = checkpoints_dir / narrow, checkpoints_dir / wide
+        specs.append((name, p if p.exists() else None, w if w.exists() else None))
+    return specs
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--run", action="append", nargs="+", metavar=("ИМЯ ДАМП"),
+                    help="ИМЯ дамп_eval [дамп_eval_wide]; можно несколько раз")
+    ap.add_argument("--dir", type=Path, default=Path("training/checkpoints"),
+                    help="где искать дампы, если --run не задан")
+    ap.add_argument("--as-dumped", action="store_true",
+                    help="взять ярлыки из дампа как есть, без пересчёта "
+                         "(осторожно: старые дампы путают хвост с галлюцинацией)")
+    args = ap.parse_args(argv)
+
+    reclassify = not args.as_dumped
+    specs: list[tuple[str, Path | None, Path | None]] = []
+
+    if args.run:
+        for item in args.run:
+            if len(item) < 2:
+                print(f"--run нужен хотя бы ИМЯ и один дамп: {item}", file=sys.stderr)
+                return 1
+            name, narrow, *rest = item
+            specs.append((name, Path(narrow), Path(rest[0]) if rest else None))
+    else:
+        specs = default_specs(args.dir)
+
+    if not report(specs, reclassify):
+        print(f"дампов не найдено в {args.dir}. Забери их с Kaggle "
+              f"(--dump в validate_kaggle.py) или укажи пути через --run.", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

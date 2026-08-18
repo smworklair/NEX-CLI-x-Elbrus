@@ -18,6 +18,7 @@ import argparse
 import difflib
 import random as _random
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -716,6 +717,78 @@ def cmd_probe(session: Session, arg: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Обслуживание проекта: тонкая склейка с tools/ — те же проверки, что и
+# отдельными скриптами, но одним входом наравне с /run /doctor и т.д.
+# --------------------------------------------------------------------------
+
+
+def _run_tool(main_fn, toks: list[str]) -> bool:
+    """Вызвать main(argv) скрипта из tools/ в процессе и вернуть успех.
+
+    Скрипты tools/*.py самодостаточны и умеют запускаться отдельно
+    (`python tools/probe_matrix.py`); здесь та же функция main(), просто без
+    второго питона subprocess'ом — она уже принимает argv и возвращает код
+    возврата вместо sys.exit().
+    """
+    return main_fn(toks) in (0, None)
+
+
+def cmd_verify(session: Session, arg: str) -> None:
+    """Живая переснятие матрицы портов у ассемблера e2k (tools/probe_matrix.py).
+
+    В отличие от /probe (рассказывает историю измерения) — реально гоняет
+    ассемблер прямо сейчас и сверяет с vliw/core/model.py. Без ассемблера в
+    PATH/E2K_AS не проваливается, а сообщает, что проверить нечем.
+    """
+    from tools import probe_matrix
+
+    print(rule("verify · матрица портов у ассемблера"))
+    if not _run_tool(probe_matrix.main, arg.split()):
+        return False
+
+
+def cmd_validate(session: Session, arg: str) -> None:
+    """Прогнать jsonl через настоящий Schedule.validate() (tools/validate_jsonl.py)."""
+    from tools import validate_jsonl
+
+    toks = arg.split()
+    if not any(not t.startswith("--") for t in toks):
+        print(paint("error", "укажите файл(ы): /validate dataset.jsonl"))
+        return False
+    print(rule("validate · " + " ".join(t for t in toks if not t.startswith("--"))))
+    if not _run_tool(validate_jsonl.main, toks):
+        return False
+
+
+def cmd_report(session: Session, arg: str) -> None:
+    """Свести дампы прогонов (validate_kaggle.py --dump) в таблицу (tools/report_runs.py)."""
+    from tools import report_runs
+
+    print(rule("report · сводка прогонов"))
+    if not _run_tool(report_runs.main, arg.split()):
+        return False
+
+
+def cmd_kaggle(session: Session, arg: str) -> None:
+    """Залить/забрать/проверить Kaggle — тонкая обёртка над tools/kaggle_push.sh.
+
+    Логика (учётные данные, сборка build/kaggle/, вызовы kaggle CLI) целиком
+    в самом скрипте — здесь только один вход и передача режима: step0 (по
+    умолчанию) | run1 | all | pull | status.
+    """
+    mode = (arg.split() or ["step0"])[0]
+    script = Path(__file__).resolve().parent.parent / "tools" / "kaggle_push.sh"
+    print(rule(f"kaggle · {mode}"))
+    # Без flush() написанное выше при непустом stdout-буфере (когда вывод не
+    # в терминал, а в файл/pipe) печатается ПОСЛЕ вывода подпроцесса —
+    # подпроцесс пишет в тот же fd напрямую, порог сброса у него свой.
+    sys.stdout.flush()
+    r = subprocess.run([str(script), mode])
+    if r.returncode != 0:
+        return False
+
+
+# --------------------------------------------------------------------------
 # Реестр команд
 # --------------------------------------------------------------------------
 
@@ -740,6 +813,10 @@ COMMANDS = [
     {"name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
     {"name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
     {"name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
+    {"name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
+    {"name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
+    {"name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},
+    {"name": "kaggle", "arg": "[step0|run1|all|pull|status]", "help": "залить/забрать/проверить Kaggle", "fn": cmd_kaggle},
     {"name": "status", "arg": "", "help": "контекст сессии: сценарий, машина, результат", "fn": cmd_status},
     {"name": "theme", "arg": "[имя]", "help": "темы оформления; переключить тему", "fn": cmd_theme},
     {"name": "work", "arg": "", "help": "ядра интерпретатора и синтаксис записи", "fn": cmd_work},
@@ -782,6 +859,7 @@ _ARG_COMPLETIONS = {
     "play": lambda: ["baseline", "oracle"],
     "asm": lambda: ["baseline", "oracle"],
     "doctor": lambda: ["baseline", "oracle"],
+    "kaggle": lambda: ["step0", "run1", "all", "pull", "status"],
 }
 
 

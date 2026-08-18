@@ -11,8 +11,13 @@
 | `validate_jsonl.py` | прогоняет jsonl через настоящий `Schedule.validate()`, печатает сводку | после любой генерации или правки данных |
 | `build_split.py` | собирает `train_merged.jsonl` и held-out `eval_wide.jsonl` (4..24 инстр., послойно) | перед обучением |
 | `kaggle_prep.py` | собирает `build/kaggle/`: датасет + два ядра-скрипта | перед заливкой |
-| `kaggle_push.sh` | заливает и запускает; `pull` забирает дампы обратно | нужен `~/.kaggle/kaggle.json` |
+| `kaggle_push.sh` | заливает и запускает; `pull` забирает дампы обратно, `status` смотрит без заливки | нужен `~/.kaggle/kaggle.json` |
 | `report_runs.py` | сводит дампы прогонов в таблицу с дельтами и разбивкой по размеру графа | после прогонов |
+
+`probe_matrix.py`, `validate_jsonl.py` и `report_runs.py` доступны и как
+команды `vliw` (`/verify`, `/validate`, `/report`) — та же проверка в
+процессе, без второго питона. `kaggle_push.sh` — как `/kaggle`. См.
+[`../docs/CLI.md`](../docs/CLI.md#обслуживание-проекта).
 
 ## Обычный цикл
 

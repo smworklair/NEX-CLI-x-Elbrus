@@ -5,6 +5,7 @@
 #   tools/kaggle_push.sh run1       # датасет + ТОЛЬКО прогон 1 (обучение с EOS)
 #   tools/kaggle_push.sh all        # датасет + оба ядра разом
 #   tools/kaggle_push.sh pull       # забрать дампы обратно в training/checkpoints
+#   tools/kaggle_push.sh status     # статус датасета и ядер на Kaggle, без заливки
 #
 # Каждый режим заливает ТОЛЬКО своё ядро — раньше `run1` тянул за собой ещё и
 # повторный прогон step0 (уместно было, пока step0 ни разу не отработал; после
@@ -119,8 +120,21 @@ case "$MODE" in
     echo "дальше: $PY tools/report_runs.py"
     exit 0
     ;;
+  status)
+    # Только чтение: ничего не заливает и не запускает, квоту не трогает.
+    echo "датасет: $DATASET_ID"
+    # `kaggle ... status` не завершает вывод переводом строки — добавляем
+    # свой, иначе следующая строка приклеивается прямо к «ready».
+    "${KG[@]}" datasets status "$DATASET_ID" 2>&1 | sed 's/^/  /' || true
+    echo
+    for k in "${KERNEL_SLUGS[@]}"; do
+      echo "ядро: $USER_NAME/$k"
+      "${KG[@]}" kernels status "$USER_NAME/$k" 2>&1 | sed 's/^/  /' || true
+    done
+    exit 0
+    ;;
   step0|run1|all) ;;
-  *) echo "неизвестный режим: $MODE (step0 | run1 | all | pull)" >&2; exit 2 ;;
+  *) echo "неизвестный режим: $MODE (step0 | run1 | all | pull | status)" >&2; exit 2 ;;
 esac
 
 # --- датасет ---------------------------------------------------------------

@@ -128,19 +128,19 @@ def probe(as_bin: str, op: str, channel: int, tmp: Path) -> tuple[bool, str]:
     return False, msg
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--show", action="store_true", help="напечатать матрицу целиком")
-    args = ap.parse_args()
+def run(show: bool = False) -> bool:
+    """Переснять и сверить матрицу. True — совпадает (или ассемблера нет).
 
+    Вынесено из main() отдельно, чтобы `vliw/cli.py` (команда `/verify`) могло
+    вызвать ровно ту же проверку в процессе, без второго питона subprocess'ом.
+    """
     as_bin = find_as()
     if not as_bin:
         print("ассемблера e2k нет (ни E2K_AS, ни ~/e2k-toolchain, ни в PATH) — "
               "проверить матрицу нечем")
         print("это не провал: на машине без тулчейна модель просто не "
               "перепроверяется, источником истины остаётся vliw/core/model.py")
-        return
+        return True
     print(f"ассемблер: {as_bin}\nпрофиль:   {MODEL.name}, портов {MODEL.width}\n")
 
     width = MODEL.width
@@ -166,7 +166,7 @@ def main() -> None:
             print("   ", b)
         print()
 
-    if args.show:
+    if show:
         print("    " + " " * 7 + "".join(f"{f',{c}':>4}" for c in range(width)))
         for op in OPS:
             row = "".join(f"{'•' if c in measured[op] else '·':>4}"
@@ -184,14 +184,23 @@ def main() -> None:
         print("РАСХОЖДЕНИЯ (истина — ассемблер, править model.py):")
         for d in diffs:
             print("   ", d)
-        raise SystemExit(1)
+        return False
 
     print(f"матрица портов совпадает с vliw/core/model.py по всем "
           f"{len(OPS)}×{width} парам")
     print("(латентности и occupancy этим способом не проверяются: они меряются "
           "цепочками зависимых и потоками независимых операций, см. "
           "examples/probes/README.md)")
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--show", action="store_true", help="напечатать матрицу целиком")
+    args = ap.parse_args(argv)
+    return 0 if run(show=args.show) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

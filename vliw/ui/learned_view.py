@@ -83,3 +83,58 @@ def render_raw(res) -> list[str]:
     if extra > 0:
         out.append("  " + Style.dim(f"… ещё {extra} строк"))
     return out
+
+
+def render_bench(res, adapter_name: str) -> list[str]:
+    """Сводка замера: состав ошибок и разрез по наличию STORE.
+
+    Разрез именно по STORE, а не только по размеру графа, — потому что в
+    обучающих данных прогона 1 не было ни одной такой операции, и по корзинам
+    размера эта причина размазывается (docs/ROADMAP.md).
+    """
+    n = len(res.rows)
+    out = [paint("title", f"  замер · {adapter_name} · {n} примеров "
+                          f"· {res.seconds:.0f} с"), ""]
+    if not n:
+        out.append("  " + Style.dim("нечего мерить"))
+        return out
+
+    order = ("валидно", "хвост", "ресурс", "прочее")
+    counts = res.by_kind()
+    for k in order:
+        v = counts.get(k, 0)
+        if not v:
+            continue
+        colour = "success" if k == "валидно" else "error" if k == "ресурс" else "warning"
+        bar = "█" * max(1, round(20 * v / n))
+        out.append(f"  {paint(colour, k):<20} {v:>3}  ({res.pct(v):>4.0f}%)  "
+                   + Style.dim(bar))
+
+    gaps = [r.gap for r in res.rows if r.gap is not None]
+    if gaps:
+        exact = sum(1 for g in gaps if g == 0)
+        out.append("")
+        out.append("  " + Style.dim(
+            f"разрыв до оптимума среди законных: {sum(gaps) / len(gaps):.2f} т., "
+            f"точно в оптимум {exact}/{len(gaps)}"))
+
+    split = res.split_store()
+    out.append("")
+    out.append("  " + paint("title", "разрез по наличию STORE в графе"))
+    for has, label in ((True, "со STORE"), (False, "без STORE")):
+        ok, total = split[has]
+        if not total:
+            continue
+        pct = 100.0 * ok / total
+        colour = "error" if has and pct < 50 else "success" if pct >= 50 else "warning"
+        out.append(f"    {label:<11} валидно {paint(colour, f'{pct:>3.0f}%')}"
+                   + Style.dim(f"  ({ok}/{total})"))
+    ok_s, tot_s = split[True]
+    ok_n, tot_n = split[False]
+    if tot_s and tot_n and (ok_n / tot_n) - (ok_s / tot_s) > 0.2:
+        out.append("")
+        out += wrap(Style.dim(
+            "Разрыв между строками — тот самый диагноз: STORE в обучающих "
+            "данных прогона 1 не встречался ни разу, и модель не знает, что "
+            "его исполняют только каналы ,2 и ,5."), render.W, "    ")
+    return out

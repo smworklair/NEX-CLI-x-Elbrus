@@ -781,7 +781,14 @@ def cmd_learned(session: Session, arg: str) -> None:
     toks = arg.split()
     want_raw = "--raw" in toks
     want_status = "--status" in toks
-    name = next((t for t in toks if not t.startswith("--")), None)
+    n_bench = 0
+    for i, t in enumerate(toks):
+        if t == "--bench":
+            n_bench = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 15
+        elif t.startswith("--bench="):
+            n_bench = int(t.split("=", 1)[1] or 15)
+    name = next((t for t in toks
+                 if not t.startswith("--") and not t.isdigit()), None)
 
     ready, lines = runtime.status(name)
     if want_status or not ready:
@@ -797,7 +804,33 @@ def cmd_learned(session: Session, arg: str) -> None:
                              + ", ".join(a.name for a in runtime.find_adapters())))
         return False
 
-    dag, machine = session.dag_obj, session.model()
+    from .learned import LearnedScheduler as _LS
+
+    machine = session.model()
+    if n_bench:
+        data = Path("eval_wide.jsonl")
+        if not data.exists():
+            print(paint("error", f"нет файла эвала {data} — замер не на чем гонять"))
+            return False
+        print(rule(f"замер · {adapter.name} · {n_bench} примеров"))
+        print(Style.dim(f"  локально, без Kaggle. Порядка 30 с на граф — "
+                        f"ожидаемо {n_bench * 30 // 60} мин."))
+        print()
+        sys.stdout.flush()
+        from .learned import bench as _bench
+
+        def _tick(k, row):
+            mark = paint("success", "ok  ") if row.kind == "валидно" else paint("error", "….  ")
+            print(f"  [{k:>3}/{n_bench}] {mark} n={row.n:<3} {row.kind:<9} "
+                  + Style.dim(row.first_error[:46]))
+            sys.stdout.flush()
+
+        res = _bench.run_bench(data, n_bench, _LS(adapter=adapter), machine, _tick)
+        print()
+        _out(learned_view.render_bench(res, adapter.name))
+        return None
+
+    dag = session.dag_obj
     print(rule(f"обученный планировщик · {adapter.name} · {session.scenario}"))
     print("  " + _header(session))
     print()
@@ -867,7 +900,7 @@ COMMANDS = [
     {"name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
     {"name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
     {"name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
-    {"name": "learned", "arg": "[адаптер] [--raw]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
+    {"name": "learned", "arg": "[адаптер] [--raw] [--bench N]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
     {"name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
     {"name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
     {"name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},

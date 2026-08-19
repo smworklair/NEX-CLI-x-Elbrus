@@ -194,8 +194,16 @@ def cmd_run(session: Session, arg: str) -> None:
 
 
 def cmd_compare(session: Session, arg: str) -> None:
-    if arg.strip():
-        session.set_scenario(arg.split()[0])
+    """baseline и oracle бок о бок; `--model` добавляет третьим обученную.
+
+    Модель НЕ подмешивается по умолчанию: она считается полминуты, а
+    `/compare` должен оставаться мгновенным.
+    """
+    toks = arg.split()
+    want_model = any(t in ("--model", "--learned") for t in toks)
+    rest = [t for t in toks if not t.startswith("--")]
+    if rest:
+        session.set_scenario(rest[0])
     base, orc, met = session.results()
     dag, model = session.dag_obj, session.model()
     diverged = {
@@ -216,9 +224,72 @@ def cmd_compare(session: Session, arg: str) -> None:
         orc.schedule, dag, model, hl,
         paint("success", "  oracle — точный поиск:")))
     print()
+    from .ui import learned_view
+
+    learned_res = None
+    if want_model:
+        learned_res = _compare_learned(session, dag, model, hl)
     _out(schedule_view.render_divergence_line(base, orc, dag, met))
     print()
     _out(schedule_view.render_verdict(base, orc, met))
+    if learned_res is not None:
+        print()
+        _out(learned_view.render_compare_line(learned_res, base, orc))
+    elif not want_model:
+        print()
+        print(Style.dim("  добавить обученную модель третьей: /compare --model"))
+
+
+def _compare_learned(session: Session, dag, model, hl):
+    """Прогнать модель и напечатать её расписание третьим. None — не вышло."""
+    from .learned import runtime
+
+    ready, lines = runtime.status()
+    if not ready:
+        print()
+        print(paint("warning", "  модель недоступна — показываю без неё"))
+        print(Style.dim("  подробности: /learned --status"))
+        return None
+
+    adapter = runtime.resolve_adapter()
+    print()
+    print(paint("lab", f"  модель ({adapter.name}) считает, ~30 с:"))
+    _line: list[str] = []
+
+    def _stream(chunk: str) -> None:
+        for ch in chunk:
+            if ch == "\n":
+                text = "".join(_line).replace("[end of text]", "").rstrip()
+                _line.clear()
+                if text:
+                    print("    " + Style.dim(text))
+                    sys.stdout.flush()
+            else:
+                _line.append(ch)
+
+    from .learned import LearnedScheduler
+
+    try:
+        res = LearnedScheduler(adapter=adapter, repair=True).schedule(
+            dag, model, on_text=_stream)
+        _stream("\n")
+    except (RuntimeError, OSError, ImportError, TimeoutError) as e:
+        print(paint("error", f"  модель не отработала: {e}"))
+        return None
+
+    print()
+    st = res.search_stats
+    if st["valid"]:
+        label = "  модель — обученная" + (
+            " + починка каналов:" if st.get("repaired") else ":")
+        _out(schedule_view.render_schedule(res.schedule, dag, model, hl,
+                                           paint("lab", label)))
+    else:
+        print(paint("error", "  модель выдала незаконное расписание — "
+                             "решётку не рисую:"))
+        for e in st["errors"][:4]:
+            print("    " + Style.dim(e))
+    return res
 
 
 def cmd_play(session: Session, arg: str) -> None:
@@ -914,7 +985,7 @@ def cmd_kaggle(session: Session, arg: str) -> None:
 
 COMMANDS = [
     {"name": "run", "arg": "<сценарий>", "help": "прогнать сценарий: расписание оракула + вердикт", "fn": cmd_run},
-    {"name": "compare", "arg": "[сценарий]", "help": "baseline и oracle бок о бок", "fn": cmd_compare},
+    {"name": "compare", "arg": "[сценарий] [--model]", "help": "baseline и oracle бок о бок", "fn": cmd_compare},
     {"name": "play", "arg": "[base|oracle]", "help": "воспроизвести расписание такт за тактом", "fn": cmd_play},
     {"name": "asm", "arg": "[base|oracle]", "help": "расписание как широкие команды e2k { … }", "fn": cmd_asm},
     {"name": "explain", "arg": "<такт>", "help": "почему в этом такте выбрали именно это", "fn": cmd_explain},

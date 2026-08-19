@@ -151,3 +151,46 @@ def render_bench(res, adapter_name: str) -> list[str]:
             "данных прогона 1 не встречался ни разу, и модель не знает, что "
             "его исполняют только каналы ,2 и ,5."), render.W, "    ")
     return out
+
+
+def render_compare_line(learned_res, base_res, oracle_res) -> list[str]:
+    """Итог сравнения трёх планировщиков в одну табличку.
+
+    Порядок строк — от худшего к лучшему по смыслу, а не по числу: эвристика
+    (что делает компилятор), модель (что предлагает ИИ), оракул (потолок).
+    """
+    st = learned_res.search_stats
+    if not st.get("valid"):
+        return ["  " + Style.dim("модель законного расписания не дала — "
+                                 "сравнивать нечего")]
+
+    ms = learned_res.schedule.makespan
+    b = base_res.schedule.makespan
+    o = oracle_res.schedule.makespan
+    tag = "  (+ починка каналов)" if st.get("repaired") else ""
+
+    rows = [
+        ("жадная эвристика", b, "warning"),
+        ("обученная модель" + tag, ms, "lab"),
+        ("точный поиск", o, "success"),
+    ]
+    width = max(len(r[0]) for r in rows)
+    out = ["  " + paint("title", "ТРИ ПЛАНИРОВЩИКА НА ОДНОМ ГРАФЕ"), ""]
+    for label, v, colour in rows:
+        out.append(f"  {paint(colour, label):<{width + 12}}  {v:>4} т.")
+
+    out.append("")
+    if ms < b:
+        out.append("  " + paint("success",
+                                f"модель обыграла эвристику на {b - ms} т."
+                                + (" и попала в оптимум" if ms == o else
+                                   f", до оптимума {ms - o} т.")))
+    elif ms == b == o:
+        out.append("  " + Style.dim("все три сошлись — на этом графе выбирать нечего"))
+    elif ms == b:
+        out.append("  " + Style.dim(
+            f"модель повторила эвристику; до оптимума {ms - o} т."))
+    else:
+        out.append("  " + Style.dim(
+            f"модель отстала от эвристики на {ms - b} т."))
+    return out

@@ -119,6 +119,12 @@ class ModeScreen(Screen):
     def toggle_hints(self) -> list[tuple[str, str]]:
         """Подсказки про скрываемые панели — одинаковые во всех режимах."""
         out = []
+        # Про двойной клик иначе не догадаться: мышь в текстовом интерфейсе
+        # обычно ничего не делает, и панель на весь экран никто искать не станет.
+        if self.screen is self and self.screen.maximized is not None:
+            out.append(("Esc", "свернуть панель"))
+        else:
+            out.append(("2×клик", "панель на весь экран"))
         if self.SIDE_ID:
             out.append(("^B", "панель" if self.side_shown else "панель ↩"))
         if self.TIPS_ID:

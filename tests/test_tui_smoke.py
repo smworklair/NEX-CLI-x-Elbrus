@@ -146,5 +146,78 @@ class TestCommandsReachCore(unittest.TestCase):
         self.assertNotEqual(session.scenario, "nosuchscenario")
 
 
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestPanelMaximize(unittest.TestCase):
+    """Двойной клик по панели разворачивает её на весь экран.
+
+    Панелей на экране семь, и в каждой либо решётка тактов, либо длинный
+    отчёт — в своей трети экрана они читаются с трудом. Двойной клик
+    определяется по времени вручную: в Textual 8.2 у события Click нет поля
+    `chain` (счётчика кликов подряд), только `time`.
+    """
+
+    @staticmethod
+    def _click(panel, t):
+        panel.on_click(type("E", (), {"time": t, "stop": lambda self: None})())
+
+    def _run(self, steps):
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    from vliw.tui.widgets import Panel
+
+                    panel = app.screen.query_one("#p-grid", Panel)
+                    return await steps(app, pilot, panel)
+
+        return asyncio.run(go())
+
+    def test_single_click_does_not_maximize(self):
+        async def steps(app, pilot, panel):
+            self._click(panel, 100.0)
+            await pilot.pause()
+            return app.screen.maximized
+
+        self.assertIsNone(self._run(steps))
+
+    def test_double_click_maximizes_that_panel(self):
+        async def steps(app, pilot, panel):
+            self._click(panel, 100.0)
+            self._click(panel, 100.2)
+            await pilot.pause()
+            return app.screen.maximized
+
+        got = self._run(steps)
+        self.assertIsNotNone(got, "панель не развернулась")
+        self.assertEqual(got.id, "p-grid", "развернулась не та панель")
+
+    def test_slow_second_click_is_not_double(self):
+        """Два клика с большим зазором — не двойной клик, а два одиночных."""
+        async def steps(app, pilot, panel):
+            self._click(panel, 100.0)
+            self._click(panel, 105.0)
+            await pilot.pause()
+            return app.screen.maximized
+
+        self.assertIsNone(self._run(steps))
+
+    def test_escape_minimizes(self):
+        """Esc сворачивает — и это не ломает свой Esc у экрана РАЗБОР."""
+        async def steps(app, pilot, panel):
+            self._click(panel, 100.0)
+            self._click(panel, 100.2)
+            await pilot.pause()
+            before = app.screen.maximized
+            await pilot.press("escape")
+            await pilot.pause()
+            return before, app.screen.maximized
+
+        before, after = self._run(steps)
+        self.assertIsNotNone(before)
+        self.assertIsNone(after)
+
 if __name__ == "__main__":
     unittest.main()

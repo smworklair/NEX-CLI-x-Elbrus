@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import time
+
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -65,12 +67,28 @@ class TopBar(Static):
 
 
 class Panel(Vertical):
-    """Рамка с подписью. Подпись — часть рамки, а не строка внутри."""
+    """Рамка с подписью. Подпись — часть рамки, а не строка внутри.
+
+    Двойной клик разворачивает панель на весь экран (Esc — обратно). Панелей
+    на экране шесть-семь, и в каждой либо решётка тактов, либо длинный отчёт;
+    в своей трети экрана они читаются с трудом, а развёрнутая — целиком.
+
+    Двойной клик определяется по времени вручную: у Textual 8.2 в событии
+    Click нет поля `chain` (счётчика кликов подряд), есть только `time`.
+    """
+
+    #: Максимальный зазор между кликами, чтобы счесть их двойным.
+    DOUBLE_CLICK_S = 0.4
+
+    #: Без этого Textual разворачивать не даёт: по умолчанию `allow_maximize`
+    #: равен `can_focus`, а Panel — контейнер и фокус не принимает.
+    ALLOW_MAXIMIZE = True
 
     def __init__(self, *children, title: str = "", accent: str = "", **kw) -> None:
         super().__init__(*children, **kw)
         self._title = title
         self._accent = accent
+        self._last_click = 0.0
 
     def on_mount(self) -> None:
         if self._title:
@@ -81,6 +99,21 @@ class Panel(Vertical):
     def set_title(self, title: str) -> None:
         self._title = title
         self.border_title = title
+
+    def on_click(self, event) -> None:
+        """Двойной клик — развернуть/свернуть эту панель."""
+        now = getattr(event, "time", 0.0) or time.monotonic()
+        double = (now - self._last_click) <= self.DOUBLE_CLICK_S
+        self._last_click = now
+        if not double:
+            return
+        event.stop()
+        self._last_click = 0.0        # третий клик подряд не считаем четвёртым
+        screen = self.screen
+        if screen.maximized is self:
+            screen.minimize()
+        else:
+            screen.maximize(self, container=False)
 
 
 # --------------------------------------------------------------------------

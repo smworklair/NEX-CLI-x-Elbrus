@@ -87,12 +87,19 @@ class LearnedScheduler:
 
     # --- собственно планирование ------------------------------------------
 
-    def schedule(self, dag: DAG, model: MachineModel) -> SchedulingResult:
+    def schedule(self, dag: DAG, model: MachineModel,
+                 on_text=None) -> SchedulingResult:
+        """`on_text(chunk)` — печатать ответ модели по мере генерации.
+
+        Генерация идёт секунд тридцать, и без этого пользователь полминуты
+        смотрит в тишину. Необязателен: протокол Scheduler его не требует, и
+        baseline/oracle про него не знают.
+        """
         from training.encode import clip_placements, decode_completion, encode_prompt
 
         prompt = encode_prompt(dag, model)
         t0 = time.monotonic()
-        raw = self.backend().generate(prompt, self.max_new_tokens)
+        raw = self.backend().generate(prompt, self.max_new_tokens, on_text=on_text)
         elapsed = time.monotonic() - t0
 
         decoded = decode_completion(raw)

@@ -42,7 +42,7 @@ class TestPromptIsTrainingFormat(unittest.TestCase):
         seen = {}
 
         class Spy(ScriptedBackend):
-            def generate(self, prompt, max_new_tokens):
+            def generate(self, prompt, max_new_tokens, on_text=None):
                 seen["prompt"] = prompt
                 return ""
 
@@ -341,6 +341,51 @@ class TestChannelRepair(unittest.TestCase):
         self.assertTrue(any("ПОЧИНЕНО" in n for n in res.notes))
         # Такты модели сохранены — makespan тот же, что она задумала.
         self.assertEqual(res.schedule.makespan, good.makespan)
+
+
+class TestStreaming(unittest.TestCase):
+    """Ответ модели отдаётся по мере генерации, а не целиком в конце.
+
+    Генерация идёт около тридцати секунд. Без стриминга это тишина, в которой
+    непонятно, работает оно или повисло.
+    """
+
+    def test_callback_receives_text(self):
+        dag, machine, good = _fixture()
+        got = []
+        LearnedScheduler(
+            backend=ScriptedBackend(encode_completion(good))
+        ).schedule(dag, machine, on_text=got.append)
+        self.assertTrue(got, "колбэк не вызвался ни разу")
+        self.assertIn("такт=", "".join(got))
+
+    def test_works_without_callback(self):
+        """on_text необязателен: протокол Scheduler его не требует."""
+        dag, machine, good = _fixture()
+        res = LearnedScheduler(
+            backend=ScriptedBackend(encode_completion(good))).schedule(dag, machine)
+        self.assertTrue(res.search_stats["valid"])
+
+    def test_echo_detection_splits_prompt_from_answer(self):
+        """llama.cpp повторяет промпт перед ответом — наружу идёт только ответ.
+
+        Проверяем ровно ту логику, что в потоковом чтении: ответ начинается
+        сразу после хвоста промпта в 40 символов.
+        """
+        prompt = encode_prompt(*_fixture()[:2])
+        answer = "0: такт=0 канал=1\n"
+        stream = prompt + answer
+
+        tail = prompt[-40:]
+        buf, out, echo_done = [], [], False
+        for ch in stream:
+            buf.append(ch)
+            if echo_done:
+                out.append(ch)
+            elif "".join(buf[-len(tail):]) == tail:
+                echo_done = True
+        self.assertTrue(echo_done, "хвост промпта не найден в потоке")
+        self.assertEqual("".join(out), answer)
 
 if __name__ == "__main__":
     unittest.main()

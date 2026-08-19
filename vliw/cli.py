@@ -849,8 +849,31 @@ def cmd_learned(session: Session, arg: str) -> None:
     sys.stdout.flush()
 
     sch = LearnedScheduler(adapter=adapter, repair=want_repair)
+
+    # Печатаем ответ модели по мере генерации: иначе полминуты тишины, и
+    # непонятно, работает оно вообще или повисло.
+    print(Style.dim("  ── модель пишет ──"))
+
+    # Копим до перевода строки, а не красим каждый символ по отдельности:
+    # посимвольная раскраска даёт по паре ANSI-кодов на букву — и мусор в
+    # выводе, и лишние байты в терминал.
+    _line: list[str] = []
+
+    def _stream(chunk: str) -> None:
+        for ch in chunk:
+            if ch == "\n":
+                text = "".join(_line).replace("[end of text]", "").rstrip()
+                _line.clear()
+                if text:
+                    print("  " + Style.dim(text))
+                    sys.stdout.flush()
+            else:
+                _line.append(ch)
+
     try:
-        res = sch.schedule(dag, machine)
+        res = sch.schedule(dag, machine, on_text=_stream)
+        _stream("\n")            # хвост без перевода строки тоже показать
+        print()
     except (RuntimeError, OSError, ImportError) as e:
         print(paint("error", f"не удалось запустить модель: {e}"))
         return False

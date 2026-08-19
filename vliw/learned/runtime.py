@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -178,7 +179,9 @@ class Backend:
 
     name = "?"
 
-    def generate(self, prompt: str, max_new_tokens: int) -> str:
+    def generate(self, prompt: str, max_new_tokens: int,
+                 on_text=None) -> str:
+        """`on_text(chunk)` — вызывается по мере генерации, если поддержано."""
         raise NotImplementedError
 
 
@@ -195,11 +198,13 @@ class ScriptedBackend(Backend):
         self._replies = [replies] if isinstance(replies, str) else list(replies)
         self._i = 0
 
-    def generate(self, prompt: str, max_new_tokens: int) -> str:
+    def generate(self, prompt: str, max_new_tokens: int, on_text=None) -> str:
         if not self._replies:
             return ""
         r = self._replies[min(self._i, len(self._replies) - 1)]
         self._i += 1
+        if on_text:
+            on_text(r)
         return r
 
 
@@ -283,7 +288,7 @@ class TransformersBackend(Backend):
             model.to("cpu")
         self._model = model
 
-    def generate(self, prompt: str, max_new_tokens: int) -> str:
+    def generate(self, prompt: str, max_new_tokens: int, on_text=None) -> str:
         import torch
 
         self._load()
@@ -360,7 +365,7 @@ class LlamaCppBackend(Backend):
         self.base_gguf = find_gguf_base()
         self.lora_gguf = gguf_adapter_for(adapter)
 
-    def generate(self, prompt: str, max_new_tokens: int) -> str:
+    def generate(self, prompt: str, max_new_tokens: int, on_text=None) -> str:
         import subprocess
         import tempfile
 
@@ -370,11 +375,12 @@ class LlamaCppBackend(Backend):
                 "завершения, повторный запуск запустил бы второй процесс "
                 "рядом с первым и вдвое больше памяти")
         try:
-            return self._generate_locked(prompt, max_new_tokens)
+            return self._generate_locked(prompt, max_new_tokens, on_text)
         finally:
             _GENERATE_LOCK.release()
 
-    def _generate_locked(self, prompt: str, max_new_tokens: int) -> str:
+    def _generate_locked(self, prompt: str, max_new_tokens: int,
+                         on_text=None) -> str:
         import subprocess
         import tempfile
 
@@ -416,20 +422,53 @@ class LlamaCppBackend(Backend):
             libs.append(str(torch_lib))
         env["LD_LIBRARY_PATH"] = ":".join(libs + [env.get("LD_LIBRARY_PATH", "")])
 
+        # Popen, а не subprocess.run: run() отдаёт вывод только целиком и в
+        # конце, а генерация идёт ~30 секунд. Читаем посимвольно и отдаём
+        # наружу по мере поступления — чтобы было видно, как модель пишет
+        # расписание, а не тишина на полминуты.
+        timeout_s = max(120, max_new_tokens * 3)
+        deadline = time.monotonic() + timeout_s
+        tail = prompt[-40:]          # по нему отличаем эхо промпта от ответа
+        buf: list[str] = []
+        answer: list[str] = []
+        echo_done = False
+        proc = None
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, env=env,
-                               timeout=max(120, max_new_tokens * 3))
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, env=env, bufsize=1)
+            while True:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    raise TimeoutError(
+                        f"модель не уложилась в {timeout_s} с — вероятно, "
+                        "процессор занят другим процессом модели")
+                chunk = proc.stdout.read(1)
+                if not chunk:
+                    break
+                buf.append(chunk)
+                if echo_done:
+                    answer.append(chunk)
+                    if on_text:
+                        on_text(chunk)
+                    continue
+                # llama.cpp сперва повторяет промпт, и только потом пишет своё.
+                # Пока не увидели хвост промпта — всё это эхо, наружу не отдаём.
+                if "".join(buf[-len(tail):]) == tail:
+                    echo_done = True
+            proc.wait(timeout=10)
         finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
             try:
                 os.unlink(prompt_file)
             except OSError:
                 pass
 
-        out = r.stdout
-        # llama.cpp повторяет промпт на выходе перед продолжением. Срезаем его
-        # по хвосту промпта, иначе разбор примет строки графа за расписание.
-        tail = prompt[-40:]
-        if tail in out:
+        out = "".join(answer) if echo_done else "".join(buf)
+        if not echo_done and tail in out:
+            # Хвост промпта проскочил мимо потокового детектора — срезаем как
+            # раньше, целиком по готовому тексту.
             out = out.split(tail, 1)[1]
         return out.split("[end of text]")[0]
 

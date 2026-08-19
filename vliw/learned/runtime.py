@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -326,6 +327,15 @@ def make_backend(adapter: Adapter, device: str | None = None,
     return TransformersBackend(adapter, dtype=dtype, device=device)
 
 
+# Один процесс llama-completion за раз, на весь инструмент. Без этого
+# повторный /learned (или /learned --bench, пока первый ещё считает) уходит в
+# ВТОРОЙ параллельный subprocess: Textual отменяет СТАРЫЙ воркер только на
+# своём уровне, а subprocess.run() внутри него — блокирующий вызов, он эту
+# отмену не видит и продолжает работать. Найдено по факту: два процесса по
+# 3.6 ГБ каждый одновременно, 1 ГБ свободной памяти, секунды до OOM.
+_GENERATE_LOCK = threading.Lock()
+
+
 class LlamaCppBackend(Backend):
     """Локальный запуск через llama.cpp — 4-битная база, CPU, без GPU.
 
@@ -351,6 +361,20 @@ class LlamaCppBackend(Backend):
         self.lora_gguf = gguf_adapter_for(adapter)
 
     def generate(self, prompt: str, max_new_tokens: int) -> str:
+        import subprocess
+        import tempfile
+
+        if not _GENERATE_LOCK.acquire(blocking=False):
+            raise RuntimeError(
+                "модель уже считает предыдущий запрос — дождитесь его "
+                "завершения, повторный запуск запустил бы второй процесс "
+                "рядом с первым и вдвое больше памяти")
+        try:
+            return self._generate_locked(prompt, max_new_tokens)
+        finally:
+            _GENERATE_LOCK.release()
+
+    def _generate_locked(self, prompt: str, max_new_tokens: int) -> str:
         import subprocess
         import tempfile
 

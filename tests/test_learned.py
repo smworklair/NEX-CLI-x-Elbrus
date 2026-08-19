@@ -199,5 +199,42 @@ class TestLlamaCppBackend(unittest.TestCase):
         # llama.cpp должен проверяться ДО transformers: 2.1 ГБ против 6.2 ГБ.
         self.assertLess(src.index("llama_cpp_ready"), src.index("missing_deps"))
 
+
+
+class TestConcurrencyGuard(unittest.TestCase):
+    """Повторный /learned, пока первый ещё считает, не должен плодить процессы.
+
+    Найдено по факту: Textual отменяет СТАРЫЙ воркер только на своём уровне —
+    subprocess.run() внутри него блокирующий и отмену не видит. Без блокировки
+    второй /learned запускает ВТОРОЙ параллельный процесс модели: два по
+    3.6 ГБ на машине с 7 ГБ ОЗУ — секунды до OOM.
+    """
+
+    def test_second_call_rejected_while_first_holds_lock(self):
+        from vliw.learned.runtime import _GENERATE_LOCK, LlamaCppBackend
+
+        be = LlamaCppBackend.__new__(LlamaCppBackend)
+        _GENERATE_LOCK.acquire()
+        try:
+            with self.assertRaises(RuntimeError):
+                be.generate("x", 5)
+        finally:
+            _GENERATE_LOCK.release()
+
+    def test_lock_released_after_call(self):
+        """После завершения (успешного или нет) блокировка обязана сняться."""
+        from vliw.learned.runtime import _GENERATE_LOCK, LlamaCppBackend
+
+        be = LlamaCppBackend.__new__(LlamaCppBackend)
+        be.binary = None       # заставит упасть внутри _generate_locked
+        be.base_gguf = None
+        be.lora_gguf = None
+        be.threads = 1
+        with self.assertRaises(Exception):
+            be.generate("x", 5)
+        self.assertTrue(_GENERATE_LOCK.acquire(blocking=False),
+                        "блокировка осталась висеть после сбоя")
+        _GENERATE_LOCK.release()
+
 if __name__ == "__main__":
     unittest.main()

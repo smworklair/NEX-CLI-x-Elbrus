@@ -825,7 +825,11 @@ def cmd_learned(session: Session, arg: str) -> None:
                   + Style.dim(row.first_error[:46]))
             sys.stdout.flush()
 
-        res = _bench.run_bench(data, n_bench, _LS(adapter=adapter), machine, _tick)
+        try:
+            res = _bench.run_bench(data, n_bench, _LS(adapter=adapter), machine, _tick)
+        except (RuntimeError, OSError, ImportError) as e:
+            print(paint("error", f"замер прерван: {e}"))
+            return False
         print()
         _out(learned_view.render_bench(res, adapter.name))
         return None

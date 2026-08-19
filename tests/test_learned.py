@@ -18,6 +18,7 @@ import unittest
 
 from training.encode import encode_completion, encode_prompt
 from vliw.core import GreedyListScheduler, get_profile, get_scenario
+from vliw.core.schedule import Schedule
 from vliw.learned.runtime import ScriptedBackend
 from vliw.learned.scheduler import LearnedScheduler
 
@@ -235,6 +236,111 @@ class TestConcurrencyGuard(unittest.TestCase):
         self.assertTrue(_GENERATE_LOCK.acquire(blocking=False),
                         "блокировка осталась висеть после сбоя")
         _GENERATE_LOCK.release()
+
+
+class TestChannelRepair(unittest.TestCase):
+    """Починка каналов: такты модели неприкосновенны, канал — законный.
+
+    Замер показал ровное разделение: когда модель не путает канал, она попадает
+    ТОЧНО в оптимум. Когда путает — это почти всегда STORE, которого не было в
+    обучающих данных. Матрица машины при этом известна точно, поэтому канал
+    можно переназначить, не трогая план.
+    """
+
+    def test_illegal_store_channel_is_fixed(self):
+        from vliw.learned.repair import repair
+
+        # mixed18 — самый богатый по составу операций, STORE там есть.
+        dag = get_scenario("mixed18")
+        machine = get_profile("e2k-v6-measured")
+        good = GreedyListScheduler().schedule(dag, machine).schedule
+        # STORE исполняют только ,2 и ,5 — ставим на ,0 и ждём починки.
+        store = next(i for i in range(len(dag)) if dag[i].op == "STORE")
+        broken = Schedule(dag, machine)
+        for i in range(len(dag)):
+            p = good.placements[i]
+            broken.place(i, p.cycle, 0 if i == store else p.channel)
+
+        fixed, rep = repair(broken, machine)
+        self.assertEqual(fixed.validate(), [])
+        self.assertIn(fixed.placements[store].channel, machine.channels_for("STORE"))
+        self.assertTrue(rep.touched)
+
+    def test_cycles_are_never_moved(self):
+        """Главный инвариант: makespan определяется тактами, их мы не трогаем."""
+        from vliw.learned.repair import repair
+
+        dag, machine, good = _fixture()
+        broken = Schedule(dag, machine)
+        for i in range(len(dag)):
+            broken.place(i, good.placements[i].cycle, 0)   # все на канал 0
+
+        fixed, _ = repair(broken, machine)
+        for i in range(len(dag)):
+            self.assertEqual(fixed.placements[i].cycle, good.placements[i].cycle,
+                             f"такт инструкции {i} сдвинулся при починке")
+        self.assertEqual(fixed.makespan, broken.makespan)
+
+    def test_already_legal_schedule_is_left_alone(self):
+        """Законное расписание чинить не надо — ни одной перестановки."""
+        from vliw.learned.repair import repair
+
+        dag, machine, good = _fixture()
+        fixed, rep = repair(good, machine)
+        self.assertEqual(rep.touched, 0)
+        for i in range(len(dag)):
+            self.assertEqual(fixed.placements[i].channel,
+                             good.placements[i].channel)
+
+    def test_narrow_op_wins_over_greedy_grab(self):
+        """Матчинг, а не жадность: широкая операция не должна занять
+        единственный канал, нужный узкой.
+
+        ADD исполним на всех шести каналах, STORE — только на ,2 и ,5. Если
+        раздавать жадно по порядку, ADD может сесть на ,2 и оставить STORE без
+        места, хотя законное решение существует.
+        """
+        from vliw.learned.repair import _assign_cycle
+
+        machine = get_profile("e2k-v6-measured")
+        add_ch = machine.channels_for("ADD")
+        store_ch = machine.channels_for("STORE")
+        # Обе просятся на ,2; законно только STORE->,2 (или ,5), ADD->куда угодно.
+        got = _assign_cycle([(0, add_ch, 2), (1, store_ch, 2)], machine.width)
+        self.assertIsNotNone(got, "решение существует, а матчинг его не нашёл")
+        self.assertIn(got[1], store_ch)
+        self.assertNotEqual(got[0], got[1])
+
+    def test_impossible_cycle_reported_not_hidden(self):
+        """Если законно раздать нельзя — это видно, а не замаскировано."""
+        from vliw.learned.repair import _assign_cycle
+
+        machine = get_profile("e2k-v6-measured")
+        store_ch = machine.channels_for("STORE")      # ровно два канала
+        # Три STORE в одном такте — портов записи всего два, решения нет.
+        got = _assign_cycle([(i, store_ch, store_ch[0]) for i in range(3)],
+                            machine.width)
+        self.assertIsNone(got)
+
+    def test_scheduler_repair_flag_off_by_default(self):
+        """По умолчанию планировщик ничего не чинит — ответ модели как есть."""
+        dag, machine, good = _fixture()
+        bad = "\n".join(
+            f"{i}: такт={good.placements[i].cycle} канал=0" for i in range(len(dag)))
+        res = LearnedScheduler(backend=ScriptedBackend(bad)).schedule(dag, machine)
+        self.assertEqual(res.search_stats["repaired"], 0)
+
+    def test_scheduler_repair_flag_on_fixes_and_reports(self):
+        dag, machine, good = _fixture()
+        bad = "\n".join(
+            f"{i}: такт={good.placements[i].cycle} канал=0" for i in range(len(dag)))
+        res = LearnedScheduler(backend=ScriptedBackend(bad),
+                               repair=True).schedule(dag, machine)
+        self.assertTrue(res.search_stats["valid"])
+        self.assertTrue(res.search_stats["repaired"])
+        self.assertTrue(any("ПОЧИНЕНО" in n for n in res.notes))
+        # Такты модели сохранены — makespan тот же, что она задумала.
+        self.assertEqual(res.schedule.makespan, good.makespan)
 
 if __name__ == "__main__":
     unittest.main()

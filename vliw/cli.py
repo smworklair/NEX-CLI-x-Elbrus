@@ -781,6 +781,10 @@ def cmd_learned(session: Session, arg: str) -> None:
     toks = arg.split()
     want_raw = "--raw" in toks
     want_status = "--status" in toks
+    # Починка каналов включена по умолчанию: модель ошибается почти
+    # исключительно в канале, а такты ставит верно. --pure выключает и
+    # показывает сырой ответ модели как есть.
+    want_repair = "--pure" not in toks
     n_bench = 0
     for i, t in enumerate(toks):
         if t == "--bench":
@@ -826,7 +830,9 @@ def cmd_learned(session: Session, arg: str) -> None:
             sys.stdout.flush()
 
         try:
-            res = _bench.run_bench(data, n_bench, _LS(adapter=adapter), machine, _tick)
+            res = _bench.run_bench(data, n_bench,
+                                   _LS(adapter=adapter, repair=want_repair),
+                                   machine, _tick)
         except (RuntimeError, OSError, ImportError) as e:
             print(paint("error", f"замер прерван: {e}"))
             return False
@@ -842,7 +848,7 @@ def cmd_learned(session: Session, arg: str) -> None:
                     "первый запуск долгий (веса грузятся с диска)"))
     sys.stdout.flush()
 
-    sch = LearnedScheduler(adapter=adapter)
+    sch = LearnedScheduler(adapter=adapter, repair=want_repair)
     try:
         res = sch.schedule(dag, machine)
     except (RuntimeError, OSError, ImportError) as e:
@@ -904,7 +910,7 @@ COMMANDS = [
     {"name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
     {"name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
     {"name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
-    {"name": "learned", "arg": "[адаптер] [--raw] [--bench N]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
+    {"name": "learned", "arg": "[--bench N] [--pure] [--raw]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
     {"name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
     {"name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
     {"name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},

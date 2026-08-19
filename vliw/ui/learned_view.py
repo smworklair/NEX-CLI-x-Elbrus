@@ -36,12 +36,24 @@ def render_result(res, dag, oracle_res=None, baseline_res=None) -> list[str]:
     valid = st.get("valid", False)
     out: list[str] = []
 
-    out.append("  " + (paint("success", "РАСПИСАНИЕ ЗАКОННО") if valid
-                       else paint("error", "РАСПИСАНИЕ НЕЗАКОННО")))
+    repaired = st.get("repaired", 0)
+    if valid and repaired:
+        # Подписываем честно: это уже не чистый ответ модели, а гибрид.
+        out.append("  " + paint("success", "РАСПИСАНИЕ ЗАКОННО")
+                   + Style.dim("  (модель + починка каналов)"))
+    elif valid:
+        out.append("  " + paint("success", "РАСПИСАНИЕ ЗАКОННО")
+                   + Style.dim("  (чистый ответ модели)"))
+    else:
+        out.append("  " + paint("error", "РАСПИСАНИЕ НЕЗАКОННО"))
     out.append("")
     for n in res.notes:
-        out.append("  " + (Style.dim(n) if not n.startswith(("НЕ ", "РАСПИСАНИЕ"))
-                           else paint("warning", n)))
+        if n.startswith(("НЕ ", "РАСПИСАНИЕ")):
+            out.append("  " + paint("warning", n))
+        elif n.startswith("ПОЧИНЕНО"):
+            out.append("  " + paint("lab", n))
+        else:
+            out.append("  " + Style.dim(n))
 
     if valid and oracle_res is not None:
         out.append("")
@@ -66,7 +78,8 @@ def render_result(res, dag, oracle_res=None, baseline_res=None) -> list[str]:
             out.append("  " + Style.dim(f"до оптимума {gap} т."))
 
     out.append("")
-    out.append("  " + Style.dim("сырой ответ модели: /learned --raw"))
+    out.append("  " + Style.dim("сырой ответ модели: /learned --raw"
+                                "   ·   без починки: /learned --pure"))
     return out
 
 

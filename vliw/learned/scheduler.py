@@ -49,12 +49,19 @@ class LearnedScheduler:
 
     def __init__(self, adapter=None, backend=None,
                  max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
-                 device: str | None = None):
-        """`backend` можно передать готовым — это точка подмены для тестов."""
+                 device: str | None = None, repair: bool = False):
+        """`backend` можно передать готовым — это точка подмены для тестов.
+
+        `repair=True` включает починку каналов (см. repair.py): такты модели
+        остаются как есть, незаконный канал переназначается на законный.
+        Результат тогда — ГИБРИД, и он подписан как гибрид, а не как чистый
+        ответ модели.
+        """
         self._adapter = adapter
         self._backend = backend
         self._device = device
         self.max_new_tokens = max_new_tokens
+        self.repair = repair
 
     # --- ленивая загрузка --------------------------------------------------
 
@@ -99,7 +106,24 @@ class LearnedScheduler:
             sched.place(i, cycle, channel)
 
         missing = sorted(set(range(len(dag))) - set(keep))
-        errs = sched.validate()
+        raw_errs = sched.validate()
+
+        # Починка каналов. Только при полном ответе: если модель что-то не
+        # разместила, чинить нечего — дыру в расписании каналом не закрыть.
+        report = None
+        errs = raw_errs
+        if self.repair and not missing:
+            from .repair import repair as _repair
+
+            fixed, report = _repair(sched, model)
+            fixed_errs = fixed.validate()
+            # Берём починенное, только если стало не хуже. Строгая проверка, а
+            # не вера в свой же алгоритм: расписание после починки обязано
+            # пройти тот же validate(), что и любое другое.
+            if len(fixed_errs) <= len(raw_errs):
+                sched, errs = fixed, fixed_errs
+            else:
+                report = None
 
         notes = [
             f"модель: {getattr(self.backend(), 'name', '?')}"
@@ -113,6 +137,14 @@ class LearnedScheduler:
                 "Префикс при этом может быть законным — см. docs/EOS_INCIDENT.md.")
         if missing:
             notes.append(f"НЕ РАЗМЕЩЕНЫ инструкции: {missing}")
+        if report is not None and report.touched:
+            notes.append(
+                f"ПОЧИНЕНО КАНАЛОВ: {report.touched} "
+                f"(такты модели не тронуты, makespan её же)")
+            for i, was, now in report.moved[:6]:
+                notes.append(f"  {dag[i].op} #{i}: канал {was} -> {now}")
+            if len(report.moved) > 6:
+                notes.append(f"  … ещё {len(report.moved) - 6}")
         if errs:
             notes.append(f"РАСПИСАНИЕ НЕЗАКОННО, нарушений {len(errs)}:")
             notes.extend("  " + e for e in errs[:8])
@@ -133,5 +165,8 @@ class LearnedScheduler:
                 "missing": missing,
                 "errors": errs,
                 "valid": not errs and not missing,
+                "repaired": report.touched if report is not None else 0,
+                "repair_moves": report.moved if report is not None else [],
+                "errors_before_repair": raw_errs,
             },
         )

@@ -6,7 +6,23 @@
 модель (`vliw.learned`) без правок в отрисовке и CLI.
 """
 
-from .api import Candidate, DecisionStep, Scheduler, SchedulingResult
+from .api import (
+    Candidate,
+    DecisionStep,
+    Done,
+    Failed,
+    Note,
+    Placed,
+    Progress,
+    Repaired,
+    Scheduler,
+    SchedulerEvent,
+    SchedulingResult,
+    Started,
+    Step,
+    Token,
+    stream,
+)
 from .baseline import GreedyListScheduler, list_schedule
 from .dag import (
     DAG,
@@ -48,6 +64,17 @@ __all__ = [
     "DecisionStep",
     "Scheduler",
     "SchedulingResult",
+    "SchedulerEvent",
+    "stream",
+    "Started",
+    "Note",
+    "Token",
+    "Step",
+    "Placed",
+    "Repaired",
+    "Progress",
+    "Done",
+    "Failed",
     "GreedyListScheduler",
     "list_schedule",
     "OracleScheduler",

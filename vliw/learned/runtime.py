@@ -156,10 +156,22 @@ def status(name: str | None = None) -> tuple[bool, list[str]]:
         if best is not None:
             ok, problems = llama_cpp_ready(best)
             if ok:
-                lines.append(f"llama.cpp: готов  (адаптер {best.name})")
                 b = find_gguf_base()
-                lines.append(f"  база {b.name}, {b.stat().st_size / 1e9:.1f} ГБ, 4 бита")
-                lines.append("  это основной путь: 4 бита против 6.2 ГБ у transformers")
+                srv_ok, _ = llama_server_ready(best)
+                if srv_ok:
+                    lines.append(f"llama-server: готов  (адаптер {best.name})")
+                    lines.append(f"  база {b.name}, "
+                                 f"{b.stat().st_size / 1e9:.1f} ГБ, 4 бита")
+                    lines.append(f"  веса грузятся один раз за сессию, "
+                                 f"{default_threads()} потоков")
+                    lines.append("  замерено: 12 с на граф против 32 с у "
+                                 "процесса на команду")
+                else:
+                    lines.append(f"llama.cpp: готов  (адаптер {best.name})")
+                    lines.append(f"  база {b.name}, "
+                                 f"{b.stat().st_size / 1e9:.1f} ГБ, 4 бита")
+                    lines.append("  процесс на каждую команду: веса читаются "
+                                 "заново, около 32 с на граф")
                 return True, lines
             lines.append("llama.cpp: не готов")
             for pr in problems:
@@ -348,13 +360,28 @@ class TransformersBackend(Backend):
 
 def make_backend(adapter: Adapter, device: str | None = None,
                  dtype: str = "auto", prefer: str = "auto") -> Backend:
-    """Бэкенд для запуска. По умолчанию — llama.cpp, если он готов.
+    """Бэкенд для запуска. По умолчанию — постоянный llama-server.
 
-    Порядок не случайный: llama.cpp держит базу в 4 битах (2.1 ГБ против
-    6.2 ГБ у transformers в bfloat16) и на CPU считает быстрее. transformers
-    остаётся как эталонный путь — им гонялись замеры на Kaggle, и на машине
-    с GPU он предпочтительнее.
+    Порядок не случайный.
+
+    1. `llama-server` — тот же llama.cpp, но процесс живёт между командами:
+       веса читаются один раз за сессию. Замерено на `slotclash`/`lora-eos`:
+       14 с против 32 с, первый токен 0.11 с против ~20 с. Ответ совпадает
+       до строки — это те же веса и `temperature=0`.
+    2. `llama-completion` — процесс на каждый запрос. Остаётся запасным: он
+       не требует сокета и проверен дольше.
+    3. `transformers` — эталонный путь, им гонялись замеры на Kaggle, и на
+       машине с GPU он предпочтительнее. База в bfloat16 занимает 6.2 ГБ
+       против 2.1 ГБ у 4-битного GGUF, поэтому на CPU он последний.
     """
+    if prefer in ("auto", "llama-server"):
+        ok, problems = llama_server_ready(adapter)
+        if ok:
+            return LlamaServerBackend(adapter)
+        if prefer == "llama-server":
+            raise RuntimeError("путь llama-server не готов:\n  "
+                               + "\n  ".join(problems))
+
     if prefer in ("auto", "llama.cpp"):
         ok, problems = llama_cpp_ready(adapter)
         if ok:
@@ -409,7 +436,7 @@ class LlamaCppBackend(Backend):
 
     def __init__(self, adapter: Adapter, threads: int = 0):
         self.adapter = adapter
-        self.threads = threads or (os.cpu_count() or 4)
+        self.threads = threads or default_threads()
         self.binary = find_llama_binary()
         self.base_gguf = find_gguf_base()
         self.lora_gguf = gguf_adapter_for(adapter)
@@ -465,14 +492,7 @@ class LlamaCppBackend(Backend):
         if self.lora_gguf is not None:
             cmd += ["--lora", str(self.lora_gguf)]
 
-        env = dict(os.environ)
-        # libgomp лежит внутри torch — своей в системе может не быть, а ставить
-        # её через apt нельзя без root. Берём оттуда, раз уж torch установлен.
-        libs = [str(self.binary.parent)]
-        torch_lib = _torch_lib_dir()
-        if torch_lib:
-            libs.append(str(torch_lib))
-        env["LD_LIBRARY_PATH"] = ":".join(libs + [env.get("LD_LIBRARY_PATH", "")])
+        env = _llama_env(self.binary)
 
         # Popen, а не subprocess.run: run() отдаёт вывод только целиком и в
         # конце, а генерация идёт ~30 секунд. Читаем посимвольно и отдаём
@@ -531,6 +551,114 @@ class LlamaCppBackend(Backend):
             yield out
 
 
+_SERVER = None
+"""Один сервер на процесс инструмента. См. `vliw/learned/server.py`."""
+
+def default_threads() -> int:
+    """Сколько потоков давать llama.cpp. Половина логических ядер.
+
+    Не `os.cpu_count()`, хотя раньше было именно так. Замерено на этой машине
+    (12 логических ядер, `slotclash`, `lora-eos`, тёплый кэш промпта):
+
+        -t  4     14.2 с
+        -t  6     12.5 с
+        -t  8     12.8 с
+        -t 12     20.0 с      ← столько брал прежний код
+
+    Все логические ядра — худший вариант из проверенных, и с заметным
+    отрывом: гипертрединг не даёт вторых АЛУ, а потоки начинают драться за
+    кэш и память. Половина логических ядер попадает примерно в число
+    физических, и это же значение остаётся разумным на машине без
+    гипертрединга. Предел в 8 — чтобы на 32-ядерном сервере не заводить
+    шестнадцать потоков под задачу, которая от них уже не ускоряется.
+    """
+    return max(2, min(8, (os.cpu_count() or 4) // 2))
+
+
+SERVER_MAX_TOKENS = 768
+"""Под какой длиной ответа рассчитан контекст сервера.
+
+Своя константа, а не импорт `LearnedScheduler.DEFAULT_MAX_NEW_TOKENS`:
+`scheduler` уже импортирует `runtime`, и обратный импорт замкнул бы круг.
+Значение одно и то же и по одной причине — самый длинный эталон в данных
+(граф на 24 инструкции) укладывается примерно в 400 токенов, здесь запас.
+"""
+
+
+class LlamaServerBackend(Backend):
+    """Постоянный llama-server: веса живут между командами.
+
+    Отличий от `LlamaCppBackend` два, и оба на стороне процесса, а не модели:
+    веса читаются один раз за сессию, а смена адаптера — HTTP-запрос вместо
+    перезапуска. Ответ тот же самый: та же сборка llama.cpp, те же веса,
+    `temperature=0`. Проверено на `slotclash`/`lora-eos` — совпадение до
+    строки, при 14 с против 32 с.
+    """
+
+    name = "llama-server"
+    slow_start = True
+
+    def __init__(self, adapter: Adapter, threads: int = 0):
+        self.adapter = adapter
+        self.threads = threads or default_threads()
+        self.binary = find_llama_server()
+        self.base_gguf = find_gguf_base()
+
+    def _server(self):
+        global _SERVER
+
+        from . import server as _srv
+
+        if _SERVER is None:
+            adapters = [(a.name, gguf_adapter_for(a)) for a in find_adapters()]
+            adapters = [(n, p) for n, p in adapters if p is not None]
+            if not adapters:
+                raise _srv.ServerError("ни один адаптер не сконвертирован в GGUF")
+            # Контекст фиксируется при старте, поэтому берём с запасом под
+            # самый длинный ожидаемый ответ. Без ограничения llama.cpp
+            # зарезервировал бы заявленные моделью 32768 и съел лишний
+            # гигабайт — см. комментарий в LlamaCppBackend.
+            ctx = max(2048, (SERVER_MAX_TOKENS + 400) * 2)
+            _SERVER = _srv.LlamaServer(
+                binary=self.binary, base_gguf=self.base_gguf,
+                adapters=adapters, threads=self.threads, ctx=ctx,
+                env=_llama_env(self.binary))
+        _SERVER.ensure()
+        return _SERVER
+
+    def generate_events(self, prompt: str, max_new_tokens: int):
+        srv = self._server()
+        srv.select(self.adapter.name)
+        yield from srv.complete(prompt, max_new_tokens)
+
+
+def llama_server_ready(adapter: Adapter) -> tuple[bool, list[str]]:
+    """Готов ли путь llama-server: бинарник, база, сконвертированный адаптер."""
+    problems = []
+    if find_llama_server() is None:
+        problems.append("нет бинарника llama-server в vendor/")
+    if find_gguf_base() is None:
+        problems.append("нет квантованной базы (*.gguf) в vendor/models/")
+    if gguf_adapter_for(adapter) is None:
+        problems.append(f"адаптер {adapter.name} не сконвертирован в GGUF")
+    return not problems, problems
+
+
+def _llama_env(binary: Path) -> dict[str, str]:
+    """Окружение для запуска llama.cpp.
+
+    libgomp лежит внутри torch — своей в системе может не быть, а ставить её
+    через apt нельзя без root. Берём оттуда, раз уж torch установлен.
+    """
+    env = dict(os.environ)
+    libs = [str(binary.parent)]
+    torch_lib = _torch_lib_dir()
+    if torch_lib:
+        libs.append(str(torch_lib))
+    env["LD_LIBRARY_PATH"] = ":".join(libs + [env.get("LD_LIBRARY_PATH", "")])
+    return env
+
+
 def _torch_lib_dir():
     """Папка с библиотеками torch — там же лежит libgomp.so.1."""
     try:
@@ -543,6 +671,14 @@ def _torch_lib_dir():
                 return d
     except Exception:
         pass
+    return None
+
+
+def find_llama_server() -> Path | None:
+    """Бинарник llama-server в vendor/. Постоянный процесс, см. server.py."""
+    for p in sorted(VENDOR.glob("llama-*/llama-server")):
+        if os.access(p, os.X_OK):
+            return p
     return None
 
 

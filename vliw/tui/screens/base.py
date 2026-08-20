@@ -200,8 +200,34 @@ class ModeScreen(Screen):
 
         con = self.console
         width = con.size.width - 2 if con is not None and con.size.width else 96
-        out, err = bridge.run_command(self.app.execute, line, width)
+
+        # Пока команда идёт, ядро отдаёт события планировщика сюда, а не
+        # печатает их в перехваченный stdout. Разница принципиальная: stdout
+        # моста копится и показывается ЦЕЛИКОМ В КОНЦЕ, поэтому обученная
+        # модель раньше выглядела как замерший на полминуты экран. События
+        # приходят по ходу — видно, как модель пишет и как заполняется
+        # решётка.
+        session = self.app.session
+        session.event_sink = bridge.EventPump(
+            self.app, self.on_scheduler_text, self.on_scheduler_event)
+        try:
+            out, err = bridge.run_command(self.app.execute, line, width)
+        finally:
+            session.event_sink = None
         self.app.call_from_thread(self._core_done, out, err)
+
+    # --- события планировщика ---------------------------------------------
+    #
+    # Приходят уже в главном потоке. По умолчанию экран показывает поток
+    # текстом; экран, у которого есть решётка, переопределяет и заливает её.
+
+    def on_scheduler_text(self, text: str) -> None:
+        con = self.console
+        if con is not None:
+            con.note("  " + text.replace("[end of text]", "").rstrip(), "dim")
+
+    def on_scheduler_event(self, ev) -> None:
+        """Не-текстовое событие: размещение, починка, вердикт, отказ."""
 
     def _core_done(self, out: str, err: str) -> None:
         con = self.console

@@ -60,3 +60,42 @@ def run_command(execute, line: str, width: int) -> tuple[str, str]:
     finally:
         render.W = old_w
     return cap.value, err
+
+
+class EventPump:
+    """Сток событий планировщика: из рабочего потока — в главный.
+
+    Зачем отдельная штука, а не просто `call_from_thread` на каждое событие.
+    llama.cpp отдаёт вывод ПОСИМВОЛЬНО (`proc.stdout.read(1)`), то есть на
+    один прогон приходится несколько тысяч событий `Token`. Переход между
+    потоками на каждый символ интерфейс не переживёт — он захлебнётся
+    раньше, чем модель допишет расписание.
+
+    Поэтому текст копится до перевода строки и уезжает в интерфейс целыми
+    строками, а всё остальное (размещения, починка, вердикт) идёт сразу:
+    таких событий единицы, и каждое из них меняет картинку.
+    """
+
+    def __init__(self, app, on_text, on_event) -> None:
+        self._app = app
+        self._on_text = on_text
+        self._on_event = on_event
+        self._buf: list[str] = []
+
+    def __call__(self, ev) -> None:
+        from ..core import Done, Failed, Token
+
+        if isinstance(ev, Token):
+            self._buf.append(ev.text)
+            if "\n" in ev.text:
+                self._flush()
+            return
+        if isinstance(ev, (Done, Failed)):
+            self._flush()            # хвост без перевода строки тоже показать
+        self._app.call_from_thread(self._on_event, ev)
+
+    def _flush(self) -> None:
+        text = "".join(self._buf).strip("\n")
+        self._buf.clear()
+        if text:
+            self._app.call_from_thread(self._on_text, text)

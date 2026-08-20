@@ -221,3 +221,98 @@ class TestPanelMaximize(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestModelViewIsLive(unittest.TestCase):
+    """Живой прогон модели в решётке РАЗБОРА.
+
+    Проверяется то, чего построчный режим показать не может: решётка
+    заполняется ПО ХОДУ генерации, незаконная клетка находится сама, а
+    починка остаётся отдельным действием. Модель здесь не запускается —
+    события подаются напрямую, поэтому тест идёт за миллисекунды и не
+    требует ни весов, ни llama.cpp.
+
+    Ответ взят с настоящего прогона `slotclash` (адаптер lora-eos): двенадцать
+    законных размещений и STORE #12 на канал `,0`, который его не исполняет.
+    """
+
+    ANSWER = [(0, 0, 1), (1, 0, 5), (2, 2, 5), (3, 13, 1), (4, 17, 1),
+              (5, 18, 1), (6, 19, 1), (7, 11, 1), (8, 0, 4), (9, 1, 1),
+              (10, 20, 1), (11, 21, 1), (12, 22, 0)]
+
+    def _run(self, repair: bool = False) -> dict:
+        """Прогнать ответ модели событиями и снять показания.
+
+        Всё — внутри `run_test()`: снаружи виджеты уже отвязаны от приложения,
+        и обращение к ним падает с `NoActiveAppError`. Поэтому наружу уходят
+        только числа и строки, а не сами виджеты.
+        """
+        from vliw.core import Placed, Repaired, Started
+        from vliw.core.schedule import Placement
+
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.on_scheduler_event(Started("learned", "модель"))
+                    for i, cycle, ch in self.ANSWER:
+                        sc.on_scheduler_event(
+                            Placed(Placement(i, cycle, ch), live=True))
+                    placed_live = len(sc.model_sched.placements)
+                    sc.on_scheduler_event(Repaired(12, 0, 2))
+                    sc._model_done(None)
+                    await pilot.pause()
+                    cur = sc.query_one("#grid").cursor_coordinate
+                    out = {
+                        "view": sc.view,
+                        "placed_live": placed_live,
+                        "illegal": sorted(sc._model_illegal()),
+                        "cell": sc._first_illegal_cell(),
+                        "cursor": (cur.row, cur.column),
+                        "repairs": list(sc.model_repairs),
+                        "before": sc.model_sched.placements[12],
+                    }
+                    if repair:
+                        sc._repair_model()
+                        out["after"] = sc.model_sched.placements[12]
+                        out["illegal_after"] = sorted(sc._model_illegal())
+                    return out
+
+        return asyncio.run(go())
+
+    def test_view_switches_to_model_and_grid_fills(self) -> None:
+        got = self._run()
+        self.assertEqual(got["view"], "model")
+        self.assertEqual(got["placed_live"], len(self.ANSWER))
+
+    def test_illegal_channel_is_found(self) -> None:
+        """STORE на `,0` — незаконно, и это видно решётке, а не только отчёту."""
+        got = self._run()
+        self.assertEqual(got["illegal"], [12])
+        self.assertEqual(got["cell"], (22, 0))
+
+    def test_cursor_lands_on_the_illegal_cell(self) -> None:
+        """Курсор сам встаёт на ошибку — иначе она за краем экрана.
+
+        На `slotclash` ошибка модели в такте 22 из 23: без этого шага
+        заголовок пишет «незаконных 1», а увидеть её можно, только
+        пролистав двадцать два такта вниз.
+        """
+        got = self._run()
+        self.assertEqual(got["cursor"], (22, 0))
+
+    def test_repair_is_a_separate_action(self) -> None:
+        """Само по себе ничего не чинится: сырой ответ остаётся сырым."""
+        got = self._run()
+        self.assertEqual(got["illegal"], [12])
+        self.assertEqual(got["repairs"], [(12, 0, 2)])
+
+    def test_repair_command_fixes_channel_and_keeps_cycle(self) -> None:
+        """`/repair` меняет канал и НЕ трогает такт — makespan остаётся её же."""
+        got = self._run(repair=True)
+        self.assertEqual(got["illegal_after"], [])
+        self.assertEqual(got["after"].cycle, got["before"].cycle)
+        self.assertEqual(got["after"].channel, 2)

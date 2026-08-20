@@ -28,7 +28,7 @@ from .base import ModeScreen
 
 CONT = "│"
 EMPTY = "·"
-VIEWS = {"baseline": "baseline", "oracle": "оракул"}
+VIEWS = {"baseline": "baseline", "oracle": "оракул", "model": "модель"}
 
 
 def _wrapped(text: str, width: int, indent: int) -> str:
@@ -73,6 +73,18 @@ class LabScreen(ModeScreen):
         self.met = None
         self.diverged: set[int] = set()
         self._cells: dict[tuple[int, int], int] = {}
+        # Живой прогон обученной модели. Решётка заполняется по событиям, по
+        # ходу генерации, и держит СЫРОЙ ответ модели — с незаконными
+        # клетками. Починка отдельным действием (`/repair`): иначе ошибка
+        # модели молча превращается в её же заслугу.
+        self.model_sched = None
+        self.model_note = ""
+        self.model_repairs: list[tuple[int, int, int]] = []
+        # Куда поставить курсор при следующей отрисовке решётки. Нужно
+        # потому, что после команды экран перерисовывается ЕЩЁ РАЗ
+        # (`after_command` → `recompute` → `_compute_done`), и без этого
+        # найденная незаконная клетка теряется: прокрутка уезжает наверх.
+        self._want_cell: tuple[int, int] | None = None
 
     # --- раскладка --------------------------------------------------------
 
@@ -159,8 +171,13 @@ class LabScreen(ModeScreen):
     # --- ввод -------------------------------------------------------------
 
     def extra_commands(self) -> list[dict]:
-        return [{"name": "view", "arg": "[baseline|oracle]",
-                 "help": "какое расписание в решётке", "local": True}]
+        return [
+            {"name": "view", "arg": "[baseline|oracle|model]",
+             "help": "какое расписание в решётке", "local": True},
+            {"name": "repair", "arg": "",
+             "help": "переназначить незаконные каналы в ответе модели",
+             "local": True},
+        ]
 
     def handle_line(self, line: str) -> None:
         head, _, arg = line.lstrip("/").partition(" ")
@@ -168,19 +185,151 @@ class LabScreen(ModeScreen):
             self._set_view(arg.strip().lower() or
                            ("oracle" if self.view == "baseline" else "baseline"))
             return
+        if head.lower() == "repair":
+            self._repair_model()
+            return
         self.run_core(line)
 
+    def _repair_model(self) -> None:
+        """Переназначить незаконные каналы. Такты модели не трогаются.
+
+        Отдельным действием, а не автоматически: сырой ответ модели и
+        починенный гибрид — разные вещи, и подменять первое вторым молча
+        значит записывать на счёт модели чужую работу.
+        """
+        con = self.console
+        if self.model_sched is None or not self.model_sched.placements:
+            if con is not None:
+                con.note("  чинить нечего: модель ещё не запускалась", "warning")
+            return
+        if not self.model_repairs:
+            if con is not None:
+                con.note("  чинить нечего: незаконных каналов нет", "dim")
+            return
+        was = len(self._model_illegal())
+        for i, _frm, to in self.model_repairs:
+            p = self.model_sched.placements.get(i)
+            if p is not None:
+                self.model_sched.place(i, p.cycle, to)
+        self.model_note = f"гибрид: починено каналов {len(self.model_repairs)}"
+        self.model_repairs = []
+        if con is not None:
+            con.note(f"  починено каналов: {was}  ·  такты модели не тронуты, "
+                     f"makespan её же", "success")
+        self.view = "model"
+        self._mark_view()
+        self._draw_model_grid()
+        self._draw_detail()
+
     def _set_view(self, view: str) -> None:
-        view = {"base": "baseline", "оракул": "oracle", "orc": "oracle"}.get(
-            view, view)
+        view = {"base": "baseline", "оракул": "oracle", "orc": "oracle",
+                "модель": "model", "learned": "model"}.get(view, view)
         if view not in VIEWS:
             if self.console is not None:
-                self.console.note("  вид бывает baseline или oracle", "warning")
+                self.console.note("  вид бывает baseline, oracle или model",
+                                  "warning")
             return
         self.view = view
+        self._want_cell = None
         self._mark_view()
         self._draw_grid()
         self._draw_detail()
+
+    # --- живой прогон модели ----------------------------------------------
+
+    def on_scheduler_text(self, text: str) -> None:
+        """Строка ответа модели — в вывод команд, по мере генерации."""
+        con = self.console
+        if con is not None:
+            con.note("  " + text.replace("[end of text]", "").rstrip(), "dim")
+
+    def on_scheduler_event(self, ev) -> None:
+        from ...core import Done, Failed, Note, Placed, Repaired, Started
+        from ...core.schedule import Schedule
+
+        con = self.console
+        if isinstance(ev, Started):
+            if ev.who != "learned":
+                return          # baseline и оракул решётку не перехватывают
+            self._want_cell = None
+            self.model_sched = Schedule(self.app.session.dag_obj,
+                                        self.app.session.model())
+            self.model_note = "пишет…"
+            self.model_repairs = []
+            self.view = "model"
+            self._mark_view()
+            self._draw_model_grid()
+            return
+        if isinstance(ev, Note):
+            if con is not None:
+                con.note("  " + ev.text, ev.level)
+            return
+        if self.model_sched is None:
+            return
+        if isinstance(ev, Placed):
+            # Ставим ровно то, что написала модель, включая незаконное: это
+            # её ответ, и прятать его до вердикта значит прятать главное.
+            p = ev.placement
+            self.model_sched.place(p.instr, p.cycle, p.channel)
+            # Курсор идёт за моделью: панель «почему здесь» разбирает ровно
+            # ту операцию, которую модель только что поставила. Иначе на
+            # экране заполняется решётка, а разбор молчит про пустую клетку,
+            # на которой курсор стоял с самого начала.
+            self._want_cell = (p.cycle, p.channel)
+            self._draw_model_grid()
+            self._draw_detail()
+            self._draw_numbers()
+            return
+        if isinstance(ev, Repaired):
+            # Копим, но НЕ применяем: решение показывать сырое — осознанное.
+            self.model_repairs.append((ev.instr, ev.frm, ev.to))
+            return
+        if isinstance(ev, Failed):
+            self.model_note = "не запустилась"
+            self._draw_model_grid()
+            return
+        if isinstance(ev, Done):
+            self._model_done(ev.result)
+
+    def _first_illegal_cell(self) -> tuple[int, int] | None:
+        """Самая ранняя незаконная клетка — (такт, порт)."""
+        illegal = self._model_illegal()
+        if not illegal or self.model_sched is None:
+            return None
+        p = min((self.model_sched.placements[i] for i in illegal),
+                key=lambda pl: (pl.cycle, pl.channel))
+        return p.cycle, p.channel
+
+    def _model_done(self, res) -> None:
+        illegal = self._model_illegal()
+        placed = len(self.model_sched.placements) if self.model_sched else 0
+        total = len(self.app.session.dag_obj)
+        if placed < total:
+            self.model_note = f"не разместила {total - placed}"
+        elif illegal:
+            self.model_note = ""      # счётчик незаконных уже в заголовке
+        else:
+            self.model_note = f"законно, {self.model_sched.makespan} т."
+        self._draw_model_grid()
+
+        # Курсор сам встаёт на первую незаконную клетку — иначе главное
+        # оказывается ниже видимой области. Найдено по факту: на slotclash
+        # модель ошибается со STORE в такте 22 из 23, то есть в самой
+        # последней строке решётки. Заголовок честно писал «незаконных 1», а
+        # чтобы это увидеть, надо было пролистать двадцать два такта.
+        cell = self._first_illegal_cell()
+        con = self.console
+        if cell is not None:
+            self._want_cell = cell
+            self._draw_model_grid()          # перерисовать уже с курсором
+            if con is not None:
+                machine = self.app.session.model()
+                con.note(f"  незаконных каналов: {len(illegal)}  ·  первый: "
+                         f"такт {cell[0]}, порт {machine.port_label(cell[1])}"
+                         f"  —  курсор уже там", "warning")
+        self._draw_detail()
+        if con is not None and self.model_repairs:
+            con.note("  починить каналы, не трогая такты:  /repair", "warning")
 
     def after_command(self) -> None:
         self.recompute()
@@ -250,6 +399,8 @@ class LabScreen(ModeScreen):
 
     @property
     def _result(self):
+        if self.view == "model":
+            return None          # у живого прогона модели нет SchedulingResult
         return self.orc if self.view == "oracle" else self.base
 
     def _blank_grid(self, note: str) -> None:
@@ -259,12 +410,65 @@ class LabScreen(ModeScreen):
         self.query_one("#p-grid", Panel).set_title("РАСПИСАНИЕ")
 
     def _draw_grid(self) -> None:
+        if self.view == "model":
+            self._draw_model_grid()
+            return
         res = self._result
         if res is None:
             return
+        sched = res.schedule
+        span = max(sched.span_cycles, 1)
+        # Выдача и готовность — разные числа: последнее деление считается ещё
+        # долго после того, как его выдали. В решётке видна выдача, поэтому
+        # обе величины стоят в заголовке рядом, чтобы их не путать.
+        if span == sched.makespan:
+            title = f"РАСПИСАНИЕ   {VIEWS[self.view]}   {sched.makespan} тактов"
+        else:
+            title = (f"РАСПИСАНИЕ   {VIEWS[self.view]}   выдача {span} т."
+                     f"   ·   всё готово к т.{sched.makespan}")
+        if self.view == "oracle" and res.optimal:
+            title += "   ·   оптимум доказан"
+        self._render_grid(sched, title)
+
+    def _model_illegal(self) -> frozenset[int]:
+        """Клетки, где канал не исполняет свою операцию.
+
+        Это НЕ придирка к оформлению: 85% ошибок «ресурс» у прогона 1 —
+        STORE, поставленный на канал `,0`, который его не исполняет
+        (см. docs/ROADMAP.md). Красные клетки показывают это глазами, вместо
+        строчки «нарушений 3» в конце отчёта.
+        """
+        sched = self.model_sched
+        if sched is None:
+            return frozenset()
+        dag = self.app.session.dag_obj
+        machine = self.app.session.model()
+        return frozenset(
+            i for i, p in sched.placements.items()
+            if p.channel not in machine.channels_for(dag[i].op))
+
+    def _draw_model_grid(self) -> None:
+        sched = self.model_sched
+        if sched is None or not sched.placements:
+            self._blank_grid(self.model_note
+                             or "модель ещё не запускалась  —  /learned")
+            return
+        dag = self.app.session.dag_obj
+        illegal = self._model_illegal()
+        title = (f"РАСПИСАНИЕ   модель   "
+                 f"размещено {len(sched.placements)}/{len(dag)}")
+        if illegal:
+            title += f"   ·   незаконных {len(illegal)}"
+        if self.model_note:
+            title += f"   ·   {self.model_note}"
+        if len(sched.placements) == len(dag) and not illegal and not self.model_note:
+            title += f"   ·   {sched.makespan} тактов"
+        self._render_grid(sched, title, illegal)
+
+    def _render_grid(self, sched, title: str,
+                     illegal: frozenset[int] = frozenset()) -> None:
         model = self.app.session.model()
         dag = self.app.session.dag_obj
-        sched = res.schedule
         grid = self.query_one("#grid", ScheduleGrid)
         grid.clear(columns=True)
         for p in range(model.width):
@@ -289,32 +493,35 @@ class LabScreen(ModeScreen):
                     cells.append(Text(f" {CONT}", style=palette.op_style(dag[instr].op)))
                     continue
                 issued += 1
-                cells.append(self._cell_text(dag, instr, crit))
+                cells.append(self._cell_text(dag, instr, crit, instr in illegal))
             grid.add_row(*cells, label=self._row_label(cycle, issued, model.width),
                          key=str(cycle))
-        # Выдача и готовность — разные числа: последнее деление считается ещё
-        # долго после того, как его выдали. В решётке видна выдача, поэтому
-        # обе величины стоят в заголовке рядом, чтобы их не путать.
-        if span == sched.makespan:
-            title = f"РАСПИСАНИЕ   {VIEWS[self.view]}   {sched.makespan} тактов"
-        else:
-            title = (f"РАСПИСАНИЕ   {VIEWS[self.view]}   выдача {span} т."
-                     f"   ·   всё готово к т.{sched.makespan}")
-        if self.view == "oracle" and res.optimal:
-            title += "   ·   оптимум доказан"
         self.query_one("#p-grid", Panel).set_title(title)
         if span:
-            grid.move_cursor(row=0, column=0)
+            row, col = self._want_cell or (0, 0)
+            grid.move_cursor(row=min(row, span - 1),
+                             column=min(col, model.width - 1))
 
-    def _cell_text(self, dag, instr: int, crit: set[int]) -> Text:
+    def _cell_text(self, dag, instr: int, crit: set[int],
+                   illegal: bool = False) -> Text:
         ins = dag[instr]
         t = Text()
-        moved = instr in self.diverged
-        t.append("▸" if moved else " ",
-                 style=palette.role_hex("diverge") if moved else "")
+        if illegal:
+            # Значком, а не только цветом: цвет теряется на 256-цветном
+            # терминале и у людей с нарушением цветовосприятия, а именно эти
+            # клетки — главное, что показывает прогон модели.
+            t.append("✗", style=palette.role_hex("error") + " bold")
+        else:
+            moved = instr in self.diverged
+            t.append("▸" if moved else " ",
+                     style=palette.role_hex("diverge") if moved else "")
         t.append(ins.op.lower()[:3].ljust(4), style=palette.op_style(ins.op))
-        style = palette.role_hex("crit") + " bold" if instr in crit \
-            else palette.role_hex("text")
+        if illegal:
+            style = palette.role_hex("error") + " bold"
+        elif instr in crit:
+            style = palette.role_hex("crit") + " bold"
+        else:
+            style = palette.role_hex("text")
         t.append(ins.name[:7], style=style)
         return t
 
@@ -355,6 +562,9 @@ class LabScreen(ModeScreen):
 
     def _draw_detail(self) -> None:
         target = self.query_one("#detail", Static)
+        if self.view == "model":
+            target.update(self._detail_model())
+            return
         res = self._result
         if res is None:
             target.update(Text("расписание ещё не посчитано",
@@ -368,6 +578,59 @@ class LabScreen(ModeScreen):
             target.update(self._detail_empty(cycle, port))
         else:
             target.update(self._detail_instr(cycle, port, instr))
+
+    def _detail_model(self) -> Text:
+        """Почему клетка красная — на месте, а не строчкой в отчёте.
+
+        Главная находка прогона 1 (docs/ROADMAP.md): 85% ошибок «ресурс» —
+        это STORE на канале `,0`, который его не исполняет. В отчёте это
+        одна строка «нарушений 3». Здесь на неё можно навести курсор и
+        увидеть, какие каналы операцию исполняют и откуда это известно.
+        """
+        faint = palette.role_hex("faint")
+        sched = self.model_sched
+        if sched is None or not sched.placements:
+            return Text("модель ещё не запускалась  —  /learned", style=faint)
+
+        grid = self.query_one("#grid", ScheduleGrid)
+        coord = grid.cursor_coordinate
+        cycle, port = coord.row, coord.column
+        instr = self._cells.get((cycle, port))
+        machine, dag = self.app.session.model(), self.app.session.dag_obj
+
+        t = Text()
+        if instr is None:
+            t.append("такт ", style=faint)
+            t.append(f"{cycle}", style=palette.role_hex("title"))
+            t.append(f", порт {machine.port_label(port)} — ", style=faint)
+            t.append("модель сюда ничего не поставила", style=faint)
+            return t
+
+        ins = dag[instr]
+        allowed = machine.channels_for(ins.op)
+        ok = port in allowed
+        t.append(f"{ins.op.lower()} {ins.name}", style=palette.op_style(ins.op))
+        t.append(f"  #{instr}\n", style=faint)
+        t.append("модель поставила: ", style=faint)
+        t.append(f"такт {cycle}, порт {machine.port_label(port)}\n",
+                 style=palette.role_hex("title"))
+
+        if ok:
+            t.append("канал операцию исполняет — размещение законно",
+                     style=palette.role_hex("success"))
+            return t
+
+        labels = ", ".join(machine.port_label(c) for c in allowed) or "нет таких"
+        t.append("✗ этот канал операцию НЕ исполняет\n",
+                 style=palette.role_hex("error") + " bold")
+        t.append(f"{ins.op} исполняют только: ", style=faint)
+        t.append(f"{labels}\n", style=palette.role_hex("success"))
+        t.append(f"источник матрицы портов: {machine.matrix_source}\n",
+                 style=faint)
+        if self.model_repairs:
+            t.append("починить каналы, не трогая такты:  /repair",
+                     style=palette.role_hex("warning"))
+        return t
 
     def _detail_empty(self, cycle: int, port: int) -> Text:
         """Пустой слот — это тоже ответ: важно, ПОЧЕМУ он пуст."""
@@ -510,6 +773,7 @@ class LabScreen(ModeScreen):
 
         row("baseline", str(b), title)
         row("оракул", str(o), f"{palette.role_hex('success')} bold")
+        self._row_model(row, b, o)
         row("предел", str(lb), title, self.met.binding)
         gap = b - o
         row("выигрыш", f"−{gap}" if gap else "нет",
@@ -523,6 +787,50 @@ class LabScreen(ModeScreen):
         util = self.base.schedule.slot_utilization
         t.append(f"слоты baseline заняты на {util:.0%}", style=dim)
         target.update(t)
+
+    def _row_model(self, row, base_t: int, orc_t: int) -> None:
+        """Число модели — рядом с двумя другими, а не в отдельном отчёте.
+
+        Решение по интерфейсу: модель — это ещё один планировщик, и судить её
+        надо в той же таблице и по тем же тактам. Пока она не запускалась,
+        строки нет: пустая строка «модель —» выглядела бы как результат.
+
+        Незаконное расписание числом НЕ подписывается. Такты у незаконного
+        расписания посчитать можно, но сравнивать их с baseline нельзя: это
+        число получено нарушением правил машины, и поставить его в один
+        столбик с честными значило бы засчитать модели то, чего она не
+        добилась.
+        """
+        sched = self.model_sched
+        if sched is None or not sched.placements:
+            return
+        dim = palette.role_hex("dim")
+        total = len(self.app.session.dag_obj)
+        illegal = self._model_illegal()
+        if len(sched.placements) < total:
+            row("модель", f"{len(sched.placements)}/{total}", dim, "пишет…")
+            return
+        if illegal:
+            row("модель", "—", palette.role_hex("error"),
+                f"незаконно: каналов {len(illegal)}")
+            return
+        m = sched.makespan
+        if m < orc_t:
+            note = "ниже оракула — проверить"
+            style = palette.role_hex("warning")
+        elif m == orc_t:
+            note = "оптимум"
+            style = f"{palette.role_hex('success')} bold"
+        elif m < base_t:
+            note = "обыграла эвристику"
+            style = palette.role_hex("success")
+        elif m == base_t:
+            note = "вровень с эвристикой"
+            style = palette.role_hex("title")
+        else:
+            note = "хуже эвристики"
+            style = palette.role_hex("warning")
+        row("модель", str(m), style, note)
 
     def _draw_diag(self) -> None:
         target = self.query_one("#diag", Static)

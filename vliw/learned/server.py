@@ -30,6 +30,7 @@ install`, см. шапку `vliw/agent/llm.py` — там ровно тот же
 from __future__ import annotations
 
 import atexit
+import contextlib
 import http.client
 import json
 import os
@@ -99,6 +100,12 @@ class LlamaServer:
         self._ids: dict[str, int] = {}
         self._active: str | None = None
         self._lock = threading.Lock()
+        # Второй замок — на РЕЖИМ, а не на запуск. Процесс один, а режима
+        # два: планировщик (с адаптером) и разговор (голая база). Какой из
+        # них активен — это состояние сервера, и переключить его посреди
+        # чужой генерации значит испортить чужой ответ. Поэтому режим
+        # держится на всё время генерации и отпускается вместе с ней.
+        self._use_lock = threading.Lock()
 
     # --- жизненный цикл ---------------------------------------------------
 
@@ -229,7 +236,74 @@ class LlamaServer:
             raise ServerError(f"смена адаптера не удалась ({status}): {body[:200]}")
         self._active = name
 
-    def complete(self, prompt: str, n_predict: int, timeout: float = 900.0):
+    def select_base(self) -> None:
+        """Погасить все адаптеры: остаётся голая база Qwen2.5-3B-Instruct.
+
+        Обученный адаптер учит модель ровно одному — писать строки расписания.
+        Для разговора он не нужен и вреден: спросишь «почему медленно» —
+        получишь `0: такт=0 канал=1`. Разговор идёт на базе, планирование —
+        на адаптере, процесс при этом один и тот же.
+        """
+        if not self._ids:
+            return
+        scales = [{"id": i, "scale": 0.0} for i in self._ids.values()]
+        status, body = self._request("POST", "/lora-adapters", scales)
+        if status != 200:
+            raise ServerError(f"не удалось погасить адаптеры ({status}): {body[:200]}")
+        self._active = None
+
+    @contextlib.contextmanager
+    def using(self, adapter: str | None):
+        """Занять модель под один режим. `None` — разговор на голой базе."""
+        with self._use_lock:
+            if adapter is None:
+                self.select_base()
+            else:
+                self.select(adapter)
+            yield
+
+    def chat(self, messages: list[dict], temperature: float = 0.3,
+             max_tokens: int = 700, timeout: float = 900.0):
+        """Разговор с базовой моделью. Поток кусков текста.
+
+        `/v1/chat/completions`, а не `/completion`: шаблон диалога у Qwen свой
+        (ChatML), и собирать его руками значило бы завести вторую копию
+        формата — ту самую ошибку, из-за которой случился EOS-баг. Сервер
+        знает шаблон из самого GGUF и применяет его сам.
+        """
+        with self.using(None):
+            conn = self._connect(timeout)
+            try:
+                body = json.dumps({"messages": messages,
+                                   "temperature": temperature,
+                                   "max_tokens": max_tokens, "stream": True})
+                conn.request("POST", "/v1/chat/completions", body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    raise ServerError(
+                        f"/v1/chat/completions ответил {resp.status}: "
+                        + resp.read().decode("utf-8", "replace")[:200])
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload or payload == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(payload)
+                    except ValueError:
+                        continue
+                    choices = chunk.get("choices") or [{}]
+                    piece = (choices[0].get("delta") or {}).get("content")
+                    if piece:
+                        yield piece
+            finally:
+                conn.close()
+
+    def complete(self, prompt: str, n_predict: int, adapter: str | None = None,
+                 timeout: float = 900.0):
         """Поток кусков ответа. Только продолжение — эха промпта здесь нет.
 
         Отмена: закрыть генератор. Соединение закрывается в `finally`, сервер
@@ -238,6 +312,10 @@ class LlamaServer:
         подпроцессом, где отмена означала убийство процесса и повторное
         чтение 2.1 ГБ весов на следующий запрос.
         """
+        with self.using(adapter) if adapter else contextlib.nullcontext():
+            yield from self._complete(prompt, n_predict, timeout)
+
+    def _complete(self, prompt: str, n_predict: int, timeout: float):
         conn = self._connect(timeout)
         try:
             body = json.dumps({

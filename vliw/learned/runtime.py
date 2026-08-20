@@ -575,6 +575,9 @@ def default_threads() -> int:
     return max(2, min(8, (os.cpu_count() or 4) // 2))
 
 
+SERVER_CTX = 4096
+"""Окно контекста сервера: хватает и планировщику, и разговору агента."""
+
 SERVER_MAX_TOKENS = 768
 """Под какой длиной ответа рассчитан контекст сервера.
 
@@ -604,32 +607,50 @@ class LlamaServerBackend(Backend):
         self.binary = find_llama_server()
         self.base_gguf = find_gguf_base()
 
-    def _server(self):
-        global _SERVER
-
-        from . import server as _srv
-
-        if _SERVER is None:
-            adapters = [(a.name, gguf_adapter_for(a)) for a in find_adapters()]
-            adapters = [(n, p) for n, p in adapters if p is not None]
-            if not adapters:
-                raise _srv.ServerError("ни один адаптер не сконвертирован в GGUF")
-            # Контекст фиксируется при старте, поэтому берём с запасом под
-            # самый длинный ожидаемый ответ. Без ограничения llama.cpp
-            # зарезервировал бы заявленные моделью 32768 и съел лишний
-            # гигабайт — см. комментарий в LlamaCppBackend.
-            ctx = max(2048, (SERVER_MAX_TOKENS + 400) * 2)
-            _SERVER = _srv.LlamaServer(
-                binary=self.binary, base_gguf=self.base_gguf,
-                adapters=adapters, threads=self.threads, ctx=ctx,
-                env=_llama_env(self.binary))
-        _SERVER.ensure()
-        return _SERVER
-
     def generate_events(self, prompt: str, max_new_tokens: int):
-        srv = self._server()
-        srv.select(self.adapter.name)
-        yield from srv.complete(prompt, max_new_tokens)
+        # Адаптер передаём в complete(), а не выбираем заранее: он держит
+        # режим сервера занятым на всю генерацию, чтобы разговор с базовой
+        # моделью не переключил LoRA у нас под руками.
+        yield from shared_server().complete(prompt, max_new_tokens,
+                                            adapter=self.adapter.name)
+
+
+def shared_server():
+    """Один llama-server на процесс инструмента: и планировщику, и агенту.
+
+    Второй процесс завести нельзя: база в 4 битах занимает 3.5 ГБ, а на
+    машине с 8 ГБ два таких уже не помещаются. Поэтому режимы делят один
+    процесс и переключаются шкалами LoRA — планировщику адаптер, разговору
+    голая база (см. `LlamaServer.using`).
+    """
+    global _SERVER
+
+    from . import server as _srv
+
+    if _SERVER is None:
+        binary, base = find_llama_server(), find_gguf_base()
+        if binary is None or base is None:
+            raise _srv.ServerError("llama-server или база GGUF не найдены в vendor/")
+        # Пустой список адаптеров — не ошибка: разговор идёт на голой базе,
+        # и агенту обученные веса не нужны вовсе. Наличие адаптера для
+        # ПЛАНИРОВЩИКА проверяет `llama_server_ready()`, до этого места.
+        adapters = [(a.name, gguf_adapter_for(a)) for a in find_adapters()]
+        adapters = [(n, p) for n, p in adapters if p is not None]
+        # Контекст фиксируется при старте, поэтому его хватать должно ОБОИМ
+        # режимам, а не только планировщику. Замерено: системный промпт
+        # агента — 1451 токен (факты об участке, матрица портов, находки
+        # доктора), плюс история диалога, плюс ответ. Прежние 2336 были
+        # посчитаны по планировщику, у которого промпт короткий, — и агент
+        # упирался в потолок, отвечая обрывком или пустотой.
+        #
+        # Не 32768, которые заявляет модель: столько llama.cpp зарезервировал
+        # бы под KV-кэш и съел лишний гигабайт (см. LlamaCppBackend).
+        ctx = SERVER_CTX
+        _SERVER = _srv.LlamaServer(binary=binary, base_gguf=base,
+                                   adapters=adapters, threads=default_threads(),
+                                   ctx=ctx, env=_llama_env(binary))
+    _SERVER.ensure()
+    return _SERVER
 
 
 def llama_server_ready(adapter: Adapter) -> tuple[bool, list[str]]:

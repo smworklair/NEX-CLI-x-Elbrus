@@ -42,6 +42,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import local
+
 # Провайдер по умолчанию, если ничего не задано и ключ не опознан.
 DEFAULT_PROVIDER = "mistral"
 
@@ -78,11 +80,13 @@ def _embedded_key(prov: str) -> str:
 DEFAULT_MODELS = {
     "mistral": "mistral-small-latest",
     "gemini": "gemini-flash-latest",
+    "local": "qwen2.5-3b-instruct (4 бита, llama-server)",
 }
 
 _PROVIDER_LABEL = {
     "mistral": "le chat",
     "gemini": "gemini",
+    "local": "локально",
 }
 
 TIMEOUT = 60
@@ -119,6 +123,14 @@ def provider() -> str:
         return "mistral"
     if name in ("gemini", "google"):
         return "gemini"
+    if name in ("local", "локально", "llama", "offline"):
+        return "local"
+    # Без ключа и без явного выбора — локальная модель, если она есть. Это не
+    # «запасной вариант похуже», а нормальный режим: агент и так строит ответ
+    # поверх посчитанных чисел, языковая модель отвечает только за
+    # формулировку. Зато без сети, без ключа и без чужой квоты.
+    if not _raw_key() and local.ready():
+        return "local"
     return DEFAULT_PROVIDER
 
 
@@ -174,16 +186,27 @@ def _is_exhausted(msg: str) -> bool:
 
 def model_name() -> str:
     name = os.environ.get("NEX_MODEL", "").strip()
-    return name or DEFAULT_MODELS.get(provider(), "")
+    if name:
+        return name
+    if provider() == "local":
+        return f"{local.model_label()} (4 бита, здесь)"
+    return DEFAULT_MODELS.get(provider(), "")
 
 
 def available() -> bool:
+    if provider() == "local":
+        return local.ready()
     return bool(api_key())
 
 
 def describe() -> str:
     """Строка для интерфейса: кто отвечает и какой моделью."""
     return f"{_PROVIDER_LABEL.get(provider(), provider())} · {model_name()}"
+
+
+def is_local() -> bool:
+    """Отвечает ли сейчас модель на этой машине, а не чужой сервер."""
+    return provider() == "local"
 
 
 # --------------------------------------------------------------------------
@@ -410,7 +433,9 @@ def _delta_of(chunk: dict, prov: str):
 
 def complete(system: str, question: str,
              history: list[tuple[str, str]] | None = None,
-             temperature: float = 0.3) -> str:
+             temperature: float = 0.3, nudge: bool = True) -> str:
+    if provider() == "local":
+        return local.complete(system, question, history, temperature, nudge=nudge)
     resp, prov = _call(system, question, history, temperature)
     with resp:
         data = json.load(resp)
@@ -420,6 +445,8 @@ def complete(system: str, question: str,
 def structured(system: str, question: str, schema: dict,
                temperature: float = 0.1) -> tuple[str, int]:
     """Ответ строго по схеме. Возвращает (JSON-строка, потрачено токенов)."""
+    if provider() == "local":
+        return local.structured(system, question, schema, temperature)
     resp, prov = _call(system, question, [], temperature, schema=schema)
     with resp:
         data = json.load(resp)
@@ -428,12 +455,21 @@ def structured(system: str, question: str, schema: dict,
 
 def stream(system: str, question: str,
            history: list[tuple[str, str]] | None = None,
-           temperature: float = 0.3):
+           temperature: float = 0.3, nudge: bool = True):
     """Ответ по частям: текст появляется по мере генерации.
 
     Ожидание в 5–10 секунд без признаков жизни выглядит как зависание, поэтому
     в диалоге используется именно потоковый режим.
+
+    `nudge` — только для локального провайдера, см. `agent.local`: False для
+    реплик не по делу («привет»), иначе модель тащит числа из ФАКТОВ в любой
+    ответ. Облачные модели этот параметр игнорируют — им хватает правил
+    самого системного промпта.
     """
+    if provider() == "local":
+        yield from local.stream(system, question, history, temperature,
+                               nudge=nudge)
+        return
     resp, prov = _call(system, question, history, temperature, stream=True)
     with resp:
         for raw in resp:
@@ -452,6 +488,8 @@ def stream(system: str, question: str,
 
 def check() -> tuple[bool, str]:
     """Быстрая проверка доступности — для команды /ai."""
+    if provider() == "local":
+        return local.check()
     try:
         txt = complete("Отвечай одним словом.", "Скажи «готово».", temperature=0.0)
         return True, f"{describe()}: {txt.strip()[:40]}"

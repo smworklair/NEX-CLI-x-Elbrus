@@ -92,8 +92,14 @@ def render_status(ok: bool, detail: str) -> list[str]:
             render.W, "  ")
     out.append("")
     out.append("  " + Style.dim(f"модель  {llm.describe()}"))
-    out.append("  " + Style.dim("ключ    NEX_API_KEY  или  ~/.config/nex/key"))
-    out.append("  " + Style.dim("смена   NEX_PROVIDER=mistral|gemini   NEX_MODEL=…"))
+    if llm.is_local():
+        # В локальном режиме строка про ключ была бы враньём: ключ не нужен,
+        # в сеть агент не ходит вовсе.
+        out.append("  " + Style.dim("где     на этой машине, без сети и без ключа"))
+        out.append("  " + Style.dim("смена   NEX_PROVIDER=mistral|gemini  (нужен ключ)"))
+    else:
+        out.append("  " + Style.dim("ключ    NEX_API_KEY  или  ~/.config/nex/key"))
+        out.append("  " + Style.dim("смена   NEX_PROVIDER=local|mistral|gemini   NEX_MODEL=…"))
     out.append("")
     out += wrap(Style.dim(
         "числа считает ядро. перепроверить: doctor  ·  compare"), render.W, "  ")

@@ -162,7 +162,8 @@ class Agent:
         system = context.system_prompt(self.session, self._needs_layout(question))
         chunks: list[str] = []
         try:
-            for piece in llm.stream(system, question, self._history_pairs()):
+            for piece in llm.stream(system, question, self._history_pairs(),
+                                    nudge=not _is_smalltalk(question)):
                 chunks.append(piece)
                 yield ("text", piece)
             turn.answer = "".join(chunks).strip()
@@ -184,7 +185,8 @@ class Agent:
         turn.actions = self._run_actions(question)
         system = context.system_prompt(self.session, self._needs_layout(question))
         try:
-            turn.answer = llm.complete(system, question, self._history_pairs())
+            turn.answer = llm.complete(system, question, self._history_pairs(),
+                                       nudge=not _is_smalltalk(question))
         except llm.LLMError as e:
             turn.offline = True
             turn.error = str(e)

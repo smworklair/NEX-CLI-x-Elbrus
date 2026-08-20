@@ -84,11 +84,33 @@ class Panel(Vertical):
     #: равен `can_focus`, а Panel — контейнер и фокус не принимает.
     ALLOW_MAXIMIZE = True
 
-    def __init__(self, *children, title: str = "", accent: str = "", **kw) -> None:
+    #: Про что эта панель — ключ, по которому экран собирает ей факты для ИИ.
+    #: Пусто — панель не о данных (подсказки, чипы), чат ей не нужен.
+    topic: str = ""
+
+    #: Есть ли у панели собственный ввод (лента ядра, вывод команд). У таких
+    #: чат НЕ открывается сам: он отобрал бы место у того, ради чего панель и
+    #: разворачивают. Открывается по клавише и встаёт слева.
+    has_own_input: bool = False
+
+    class Expanded(Message):
+        """Панель развернули на весь экран."""
+
+        def __init__(self, panel: "Panel") -> None:
+            super().__init__()
+            self.panel = panel
+
+    class Collapsed(Message):
+        """Панель свернули обратно."""
+
+    def __init__(self, *children, title: str = "", accent: str = "",
+                 topic: str = "", has_own_input: bool = False, **kw) -> None:
         super().__init__(*children, **kw)
         self._title = title
         self._accent = accent
         self._last_click = 0.0
+        self.topic = topic
+        self.has_own_input = has_own_input
 
     def on_mount(self) -> None:
         if self._title:
@@ -112,8 +134,10 @@ class Panel(Vertical):
         screen = self.screen
         if screen.maximized is self:
             screen.minimize()
+            self.post_message(self.Collapsed())
         else:
             screen.maximize(self, container=False)
+            self.post_message(self.Expanded(self))
 
 
 # --------------------------------------------------------------------------
@@ -405,3 +429,129 @@ class HintBar(Static):
         self.update(t)
 
 
+
+
+# --------------------------------------------------------------------------
+# Чат по развёрнутой панели
+# --------------------------------------------------------------------------
+
+
+class PanelChat(Vertical):
+    """Разговор про ОДНУ панель, рядом с ней.
+
+    Идея не в том, чтобы завести ещё один чат. Она в том, что вопрос почти
+    всегда возникает про то, на что человек сейчас смотрит: «почему эта
+    клетка красная», «что значит этот диагноз», «откуда это число». Общий
+    экран АГЕНТ на такой вопрос отвечает хуже — ему приходится угадывать, о
+    чём речь, а модели на 3B угадывание даётся плохо и заканчивается
+    выдумкой. Панель знает про себя точно, и её факты уходят в контекст.
+
+    Проверяемость сохраняется тем же способом, что и на экране АГЕНТ: под
+    строкой ввода видно, СКОЛЬКО фактов панель отдала модели, а сами факты
+    показывает `/что` — ответ можно сверить с тем, из чего он сделан.
+    """
+
+    class Asked(Message):
+        def __init__(self, question: str) -> None:
+            super().__init__()
+            self.question = question
+
+    def __init__(self, title: str = "", facts: list[str] | None = None,
+                 **kw) -> None:
+        super().__init__(**kw)
+        self._panel_title = title
+        self._facts = list(facts or [])
+        self._body = Text()
+
+    def compose(self):
+        yield Static(id="pchat-log")
+        yield Input(placeholder="спросить про то, что выше…", id="pchat-input")
+
+    def on_mount(self) -> None:
+        # Заголовок рисуем здесь, а не сразу после mount() снаружи: на момент
+        # возврата из mount() дети ещё не собраны, и query_one их не найдёт.
+        self._greet()
+        self.query_one("#pchat-input", Input).focus()
+
+    def _greet(self) -> None:
+        """Факты видно СРАЗУ, а не по команде.
+
+        Это не подробность оформления, а единственная защита от выдумки.
+        Локальная модель на 3B уверенно отвечает, когда факт один, и путает
+        числа, когда их надо связать несколько, — проверено на панели
+        ДИАГНОЗ. Прятать исходные строки за счётчиком «передано фактов: 5»
+        значит предлагать верить на слово. Когда они висят прямо над ответом,
+        неверный ответ виден сразу и без единой команды.
+        """
+        t = Text()
+        t.append("NEX про панель ", style=palette.role_hex("dim"))
+        t.append(self._panel_title + "\n\n", style=palette.role_hex("title"))
+        t.append(f"модель видит ровно это ({len(self._facts)}):\n",
+                 style=palette.role_hex("dim"))
+        # По одной строке на факт, с обрезкой. Полный текст читать здесь
+        # незачем — панель открыта слева, и она же источник. Смысл списка в
+        # другом: видно, СКОЛЬКО и ЧЕГО досталось модели, и что лишнего она
+        # не получала. Развёрнутый вид ничего не добавил бы, а ответ утопил
+        # бы вниз — проверено, на панели ДИАГНОЗ факты длиннее самой панели.
+        for f in self._facts:
+            line = " ".join(f.split())
+            if len(line) > 58:
+                line = line[:57] + "…"
+            t.append("  · " + line + "\n", style=palette.role_hex("faint"))
+        t.append("\nспросите обычным языком; Esc — свернуть панель",
+                 style=palette.role_hex("faint"))
+        self._log().update(t)
+        self._body = t.copy()
+
+    def on_input_submitted(self, event) -> None:
+        event.stop()
+        text = event.value.strip()
+        event.input.value = ""
+        if text:
+            self.post_message(self.Asked(text))
+
+    # --- лента ------------------------------------------------------------
+
+    def _log(self) -> Static:
+        return self.query_one("#pchat-log", Static)
+
+    def echo(self, question: str) -> None:
+        self._body.append("\n\n› ", style=palette.role_hex("accent"))
+        self._body.append(question, style=palette.role_hex("title"))
+        self._body.append("\n")
+        self._log().update(self._body)
+
+    def note(self, text: str, role: str = "faint") -> None:
+        self._body.append("\n" + text, style=palette.role_hex(role))
+        self._log().update(self._body)
+
+    def append(self, piece: str) -> None:
+        self._body.append(piece)
+        self._log().update(self._body)
+
+    # --- состояние ответа -------------------------------------------------
+    #
+    # Наружу торчит `answering`: интерфейс по нему рисует «думает», а тест —
+    # ждёт конца, не гадая по длине текста.
+
+    answering = False
+
+    def start_answer(self) -> None:
+        self.answering = True
+        self._answer_started = False
+        # Позицию снимаем ДО метки, иначе срез по ней метку и оставляет.
+        self._think_at = len(self._body)
+        self.note("думает…", "warning")
+
+    def first_piece(self) -> None:
+        """Первый кусок ответа: убрать «думает…», дальше просто дописывать."""
+        if self._answer_started:
+            return
+        self._answer_started = True
+        self._body = self._body[:self._think_at]
+        self._body.append("\n")
+        self._log().update(self._body)
+
+    def finish(self, seconds: float) -> None:
+        self.answering = False
+        self.note(f"\n({seconds:.1f} с)", "faint")

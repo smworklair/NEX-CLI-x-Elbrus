@@ -17,7 +17,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 
 from .. import palette
-from ..widgets import Console, HintBar, PromptBar, TopBar
+from ..widgets import Console, HintBar, Panel, PanelChat, PromptBar, TopBar
 
 
 class ModeScreen(Screen):
@@ -65,6 +65,17 @@ class ModeScreen(Screen):
     def compose_body(self):
         """Раскладка режима. Переопределяется каждым экраном."""
         yield Vertical(id="body")
+
+    #: Что ещё видно, когда панель развёрнута. По умолчанию Textual прячет
+    #: ВСЕХ прямых детей экрана, кроме развёрнутого, — и чат по панели
+    #: исчезал вместе с ними. Строка ввода и подсказки остаются нарочно: без
+    #: них развёрнутая панель становится тупиком, из которого не видно, как
+    #: выйти и что вообще можно.
+    ALLOW_IN_MAXIMIZED_VIEW = "PanelChat, PromptBar, HintBar, Footer"
+
+    _chat_panel = None
+    _chat_facts: list[str] = []
+    _chat_offer = None
 
     def on_mount(self) -> None:
         self.app.set_mode_theme(self.mode)
@@ -241,6 +252,109 @@ class ModeScreen(Screen):
         self.app.reload_palette()   # команда могла сменить тему
         self.refresh_context()
         self.after_command()
+
+    # --- чат по развёрнутой панели ----------------------------------------
+
+    def panel_facts(self, topic: str) -> list[str]:
+        """Факты открытой панели для ИИ. Переопределяется экраном.
+
+        Пустой список — панель нечего обсуждать, чат не открываем.
+        """
+        return []
+
+    def on_panel_expanded(self, event) -> None:
+        event.stop()
+        panel = event.panel
+        if not getattr(panel, "topic", ""):
+            return
+        # У панели со своим вводом чат сам не лезет: её разворачивают, чтобы
+        # читать и вводить, и отобрать треть ширины значило бы помешать ровно
+        # тому, ради чего разворот и сделан. Такую открывают клавишей.
+        if getattr(panel, "has_own_input", False):
+            self._chat_offer = panel
+            self.refresh_hints()
+            return
+        self.open_panel_chat(panel)
+
+    def on_panel_collapsed(self, event) -> None:
+        event.stop()
+        self.close_panel_chat()
+
+    def open_panel_chat(self, panel) -> None:
+        facts = self.panel_facts(getattr(panel, "topic", ""))
+        if not facts:
+            return
+        self.close_panel_chat()
+        # Только имя панели: полный заголовок несёт ещё и состояние
+        # («РАСПИСАНИЕ   baseline   23 тактов») и в узкой колонке переносится
+        # на три строки, съедая ленту диалога.
+        full = getattr(panel, "_title", "") or panel.topic
+        title = full.split("   ")[0].strip() or panel.topic
+        chat = PanelChat(title=title, facts=facts, id="panel-chat")
+        # Слева у панелей со своим вводом, справа у остальных: у первых справа
+        # уже живёт их собственная строка, и два ввода рядом путают.
+        chat.add_class("left" if getattr(panel, "has_own_input", False)
+                       else "right")
+        self.mount(chat)
+        panel.add_class("with-chat")
+        self._chat_panel = panel
+        self._chat_facts = facts
+        self.refresh_hints()
+
+    def close_panel_chat(self) -> None:
+        for chat in self.query(PanelChat):
+            chat.remove()
+        panel = getattr(self, "_chat_panel", None)
+        if panel is not None:
+            panel.remove_class("with-chat")
+        self._chat_panel = None
+        self._chat_facts = []
+        self._chat_offer = None
+
+    def on_panel_chat_asked(self, event) -> None:
+        event.stop()
+        chats = list(self.query(PanelChat))
+        if not chats:
+            return
+        chat = chats[0]
+        chat.echo(event.question)
+        chat.start_answer()
+        self._panel_chat_worker(event.question)
+
+    @work(thread=True, exclusive=True, group="panel-chat")
+    def _panel_chat_worker(self, question: str) -> None:
+        from ...agent import context, llm
+
+        panel = self._chat_panel
+        full = getattr(panel, "_title", "") if panel is not None else ""
+        title = full.split("   ")[0].strip() or "панель"
+        system = context.panel_prompt(title, list(self._chat_facts))
+        import time
+
+        t0 = time.monotonic()
+        try:
+            for piece in llm.stream(system, question, None):
+                self.app.call_from_thread(self._panel_chat_piece, piece)
+        except Exception as e:
+            self.app.call_from_thread(self._panel_chat_fail, str(e))
+        self.app.call_from_thread(self._panel_chat_done, time.monotonic() - t0)
+
+    def _panel_chat_piece(self, piece: str) -> None:
+        chats = list(self.query(PanelChat))
+        if not chats:
+            return
+        chats[0].first_piece()
+        chats[0].append(piece)
+
+    def _panel_chat_done(self, seconds: float) -> None:
+        chats = list(self.query(PanelChat))
+        if chats:
+            chats[0].finish(seconds)
+
+    def _panel_chat_fail(self, message: str) -> None:
+        chats = list(self.query(PanelChat))
+        if chats:
+            chats[0].note("не получилось: " + message[:160], "error")
 
     def after_command(self) -> None:
         """Пересобрать панели после команды. Переопределяется экраном."""

@@ -77,6 +77,27 @@ class AgentScreen(ModeScreen):
         self._seed_console()
         self._greet()
         self._check_model()
+        self._watch_warmup()
+
+    def _watch_warmup(self) -> None:
+        """Пока модель греется — обновлять панель, потом перестать.
+
+        Таймер снимает сам себя: держать вечный опрос ради строки, которая
+        меняется дважды за сессию, незачем.
+        """
+        from ...agent import llm
+
+        if not llm.is_local():
+            return
+
+        def tick() -> None:
+            from ...agent import local
+
+            self._draw_seen()
+            if local.warm_state()[0] in ("ready", "failed"):
+                timer.stop()
+
+        timer = self.set_interval(0.7, tick)
 
     def _seed_console(self) -> None:
         con = self.console
@@ -243,6 +264,21 @@ class AgentScreen(ModeScreen):
             row("модель", detail, palette.role_hex("faint"))
         elif ok:
             row("модель", llm.describe(), palette.role_hex("success"))
+            # Прогрев видно, пока он идёт. Молчащий интерфейс во время
+            # семисекундного подъёма сервера читается как «зависло», а
+            # человек в этот момент как раз выбирает, что спросить.
+            if llm.is_local():
+                from ...agent import local
+
+                state, note = local.warm_state()
+                if state == "warming":
+                    row("", f"греется — {note}", palette.role_hex("warning"))
+                elif state == "ready":
+                    row("", "прогрета, первый ответ быстрый",
+                        palette.role_hex("faint"))
+                elif state == "failed":
+                    row("", "прогрев не удался, ответит медленнее",
+                        palette.role_hex("faint"))
         else:
             row("модель", "нет сети", palette.role_hex("warning"))
             t.append(_wrap(detail, 40, 13), style=palette.role_hex("faint"))

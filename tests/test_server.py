@@ -50,19 +50,32 @@ class FakeServer:
         self._thread.start()
 
     def _serve(self) -> None:
+        """Каждое соединение — в своём потоке.
+
+        Раньше цикл обслуживал их по одному, и тест был флакающим: одно
+        падение на пять прогонов. Пока поток сидел в `sendall` отменённого
+        запроса (клиент уже ушёл, ядро копит EPIPE), следующее соединение
+        ждало в очереди, и клиент получал разрыв на отправке заголовков.
+        Настоящий llama-server держит слоты параллельно — подставной должен
+        вести себя так же, иначе он проверяет не то.
+        """
         while not self._stop:
             try:
                 conn, _ = self._sock.accept()
             except OSError:
                 return
-            try:
-                conn.settimeout(2.0)
-                self.requests.append(conn.recv(65536))
-                conn.sendall(self.response)
-            except OSError:
-                pass
-            finally:
-                conn.close()
+            threading.Thread(target=self._handle, args=(conn,),
+                             daemon=True).start()
+
+    def _handle(self, conn) -> None:
+        try:
+            conn.settimeout(2.0)
+            self.requests.append(conn.recv(65536))
+            conn.sendall(self.response)
+        except OSError:
+            pass
+        finally:
+            conn.close()
 
     def close(self) -> None:
         self._stop = True

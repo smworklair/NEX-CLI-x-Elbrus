@@ -32,6 +32,48 @@ CHAT_TIMEOUT_S = 180
 CHAT_MAX_TOKENS = 700
 
 
+# Состояние прогрева. Первый вопрос в сессии дорогой не из-за генерации, а
+# из-за двух разовых вещей: поднять сервер (~7 с) и посчитать системный
+# промпт агента — 1451 токен на CPU. Обе делаются ОДИН раз и обе можно
+# сделать заранее, пока человек читает экран и набирает вопрос.
+_WARM = {"state": "cold", "note": ""}
+"""cold | warming | ready | failed — что показывать в интерфейсе."""
+
+
+def warm_state() -> tuple[str, str]:
+    """(состояние, пояснение) — для честной подписи в интерфейсе."""
+    return _WARM["state"], _WARM["note"]
+
+
+def warmup(system: str | None = None) -> None:
+    """Поднять сервер и, если дан промпт, набить им кэш.
+
+    Вызывается в фоновом потоке при входе в режим. Ничего не возвращает:
+    если не получилось, первый вопрос просто пойдёт обычным путём и покажет
+    настоящую ошибку — прятать её здесь нельзя.
+
+    Промпт прогревается запросом на ОДИН токен: считать надо префикс, а не
+    ответ. Дальше `cache_prompt` переиспользует посчитанное, и настоящий
+    вопрос платит только за свои несколько слов.
+    """
+    if _WARM["state"] in ("warming", "ready"):
+        return
+    _WARM["state"], _WARM["note"] = "warming", "поднимаю модель"
+    try:
+        from ..learned import runtime
+
+        server = runtime.shared_server()
+        if system is not None:
+            _WARM["note"] = "грею контекст"
+            list(server.chat([{"role": "system", "content": system + SMALL_MODEL_NUDGE},
+                              {"role": "user", "content": "."}],
+                             temperature=0, max_tokens=1, timeout=CHAT_TIMEOUT_S))
+        _WARM["state"], _WARM["note"] = "ready", ""
+    except Exception as e:                # прогрев не имеет права ронять интерфейс
+        _WARM["state"] = "failed"
+        _WARM["note"] = str(e)[:120]
+
+
 def ready() -> bool:
     """Есть ли на машине всё для локального ответа: бинарник и база."""
     try:

@@ -316,3 +316,109 @@ class TestModelViewIsLive(unittest.TestCase):
         self.assertEqual(got["illegal_after"], [])
         self.assertEqual(got["after"].cycle, got["before"].cycle)
         self.assertEqual(got["after"].channel, 2)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestMaximizedPanelFillsScreen(unittest.TestCase):
+    """Развёрнутая панель занимает экран, а не остаётся полосой посреди него.
+
+    Найдено на скриншоте пользователя: у половины панелей высота задана числом
+    по id (#p-console: 10, #p-detail: 9, #p-seen: 12), и своя высота никуда не
+    девалась при развороте — по специфичности id побеждает класс `-maximized`,
+    который вешает Textual. Панель с фиксированной высотой повисала узкой
+    полосой в пустом экране. Разворачивают как раз такие панели: в них текст
+    не помещается.
+    """
+
+    def _size(self, panel_id: str) -> tuple[int, int]:
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    from vliw.tui.widgets import Panel
+
+                    panel = app.screen.query_one(panel_id, Panel)
+                    app.screen.maximize(panel, container=False)
+                    await pilot.pause()
+                    await pilot.pause()
+                    return panel.size.width, panel.size.height
+
+        return asyncio.run(go())
+
+    def test_fixed_height_panel_still_fills_screen(self) -> None:
+        """#p-console объявлен высотой 10 — развёрнутый обязан быть во весь экран."""
+        _w, h = self._size("#p-console")
+        self.assertGreater(h, 30, "панель осталась полосой вместо разворота")
+
+    def test_flexible_panel_unaffected(self) -> None:
+        _w, h = self._size("#p-grid")
+        self.assertGreater(h, 30)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestPanelChat(unittest.TestCase):
+    """Чат по развёрнутой панели: контекст берётся из НЕЁ, а не вообще.
+
+    Модель здесь не запускается — проверяется сборка контекста и раскладка.
+    """
+
+    def _open(self, panel_id: str):
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    from vliw.tui.widgets import Panel, PanelChat
+
+                    sc = app.screen
+                    panel = sc.query_one(panel_id, Panel)
+                    sc.maximize(panel, container=False)
+                    panel.post_message(Panel.Expanded(panel))
+                    for _ in range(6):
+                        await pilot.pause(0.05)
+                    chats = list(sc.query(PanelChat))
+                    return {
+                        "open": bool(chats),
+                        "facts": list(sc._chat_facts),
+                        "panel_w": panel.size.width,
+                        "screen_w": sc.size.width,
+                    }
+
+        return asyncio.run(go())
+
+    def test_chat_opens_and_takes_its_share(self) -> None:
+        """Панель уступает чату место, а не прячется под ним."""
+        got = self._open("#p-grid")
+        self.assertTrue(got["open"])
+        self.assertLess(got["panel_w"], got["screen_w"],
+                        "чат не отобрал ширину — значит висит поверх панели")
+
+    def test_facts_come_from_that_panel(self) -> None:
+        """У МАШИНЫ — про порты, у ДИАГНОЗА — про потери. Не одно и то же."""
+        machine = " ".join(self._open("#p-machine")["facts"])
+        diag = " ".join(self._open("#p-diag")["facts"])
+        self.assertIn("порт", machine.lower())
+        self.assertNotEqual(machine, diag)
+
+    def test_panel_with_own_input_does_not_grab_space(self) -> None:
+        """У ВЫВОДА КОМАНД свой ввод — чат сам не лезет и ширину не забирает."""
+        got = self._open("#p-console")
+        self.assertFalse(got["open"])
+        self.assertEqual(got["panel_w"], got["screen_w"] - 4)
+
+    def test_prompt_is_narrow_by_design(self) -> None:
+        """Панельный промпт НЕ тащит общий блок фактов.
+
+        Первая версия тащила, и это стоило и точности, и скорости: на вопрос
+        про монопольные порты модель перевернула утверждение, а ответ шёл
+        минуты. Узкий контекст — часть защиты от выдумки, а не экономия.
+        """
+        from vliw.agent import context
+
+        facts = self._open("#p-machine")["facts"]
+        prompt = context.panel_prompt("МАШИНА", facts)
+        self.assertIn("МАШИНА", prompt)
+        self.assertNotIn("ФАКТЫ (единственный источник чисел)", prompt)
+        self.assertLess(len(prompt), 2500)

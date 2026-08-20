@@ -72,7 +72,14 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         if self.timeout is not None:
             s.settimeout(self.timeout)
-        s.connect(self._path)
+        try:
+            s.connect(self._path)
+        except OSError:
+            # Закрыть за собой обязательно: пока сервер поднимается, сюда
+            # приходят десятки неудачных попыток /health, и каждая оставляла
+            # бы открытый дескриптор до сборки мусора.
+            s.close()
+            raise
         self.sock = s
 
 

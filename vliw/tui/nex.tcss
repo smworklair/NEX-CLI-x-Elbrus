@@ -122,6 +122,61 @@ Panel:focus-within {
     border-title-color: $primary;
 }
 
+/* Развёрнутая панель занимает весь экран — чем бы ни была её обычная высота.
+   Textual вешает класс `-maximized` на развёрнутый виджет, но собственная
+   высота панели никуда не девается: у половины панелей она задана числом по
+   id (#p-console: 10, #p-detail: 9, #p-seen: 12), и по специфичности id
+   побеждает класс. Получалась узкая полоска посреди пустого экрана вместо
+   разворота — а разворачивают как раз те панели, где текст не помещается.
+   `!important` здесь по делу: развёрнутое состояние обязано перебивать
+   любую обычную раскладку. */
+Panel.-maximized {
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    width: 100% !important;
+}
+
+/* Развёрнутая панель с чатом уступает ему треть ширины. Панель остаётся
+   слева: читают её, а спрашивают о прочитанном. */
+/* 1fr, а не проценты: чат пристыкован справа, и панель должна занять ровно
+   остаток. С процентами она вставала бы по центру, оставляя пустые поля с
+   обеих сторон. */
+Panel.-maximized.with-chat {
+    width: 1fr !important;
+}
+
+/* Без layer: слой висит ПОВЕРХ раскладки и места под себя не резервирует —
+   панель оставалась во всю ширину, а чат её перекрывал. Обычный dock
+   отбирает свою долю честно. */
+PanelChat {
+    width: 34%;
+    height: 100%;
+    background: $nex-panel;
+    border: round $primary;
+    border-title-align: left;
+    padding: 0 1;
+}
+
+PanelChat.right { dock: right; }
+
+/* У панелей со своей строкой ввода чат встаёт слева: справа уже занято их
+   собственным вводом, и два поля рядом путают, куда печатать. */
+PanelChat.left { dock: left; }
+
+#pchat-log {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+#pchat-input {
+    dock: bottom;
+    border: none;
+    border-top: solid $nex-line;
+    background: transparent;
+    height: 2;
+}
+
 Console {
     background: transparent;
     scrollbar-size-vertical: 1;

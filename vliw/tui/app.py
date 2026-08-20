@@ -91,6 +91,43 @@ class NexApp(App):
         self.set_mode_theme("lab")
         self._go(PickerScreen(selected=index))
 
+    def warm_model(self, mode: str) -> None:
+        """Прогреть локальную модель в фоне — пока человек смотрит на экран.
+
+        Первый вопрос в сессии дорогой не из-за генерации: сервер надо
+        поднять (~7 с), а системный промпт агента — 1451 токен — посчитать
+        на CPU. Обе вещи разовые. Делать их в момент вопроса значит заставить
+        человека ждать минуту на «привет»; делать их заранее — почти
+        бесплатно, потому что он в это время читает подсказки и печатает.
+
+        Только для локального провайдера: у облачного греть нечего, а лезть в
+        сеть без спроса при открытии экрана — не наше дело.
+        """
+        from ..agent import llm
+
+        if not llm.is_local():
+            return
+        # Промпт греем только там, где он и понадобится, — в диалоге. В
+        # РАЗБОРЕ у модели другой промпт (граф, не факты), общий у них только
+        # сам процесс сервера.
+        system = None
+        if mode == "mind":
+            from ..agent import context
+
+            try:
+                system = context.system_prompt(self.session, False)
+            except Exception:
+                system = None
+        self._warm_worker(system)
+
+    def _warm_worker(self, system) -> None:
+        import threading
+
+        from ..agent import local
+
+        threading.Thread(target=local.warmup, args=(system,),
+                         daemon=True).start()
+
     def open_mode(self, mode: str) -> None:
         if mode == "work":
             from .screens.core_screen import CoreScreen as cls
@@ -102,3 +139,5 @@ class NexApp(App):
         self.session.focus = mode
         self.session.mode = "chat" if mode == "mind" else "explore"
         self._go(cls())
+        if mode in ("mind", "lab"):
+            self.warm_model(mode)

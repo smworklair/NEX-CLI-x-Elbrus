@@ -96,16 +96,19 @@ class LabScreen(ModeScreen):
                             title="УЧАСТОК", id="p-scen")
                 yield Panel(ScheduleGrid(id="grid", cursor_type="cell",
                                          zebra_stripes=False),
-                            title="РАСПИСАНИЕ", id="p-grid")
+                            title="РАСПИСАНИЕ", id="p-grid", topic="grid")
                 yield Panel(Static(id="detail"), title="ПОЧЕМУ ЗДЕСЬ",
-                            id="p-detail")
+                            id="p-detail", topic="detail")
                 yield Panel(Console(id="console"), title="ВЫВОД КОМАНД",
-                            id="p-console")
+                            id="p-console", topic="console",
+                            has_own_input=True)
             with Vertical(id="lab-right"):
-                yield Panel(Static(id="numbers"), title="ЧИСЛА", id="p-numbers")
+                yield Panel(Static(id="numbers"), title="ЧИСЛА",
+                            id="p-numbers", topic="numbers")
                 yield Panel(VerticalScroll(Static(id="diag")),
-                            title="ДИАГНОЗ", id="p-diag")
-                yield Panel(Static(id="machine"), title="МАШИНА", id="p-machine")
+                            title="ДИАГНОЗ", id="p-diag", topic="diag")
+                yield Panel(Static(id="machine"), title="МАШИНА",
+                            id="p-machine", topic="machine")
 
     def on_ready(self) -> None:
         self._fill_chips()
@@ -330,6 +333,94 @@ class LabScreen(ModeScreen):
         self._draw_detail()
         if con is not None and self.model_repairs:
             con.note("  починить каналы, не трогая такты:  /repair", "warning")
+
+    def panel_facts(self, topic: str) -> list[str]:
+        """Что именно эта панель показывает — словами, для ИИ.
+
+        Берём из уже посчитанного ядром, а не пересказываем отрисовку: цифры
+        в ответе должны совпадать с цифрами на экране, потому что источник у
+        них один.
+        """
+        from ...agent import context as agent_context
+
+        s = self.app.session
+        if topic == "machine":
+            return agent_context.machine_facts(s.model())
+        if topic == "diag":
+            return agent_context.doctor_facts(s) or [
+                "Диагностика ещё не считалась — нужна команда /run."]
+        if topic == "numbers":
+            return agent_context.schedule_facts(s)
+        if topic == "grid":
+            return self._grid_facts()
+        if topic == "detail":
+            return self._cursor_facts()
+        if topic == "console":
+            return agent_context.schedule_facts(s)
+        return []
+
+    def _grid_facts(self) -> list[str]:
+        s = self.app.session
+        out = [f"В решётке показан вид «{VIEWS.get(self.view, self.view)}»: "
+               f"такты по вертикали, каналы (порты) по горизонтали."]
+        if self.view == "model" and self.model_sched is not None:
+            illegal = self._model_illegal()
+            out.append(f"Это СЫРОЙ ответ обученной модели, размещено "
+                       f"{len(self.model_sched.placements)} из {len(s.dag_obj)}.")
+            if illegal:
+                dag, machine = s.dag_obj, s.model()
+                out.append(f"Незаконных размещений: {len(illegal)} "
+                           f"(канал не исполняет эту операцию).")
+                for i in sorted(illegal)[:4]:
+                    p = self.model_sched.placements[i]
+                    ok = ", ".join(machine.port_label(c)
+                                   for c in machine.channels_for(dag[i].op))
+                    out.append(f"  {dag[i].op} #{i} поставлена на "
+                               f"{machine.port_label(p.channel)}, а исполняют "
+                               f"только {ok}.")
+            else:
+                out.append("Незаконных размещений нет.")
+            return out
+        res = self._result
+        if res is None:
+            return out + ["Расписание ещё не посчитано — нужна команда /run."]
+        sch = res.schedule
+        out.append(f"Выдача занимает {sch.span_cycles} тактов, всё готово к "
+                   f"такту {sch.makespan}, слоты заняты на "
+                   f"{sch.slot_utilization:.0%}.")
+        empty = [c for c in range(sch.span_cycles)
+                 if not any(p.cycle == c for p in sch.placements.values())]
+        if empty:
+            out.append(f"Полностью пустых тактов: {len(empty)} "
+                       f"(например, {', '.join('т.' + str(c) for c in empty[:6])}).")
+        return out
+
+    def _cursor_facts(self) -> list[str]:
+        """Про клетку под курсором — то же, что видно в панели."""
+        s = self.app.session
+        grid = self.query_one("#grid", ScheduleGrid)
+        coord = grid.cursor_coordinate
+        cycle, port = coord.row, coord.column
+        machine, dag = s.model(), s.dag_obj
+        instr = self._cells.get((cycle, port))
+        head = (f"Курсор стоит на такте {cycle}, порт "
+                f"{machine.port_label(port)} (вид «{VIEWS.get(self.view, self.view)}»).")
+        if instr is None:
+            return [head, "В этой клетке ничего не выдано."]
+        ins = dag[instr]
+        allowed = ", ".join(machine.port_label(c)
+                            for c in machine.channels_for(ins.op))
+        out = [head,
+               f"Здесь операция {ins.op} «{ins.name}» (номер {instr}).",
+               f"{ins.op} исполняется на портах: {allowed}.",
+               f"Латентность {ins.op}: {machine.latency(ins.op)} т."]
+        if self.view == "model" and instr in self._model_illegal():
+            out.append("ЭТО РАЗМЕЩЕНИЕ НЕЗАКОННО: канал операцию не исполняет.")
+        preds = list(dag[instr].preds)
+        if preds:
+            out.append("Зависит от: "
+                       + ", ".join(f"{dag[p].op} «{dag[p].name}»" for p in preds[:5]))
+        return out
 
     def after_command(self) -> None:
         self.recompute()

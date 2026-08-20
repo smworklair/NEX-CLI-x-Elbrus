@@ -194,3 +194,60 @@ def render_compare_line(learned_res, base_res, oracle_res) -> list[str]:
         out.append("  " + Style.dim(
             f"модель отстала от эвристики на {ms - b} т."))
     return out
+
+
+class PlainRenderer:
+    """Поток событий планировщика → строки для построчного вывода.
+
+    Существует потому, что стриминг и «чистая» отрисовка списком строк плохо
+    уживаются: отчёт можно собрать целиком и напечатать, а поток нельзя —
+    его смысл в том, что он идёт. Компромисс: рендерер хранит одно состояние
+    (недописанную строку ответа модели), а печатает по-прежнему `cli.py`.
+
+    Токены копятся до перевода строки, а не красятся посимвольно: посимвольная
+    раскраска даёт по паре ANSI-кодов на букву — мусор в выводе и лишние байты
+    в терминал.
+
+    События `Placed` здесь НЕ показываются отдельно: в построчном режиме их
+    уже видно — модель пишет ровно эти строки. Заливка решётки по `Placed` —
+    дело полноэкранного интерфейса, где текста ответа на экране нет.
+    """
+
+    def __init__(self) -> None:
+        self._line: list[str] = []
+        self._opened = False
+
+    def feed(self, ev) -> list[str]:
+        """Событие → что напечатать сейчас. Пустой список — печатать нечего."""
+        from ..core import Done, Failed, Note, Started, Token
+
+        if isinstance(ev, Started):
+            return []
+        if isinstance(ev, Note):
+            return ["  " + (paint(ev.level, ev.text) if ev.level != "dim"
+                            else Style.dim(ev.text))]
+        if isinstance(ev, Token):
+            out: list[str] = []
+            if not self._opened:
+                self._opened = True
+                out.append("  " + Style.dim("── модель пишет ──"))
+            out.extend(self._feed_text(ev.text))
+            return out
+        if isinstance(ev, (Done, Failed)):
+            # Только дописываем хвост без перевода строки. Текст самого отказа
+            # печатает `cli.py`: он же решает код возврата, и две половины
+            # одного сообщения в двух местах разъезжаются.
+            return self._feed_text("\n")
+        return []
+
+    def _feed_text(self, chunk: str) -> list[str]:
+        out: list[str] = []
+        for ch in chunk:
+            if ch == "\n":
+                text = "".join(self._line).replace("[end of text]", "").rstrip()
+                self._line.clear()
+                if text:
+                    out.append("  " + Style.dim(text))
+            else:
+                self._line.append(ch)
+        return out

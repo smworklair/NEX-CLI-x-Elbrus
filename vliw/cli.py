@@ -78,6 +78,13 @@ class Session:
     args: object
     profile: str = DEFAULT_PROFILE
     scenario: str = "slotclash"
+    event_sink: object = None
+    """Куда отдавать события планировщика вместо печати.
+
+    Ставит интерфейс на время команды. Пусто — печатаем построчно, как и
+    раньше; занято — показывать поток берётся тот, кто его поставил (у него
+    есть решётка, а у печати её нет).
+    """
     dag_obj: DAG | None = None
     width: int | None = None
     delay: float | None = None  # пауза воспроизведения; None = по Enter
@@ -915,38 +922,43 @@ def cmd_learned(session: Session, arg: str) -> None:
     print(rule(f"обученный планировщик · {adapter.name} · {session.scenario}"))
     print("  " + _header(session))
     print()
-    print(Style.dim(f"  поднимаю {adapter.base} + LoRA {adapter.name} — "
-                    "первый запуск долгий (веса грузятся с диска)"))
     sys.stdout.flush()
 
     sch = LearnedScheduler(adapter=adapter, repair=want_repair)
+    renderer = learned_view.PlainRenderer()
+    res = None
+    failed = None
 
-    # Печатаем ответ модели по мере генерации: иначе полминуты тишины, и
-    # непонятно, работает оно вообще или повисло.
-    print(Style.dim("  ── модель пишет ──"))
-
-    # Копим до перевода строки, а не красим каждый символ по отдельности:
-    # посимвольная раскраска даёт по паре ANSI-кодов на букву — и мусор в
-    # выводе, и лишние байты в терминал.
-    _line: list[str] = []
-
-    def _stream(chunk: str) -> None:
-        for ch in chunk:
-            if ch == "\n":
-                text = "".join(_line).replace("[end of text]", "").rstrip()
-                _line.clear()
-                if text:
-                    print("  " + Style.dim(text))
-                    sys.stdout.flush()
-            else:
-                _line.append(ch)
-
+    # Поток событий, а не один блокирующий вызов. Здесь разницы почти не
+    # видно — печать та же, — но поток один и тот же для всех интерфейсов:
+    # полноэкранный заливает по нему решётку, пока модель пишет. Заодно
+    # прерывание теперь доходит до модели: закрытие генератора убивает
+    # подпроцесс llama.cpp, а не оставляет его считать в одиночестве.
+    sink = session.event_sink
+    events = core.stream(sch, dag, machine)
     try:
-        res = sch.schedule(dag, machine, on_text=_stream)
-        _stream("\n")            # хвост без перевода строки тоже показать
-        print()
+        for ev in events:
+            if sink is not None:
+                # Показывает тот, кто поставил сток: у него решётка, и он
+                # умеет то, чего печать не умеет. Дублировать поток ещё и в
+                # stdout нельзя — мост покажет его вторым экземпляром в конце.
+                sink(ev)
+            else:
+                for line in renderer.feed(ev):
+                    print(line)
+                    sys.stdout.flush()
+            if isinstance(ev, core.Done):
+                res = ev.result
+            elif isinstance(ev, core.Failed):
+                failed = ev.error
     except (RuntimeError, OSError, ImportError) as e:
-        print(paint("error", f"не удалось запустить модель: {e}"))
+        failed = str(e)
+    finally:
+        events.close()
+
+    if res is None:
+        print(paint("error",
+                    f"не удалось запустить модель: {failed or 'нет ответа'}"))
         return False
     print()
     # Сравниваем только с тем, что уже посчитано: гонять точный поиск ради

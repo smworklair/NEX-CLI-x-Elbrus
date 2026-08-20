@@ -42,9 +42,9 @@ class TestPromptIsTrainingFormat(unittest.TestCase):
         seen = {}
 
         class Spy(ScriptedBackend):
-            def generate(self, prompt, max_new_tokens, on_text=None):
+            def generate_events(self, prompt, max_new_tokens):
                 seen["prompt"] = prompt
-                return ""
+                return iter(())
 
         LearnedScheduler(backend=Spy("")).schedule(dag, machine)
         self.assertEqual(seen["prompt"], encode_prompt(dag, machine))
@@ -386,6 +386,187 @@ class TestStreaming(unittest.TestCase):
                 echo_done = True
         self.assertTrue(echo_done, "хвост промпта не найден в потоке")
         self.assertEqual("".join(out), answer)
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class ChunkedBackend(ScriptedBackend):
+    """Отдаёт ответ мелкими кусками — как настоящий поток llama.cpp.
+
+    Куски намеренно НЕ совпадают с границами строк: llama.cpp отдаёт байты по
+    мере генерации, и перевод строки приходит в середине куска. Разбор,
+    который это не учитывает, работает на тестах и разваливается вживую.
+    """
+
+    def __init__(self, text: str, size: int = 3):
+        super().__init__(text)
+        self._text = text
+        self._size = size
+
+    def generate_events(self, prompt, max_new_tokens):
+        for i in range(0, len(self._text), self._size):
+            yield self._text[i:i + self._size]
+
+
+class CancelWatchBackend(ScriptedBackend):
+    """Бесконечная генерация, которая замечает, что её закрыли."""
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.cleaned = False
+        self.emitted = 0
+
+    def generate_events(self, prompt, max_new_tokens):
+        try:
+            while True:
+                self.emitted += 1
+                yield "…\n"          # не размещение: важен сам факт потока
+        finally:
+            # У настоящего бэкенда здесь умирает подпроцесс llama.cpp и
+            # отпускается блокировка.
+            self.cleaned = True
+
+
+def _answer_line(dag, machine, instr: int, cycle: int, channel: int) -> str:
+    """Одна строка ответа модели, собранная кодировщиком обучения.
+
+    Писать `"0: такт=0 канал=4"` от руки нельзя: это вторая копия формата, а
+    вторая копия однажды молча разъезжается с обучением — так и получился
+    EOS-баг (docs/EOS_INCIDENT.md). Формат живёт в одном месте, тесты берут
+    его оттуда же, откуда берёт планировщик.
+    """
+    sched = Schedule(dag, machine)
+    sched.place(instr, cycle, channel)
+    return encode_completion(sched)
+
+
+class TestLiveGridFilling(unittest.TestCase):
+    """Решётка заполняется ПО ХОДУ генерации, а не одним куском в конце."""
+
+    def setUp(self) -> None:
+        self.dag, self.machine, self.good = _fixture()
+        self.answer = encode_completion(self.good)
+
+    def _events(self, backend):
+        from vliw.core import stream
+
+        return list(stream(LearnedScheduler(backend=backend), self.dag, self.machine))
+
+    def test_placements_arrive_before_the_end(self) -> None:
+        """Хотя бы одно размещение приходит раньше терминального события.
+
+        Ради этого всё и затевалось: если `Placed` приезжают только вместе с
+        `Done`, интерфейс снова показывает пустой экран и стену текста в
+        конце — ровно то, что чинил событийный контракт.
+        """
+        from vliw.core import Done, Placed
+
+        evs = self._events(ChunkedBackend(self.answer))
+        first_placed = next(i for i, e in enumerate(evs) if isinstance(e, Placed))
+        done = next(i for i, e in enumerate(evs) if isinstance(e, Done))
+        self.assertLess(first_placed, done)
+
+    def test_every_instruction_placed_exactly_once(self) -> None:
+        from vliw.core import Placed
+
+        placed = [e for e in self._events(ChunkedBackend(self.answer))
+                  if isinstance(e, Placed)]
+        ids = [e.placement.instr for e in placed]
+        self.assertEqual(sorted(ids), sorted(range(len(self.dag))))
+
+    def test_live_run_is_marked_live(self) -> None:
+        """Живой прогон — не переигровка, и подписан соответственно."""
+        from vliw.core import Placed
+
+        placed = [e for e in self._events(ChunkedBackend(self.answer))
+                  if isinstance(e, Placed)]
+        self.assertEqual({e.live for e in placed}, {True})
+
+    def test_chunk_boundaries_do_not_lose_lines(self) -> None:
+        """Размер куска не влияет на разбор — перевод строки ищется в потоке."""
+        from vliw.core import Placed
+
+        for size in (1, 2, 3, 7, 1000):
+            with self.subTest(size=size):
+                placed = [e for e in self._events(ChunkedBackend(self.answer, size))
+                          if isinstance(e, Placed)]
+                self.assertEqual(len(placed), len(self.dag))
+
+    def test_illegal_placement_still_reaches_the_grid(self) -> None:
+        """Незаконное размещение не прячется до вердикта.
+
+        Решётка обязана показать, ГДЕ модель ошиблась. Решение по интерфейсу:
+        сырой ответ с красными ячейками, починка — отдельным действием.
+        """
+        from vliw.core import Placed
+
+        # Ставим первую инструкцию на заведомо посторонний канал и
+        # проверяем, что событие всё равно есть.
+        bad = _answer_line(self.dag, self.machine, 0, 0, 7) + "\n"
+        placed = [e for e in self._events(ChunkedBackend(bad))
+                  if isinstance(e, Placed)]
+        self.assertEqual(len(placed), 1)
+        self.assertEqual(placed[0].placement.channel, 7)
+
+    def test_repeated_identical_line_is_not_a_second_event(self) -> None:
+        """Повтор той же строки не заставляет ячейку мигать впустую."""
+        from vliw.core import Placed
+
+        line = _answer_line(self.dag, self.machine, 0, 0, 1)
+        placed = [e for e in self._events(ChunkedBackend("\n".join([line] * 3) + "\n"))
+                  if isinstance(e, Placed)]
+        self.assertEqual(len(placed), 1)
+
+    def test_moved_placement_is_a_second_event(self) -> None:
+        """А вот ПЕРЕЕЗД той же инструкции — событие: модель передумала."""
+        from vliw.core import Placed
+
+        text = (_answer_line(self.dag, self.machine, 0, 0, 1) + "\n"
+                + _answer_line(self.dag, self.machine, 0, 2, 1) + "\n")
+        placed = [e for e in self._events(ChunkedBackend(text))
+                  if isinstance(e, Placed)]
+        self.assertEqual([e.placement.cycle for e in placed], [0, 2])
+
+    def test_old_schedule_contract_matches_the_stream(self) -> None:
+        """`schedule()` даёт ровно то же, что `Done` из потока."""
+        from vliw.core import Done
+
+        evs = self._events(ChunkedBackend(self.answer))
+        via_stream = next(e for e in evs if isinstance(e, Done)).result
+        direct = LearnedScheduler(
+            backend=ChunkedBackend(self.answer)).schedule(self.dag, self.machine)
+        self.assertEqual(direct.schedule.placements, via_stream.schedule.placements)
+        self.assertEqual(direct.search_stats["valid"], via_stream.search_stats["valid"])
+
+
+class TestCancellation(unittest.TestCase):
+    """Отмена доходит до бэкенда — иначе процесс модели остаётся сиротой."""
+
+    def test_close_kills_the_backend_stream(self) -> None:
+        from vliw.core import stream
+
+        dag, machine, _ = _fixture()
+        be = CancelWatchBackend()
+        gen = stream(LearnedScheduler(backend=be), dag, machine)
+        for _ in range(5):
+            next(gen)
+        self.assertFalse(be.cleaned)
+        gen.close()
+        self.assertTrue(be.cleaned)
+
+    def test_partial_placements_survive_cancellation(self) -> None:
+        """Отменённый прогон — тоже данные: что успело встать, то встало."""
+        from vliw.core import Placed, stream
+
+        dag, machine, good = _fixture()
+        answer = encode_completion(good)
+        gen = stream(LearnedScheduler(backend=ChunkedBackend(answer, 1)), dag, machine)
+        seen = [e for _, e in zip(range(60), gen) if isinstance(e, Placed)]
+        gen.close()
+        self.assertGreater(len(seen), 0)
+        self.assertLess(len(seen), len(dag) + 1)
+
 
 if __name__ == "__main__":
     unittest.main()

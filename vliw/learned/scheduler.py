@@ -31,8 +31,19 @@ from __future__ import annotations
 
 import time
 
-from ..core import DAG, MachineModel, SchedulingResult
-from ..core.schedule import Schedule
+from ..core import (
+    DAG,
+    Done,
+    Failed,
+    MachineModel,
+    Note,
+    Placed,
+    Repaired,
+    SchedulingResult,
+    Started,
+    Token,
+)
+from ..core.schedule import Placement, Schedule
 
 # Сколько токенов максимум ждём от модели. Самый длинный эталон в данных —
 # граф на 24 инструкции, это ~400 токенов; берём с запасом, но не бесконечно:
@@ -87,20 +98,126 @@ class LearnedScheduler:
 
     # --- собственно планирование ------------------------------------------
 
-    def schedule(self, dag: DAG, model: MachineModel,
-                 on_text=None) -> SchedulingResult:
-        """`on_text(chunk)` — печатать ответ модели по мере генерации.
+    def schedule_events(self, dag: DAG, model: MachineModel):
+        """Работа модели как поток событий: токены и ЖИВАЯ заливка решётки.
 
-        Генерация идёт секунд тридцать, и без этого пользователь полминуты
-        смотрит в тишину. Необязателен: протокол Scheduler его не требует, и
-        baseline/oracle про него не знают.
+        Решётка заполняется по ходу генерации, а не в конце. Это возможно
+        потому, что формат ответа построчный (одна строка — одно размещение),
+        а `decode_completion` разбирает текст построчно и терпимо: как только
+        строка дописана, размещение уже известно. Полминуты ожидания
+        превращаются в полминуты наблюдения за тем, как модель раскладывает
+        участок.
+
+        Незаконные размещения отдаются НАРАВНЕ с законными: модель ставит
+        STORE на канал, который его не исполняет, и это её настоящий ответ.
+        Судит расписание `validate()` в конце, а решётка показывает, ГДЕ
+        именно модель ошиблась, — прятать это до вердикта значило бы прятать
+        главное.
         """
-        from training.encode import clip_placements, decode_completion, encode_prompt
+        from training.encode import decode_completion, encode_prompt
+
+        from . import runtime
+
+        yield Started(self.short, self.name)
+
+        try:
+            be = self.backend()
+        except (RuntimeError, OSError, ImportError) as e:
+            yield Failed(str(e))
+            return
+
+        yield Note(f"{getattr(be, 'name', '?')}"
+                   + (f" · адаптер {self._adapter.name}" if self._adapter else "")
+                   + (" — первый запуск долгий, веса грузятся с диска"
+                      if getattr(be, "slow_start", False) else ""))
 
         prompt = encode_prompt(dag, model)
+        n = len(dag)
         t0 = time.monotonic()
-        raw = self.backend().generate(prompt, self.max_new_tokens, on_text=on_text)
-        elapsed = time.monotonic() - t0
+        parts: list[str] = []
+        line: list[str] = []
+        seen: dict[int, tuple[int, int]] = {}
+
+        def _flush_line() -> list[Placed]:
+            """Дописанная строка → размещения, которых ещё не было.
+
+            Повтор того же размещения не событие: модель иногда переписывает
+            строку, и без этой проверки ячейка мигала бы впустую. А вот
+            ИЗМЕНЁННОЕ размещение той же инструкции — событие: ячейка честно
+            переедет, как это и произошло у модели.
+            """
+            text = "".join(line)
+            line.clear()
+            out: list[Placed] = []
+            for i, (cycle, channel) in sorted(decode_completion(text).items()):
+                if not (0 <= i < n) or seen.get(i) == (cycle, channel):
+                    continue
+                seen[i] = (cycle, channel)
+                out.append(Placed(Placement(i, cycle, channel), live=True))
+            return out
+
+        gen = be.generate_events(prompt, self.max_new_tokens)
+        try:
+            for chunk in gen:
+                parts.append(chunk)
+                yield Token(chunk)
+                for ch in chunk:
+                    if ch == "\n":
+                        yield from _flush_line()
+                    else:
+                        line.append(ch)
+        except (RuntimeError, OSError, ImportError, TimeoutError) as e:
+            yield Failed(f"не удалось запустить модель: {e}")
+            return
+        finally:
+            # Явно, а не полагаясь на сборщик мусора: здесь убивается
+            # подпроцесс llama.cpp и отпускается _GENERATE_LOCK. При отмене
+            # (`close()` снаружи) в эту точку прилетает GeneratorExit, и
+            # закрыть вложенный генератор — единственный способ не оставить
+            # процесс с гигабайтами весов жить дальше.
+            #
+            # getattr, а не прямой вызов: контракт `generate_events()` —
+            # ИТЕРАТОР кусков, а не обязательно генератор. Бэкенд вправе
+            # вернуть что угодно итерируемое (в тестах так и есть), и у него
+            # `close()` может не быть.
+            closer = getattr(gen, "close", None)
+            if closer is not None:
+                closer()
+
+        yield from _flush_line()          # хвост без перевода строки
+
+        raw = "".join(parts).split(runtime.END_MARKER)[0]
+        res = self._assemble(dag, model, raw, time.monotonic() - t0)
+        for i, was, now in res.search_stats.get("repair_moves", ()):
+            yield Repaired(i, was, now)
+        yield Done(res)
+
+    def schedule(self, dag: DAG, model: MachineModel,
+                 on_text=None) -> SchedulingResult:
+        """Весь ответ целиком — старый контракт, поверх потока событий.
+
+        `on_text(chunk)` оставлен ради построчного режима и тестов. Новый код
+        должен брать `schedule_events()`: там есть ещё и заливка решётки, и
+        отмена.
+        """
+        res = None
+        for ev in self.schedule_events(dag, model):
+            if isinstance(ev, Token):
+                if on_text:
+                    on_text(ev.text)
+            elif isinstance(ev, Done):
+                res = ev.result
+            elif isinstance(ev, Failed):
+                # Прежний `schedule()` падал исключением, и `cmd_learned` его
+                # ловит. Сохраняем это поведение дословно.
+                raise RuntimeError(ev.error)
+        assert res is not None, "поток обязан кончиться Done или Failed"
+        return res
+
+    def _assemble(self, dag: DAG, model: MachineModel, raw: str,
+                  elapsed: float) -> SchedulingResult:
+        """Сырой ответ модели → расписание, диагноз, метрики."""
+        from training.encode import clip_placements, decode_completion
 
         decoded = decode_completion(raw)
         keep, extra = clip_placements(decoded, len(dag))

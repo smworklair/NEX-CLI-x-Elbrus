@@ -175,14 +175,49 @@ def status(name: str | None = None) -> tuple[bool, list[str]]:
 
 
 class Backend:
-    """Что угодно, что умеет продолжить текст. Один метод — намеренно."""
+    """Что угодно, что умеет продолжить текст.
+
+    ОСНОВНОЙ метод — `generate_events()`: генератор кусков ответа. Так, а не
+    через callback `on_text=`, потому что генератор даёт отмену бесплатно и
+    правильно. Раньше здесь был callback, и отменить генерацию было нечем:
+    Textual снимал свой воркер, а блокирующий `subprocess` внутри про отмену
+    не знал и продолжал считать (см. комментарий к `_GENERATE_LOCK` ниже —
+    из-за этого пришлось заводить блокировку). У генератора `close()` бросает
+    `GeneratorExit` в точке `yield`, отрабатывает `finally`, и подпроцесс
+    llama.cpp умирает вместе с отменой.
+
+    `generate()` оставлен как удобная обёртка: он собирает поток целиком.
+    Реализовывать в наследнике нужно только `generate_events()`.
+    """
 
     name = "?"
 
+    slow_start = False
+    """Грузит ли бэкенд веса при первом обращении.
+
+    Нужно интерфейсу, чтобы не обещать долгое ожидание там, где его нет:
+    подставной бэкенд отвечает мгновенно, и подпись «веса грузятся с диска»
+    была бы про него неправдой.
+    """
+
+    def generate_events(self, prompt: str, max_new_tokens: int):
+        """Куски ответа по мере генерации. Сырые: маркеры конца не срезаны."""
+        raise NotImplementedError
+
     def generate(self, prompt: str, max_new_tokens: int,
                  on_text=None) -> str:
-        """`on_text(chunk)` — вызывается по мере генерации, если поддержано."""
-        raise NotImplementedError
+        """Весь ответ целиком. `on_text(chunk)` — по мере поступления."""
+        parts: list[str] = []
+        for chunk in self.generate_events(prompt, max_new_tokens):
+            parts.append(chunk)
+            if on_text:
+                on_text(chunk)
+        return "".join(parts).split(END_MARKER)[0]
+
+
+END_MARKER = "[end of text]"
+"""Чем llama.cpp помечает конец. Может прийти разорванным между кусками,
+поэтому срезается по СОБРАННОМУ тексту, а не по каждому куску отдельно."""
 
 
 class ScriptedBackend(Backend):
@@ -198,14 +233,12 @@ class ScriptedBackend(Backend):
         self._replies = [replies] if isinstance(replies, str) else list(replies)
         self._i = 0
 
-    def generate(self, prompt: str, max_new_tokens: int, on_text=None) -> str:
+    def generate_events(self, prompt: str, max_new_tokens: int):
         if not self._replies:
-            return ""
+            return
         r = self._replies[min(self._i, len(self._replies) - 1)]
         self._i += 1
-        if on_text:
-            on_text(r)
-        return r
+        yield r
 
 
 class TransformersBackend(Backend):
@@ -216,6 +249,7 @@ class TransformersBackend(Backend):
     """
 
     name = "transformers"
+    slow_start = True
 
     def __init__(self, adapter: Adapter, dtype: str = "auto", device: str = "auto"):
         self.adapter = adapter
@@ -288,7 +322,13 @@ class TransformersBackend(Backend):
             model.to("cpu")
         self._model = model
 
-    def generate(self, prompt: str, max_new_tokens: int, on_text=None) -> str:
+    def generate_events(self, prompt: str, max_new_tokens: int):
+        """Одним куском: transformers здесь считает без стриминга.
+
+        Честно отдаём один `yield` вместо имитации потока. Интерфейс увидит
+        отсутствие промежуточных событий и покажет ожидание, а не ложную
+        побуквенную анимацию.
+        """
         import torch
 
         self._load()
@@ -303,7 +343,7 @@ class TransformersBackend(Backend):
         # Возвращаем ТОЛЬКО продолжение: промпт модель повторяет на входе, и
         # если его не срезать, разбор увидит строки графа как «расписание».
         gen = out[0][inputs["input_ids"].shape[1]:]
-        return self._tok.decode(gen, skip_special_tokens=True)
+        yield self._tok.decode(gen, skip_special_tokens=True)
 
 
 def make_backend(adapter: Adapter, device: str | None = None,
@@ -332,12 +372,20 @@ def make_backend(adapter: Adapter, device: str | None = None,
     return TransformersBackend(adapter, dtype=dtype, device=device)
 
 
-# Один процесс llama-completion за раз, на весь инструмент. Без этого
-# повторный /learned (или /learned --bench, пока первый ещё считает) уходит в
-# ВТОРОЙ параллельный subprocess: Textual отменяет СТАРЫЙ воркер только на
-# своём уровне, а subprocess.run() внутри него — блокирующий вызов, он эту
-# отмену не видит и продолжает работать. Найдено по факту: два процесса по
-# 3.6 ГБ каждый одновременно, 1 ГБ свободной памяти, секунды до OOM.
+# Один процесс llama-completion за раз, на весь инструмент. Найдено по факту:
+# два процесса по 3.6 ГБ одновременно, 1 ГБ свободной памяти, секунды до OOM.
+#
+# ИСХОДНАЯ ПРИЧИНА УСТРАНЕНА, блокировка осталась подстраховкой. Раньше отмена
+# до подпроцесса не доходила: Textual снимал свой воркер, а блокирующий вызов
+# внутри про это не знал и считал дальше — отсюда и второй процесс рядом с
+# первым. Теперь генерация — генератор, и `close()` доводит `finally` с
+# `proc.kill()`. Замерено: процессов llama-completion 0 → 1 → 0, где 0 —
+# через четыре секунды после прерывания.
+#
+# Почему блокировку всё-таки не убрали: она стережёт случай, до которого
+# отмена не дотягивается по определению — два ОДНОВРЕМЕННЫХ запуска (`/learned`
+# и `/learned --bench` из разных мест). Там отменять нечего, там надо не дать
+# запуститься второму.
 _GENERATE_LOCK = threading.Lock()
 
 
@@ -357,6 +405,7 @@ class LlamaCppBackend(Backend):
     """
 
     name = "llama.cpp"
+    slow_start = True
 
     def __init__(self, adapter: Adapter, threads: int = 0):
         self.adapter = adapter
@@ -365,22 +414,25 @@ class LlamaCppBackend(Backend):
         self.base_gguf = find_gguf_base()
         self.lora_gguf = gguf_adapter_for(adapter)
 
-    def generate(self, prompt: str, max_new_tokens: int, on_text=None) -> str:
-        import subprocess
-        import tempfile
+    def generate_events(self, prompt: str, max_new_tokens: int):
+        """Куски ответа по мере генерации.
 
+        Блокировка берётся ДО первого `yield` (см. правило в
+        `vliw/core/api.py::stream`): иначе отмена ровно на первом событии
+        прошла бы мимо `finally`, и блокировка осталась бы взятой навсегда —
+        модель больше не запустилась бы до перезапуска инструмента.
+        """
         if not _GENERATE_LOCK.acquire(blocking=False):
             raise RuntimeError(
                 "модель уже считает предыдущий запрос — дождитесь его "
                 "завершения, повторный запуск запустил бы второй процесс "
                 "рядом с первым и вдвое больше памяти")
         try:
-            return self._generate_locked(prompt, max_new_tokens, on_text)
+            yield from self._generate_events_locked(prompt, max_new_tokens)
         finally:
             _GENERATE_LOCK.release()
 
-    def _generate_locked(self, prompt: str, max_new_tokens: int,
-                         on_text=None) -> str:
+    def _generate_events_locked(self, prompt: str, max_new_tokens: int):
         import subprocess
         import tempfile
 
@@ -449,8 +501,7 @@ class LlamaCppBackend(Backend):
                 buf.append(chunk)
                 if echo_done:
                     answer.append(chunk)
-                    if on_text:
-                        on_text(chunk)
+                    yield chunk
                     continue
                 # llama.cpp сперва повторяет промпт, и только потом пишет своё.
                 # Пока не увидели хвост промпта — всё это эхо, наружу не отдаём.
@@ -465,12 +516,19 @@ class LlamaCppBackend(Backend):
             except OSError:
                 pass
 
-        out = "".join(answer) if echo_done else "".join(buf)
-        if not echo_done and tail in out:
-            # Хвост промпта проскочил мимо потокового детектора — срезаем как
-            # раньше, целиком по готовому тексту.
+        if echo_done:
+            return
+
+        # Потоковый детектор эха не сработал: хвост промпта проскочил мимо
+        # него (например, llama.cpp переформатировал пробелы). Тогда наружу
+        # не ушло НИ ОДНОГО куска — спасаем текст по готовому буферу и отдаём
+        # одним событием. Раньше здесь расходились две правды: `generate()`
+        # возвращал спасённый текст, а поток `on_text` в этом случае молчал.
+        out = "".join(buf)
+        if tail in out:
             out = out.split(tail, 1)[1]
-        return out.split("[end of text]")[0]
+        if out:
+            yield out
 
 
 def _torch_lib_dir():

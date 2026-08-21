@@ -762,3 +762,73 @@ class TestConsoleJournalIsATerminal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestMachineMatrixIsInteractive(unittest.TestCase):
+    """Развёрнутая МАШИНА — таблица, которой манипулируют, а не только читают.
+
+    Клик по заголовку столбца пересортировывает строки, живой текстовый
+    фильтр прячет несовпавшие операции. Раньше матрица была вычисленной, но
+    ФИКСИРОВАННОЙ таблицей — ровно тем самым «большим окном с выводом»,
+    который и в свёрнутом виде можно было пересказать столбиком.
+    """
+
+    def _screen(self, body):
+        async def go():
+            app, session = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(app.screen, pilot)
+
+        return asyncio.run(go())
+
+    def test_header_click_toggles_sort(self) -> None:
+        from textual.widgets import DataTable
+        from textual.widgets._data_table import ColumnKey
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot):
+            panel = sc.query_one("#p-machine", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            table = sc.query_one("#machine-matrix", DataTable)
+            default_order = list(sc._matrix_ops)
+            sc.on_data_table_header_selected(
+                DataTable.HeaderSelected(table, ColumnKey("op"), 0, None))
+            await pilot.pause()
+            by_name = list(sc._matrix_ops)
+            # Клик по тому же столбцу второй раз — переворачивает направление.
+            sc.on_data_table_header_selected(
+                DataTable.HeaderSelected(table, ColumnKey("op"), 0, None))
+            await pilot.pause()
+            by_name_rev = list(sc._matrix_ops)
+            return default_order, by_name, by_name_rev
+
+        default_order, by_name, by_name_rev = self._screen(body)
+        self.assertEqual(by_name, sorted(by_name))
+        self.assertEqual(by_name_rev, sorted(by_name, reverse=True))
+        self.assertNotEqual(default_order, by_name,
+                            "сортировка по умолчанию (по числу операций) не "
+                            "совпадает с алфавитной — иначе клик было бы не "
+                            "проверить")
+
+    def test_live_filter_hides_non_matching_rows(self) -> None:
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot):
+            panel = sc.query_one("#p-machine", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            inp = sc.query_one("#machine-filter")
+            inp.focus()
+            inp.value = "div"
+            await pilot.pause()
+            return list(sc._matrix_ops)
+
+        ops = self._screen(body)
+        self.assertEqual(ops, ["DIV"])

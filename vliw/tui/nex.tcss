@@ -470,7 +470,8 @@ ModeScreen.tight #p-console { height: 5; }
 /* Слои живут в тех же панелях и включаются только на разворот: рисование
    зависит от режима, а не от размера, поэтому переключает их код. */
 
-#numbers-why, #machine-matrix, #machine-foot, #detail-graph {
+#numbers-why, #machine-matrix, #machine-foot, #detail-graph,
+#machine-filter-row {
     display: none;
 }
 
@@ -491,6 +492,18 @@ ModeScreen.tight #p-console { height: 5; }
 #machine-matrix > .datatable--cursor { background: $primary 30%; }
 #machine-matrix > .datatable--hover { background: $nex-raised; }
 #machine-foot { height: auto; padding-top: 1; }
+
+#machine-filter-row { height: 1; width: 100%; margin-bottom: 1; }
+#machine-filter-label { width: 8; height: 1; color: $nex-faint; }
+#machine-filter {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $nex-title;
+}
+#machine-filter > .input--placeholder { color: $nex-faint; }
 
 #detail-graph { height: 1fr; width: 100%; }
 #detail-preds, #detail-succs { width: 1fr; height: 100%; }

@@ -21,7 +21,7 @@ from rich.text import Text
 from textual import work
 from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Input, Static
 
 from ...core import SCENARIOS
 from .. import palette
@@ -192,6 +192,12 @@ class LabScreen(ModeScreen):
         self._console_expanded = False
         self._scen_expanded = False
         self._matrix_ops: list[str] = []
+        # Матрица МАШИНЫ — настоящая аналитика: сортировка кликом по любому
+        # столбцу и живой текстовый фильтр по имени операции, а не готовая
+        # таблица, которую только читают.
+        self._matrix_sort_key = "cnt"
+        self._matrix_sort_rev = True
+        self._matrix_filter = ""
         self._diag_filter = "all"      # all | high | medium | low | limit
         self._find_pos = -1            # позиция в отфильтрованном списке
 
@@ -234,6 +240,11 @@ class LabScreen(ModeScreen):
                             VerticalScroll(id="diag-scroll"),
                             title="ДИАГНОЗ", id="p-diag", topic="diag")
                 yield Panel(Static(id="machine"),
+                            Horizontal(
+                                Static("фильтр", id="machine-filter-label"),
+                                Input(placeholder="имя операции — часть строки",
+                                      id="machine-filter"),
+                                id="machine-filter-row"),
                             DataTable(id="machine-matrix", cursor_type="row",
                                       zebra_stripes=False),
                             Static(id="machine-foot"),
@@ -2385,6 +2396,47 @@ class LabScreen(ModeScreen):
     # решётке. Ровно тот вопрос, который возникает над матрицей: «а где это
     # у меня?»
 
+    # Заголовок колонки → чем сортировать и в каком направлении по умолчанию
+    # при первом клике (числовые — сперва по убыванию, «операция» — по
+    # алфавиту). Клик по тому же столбцу второй раз переворачивает; клик по
+    # другому — берёт направление отсюда.
+    MATRIX_SORT_DEFAULT_REV = {"op": False}
+
+    def _matrix_sort_value(self, name: str, key: str, model, counts):
+        op = model.ops[name]
+        if key == "op":
+            return name
+        if key == "lat":
+            return op.latency
+        if key == "cnt":
+            return counts.get(name, 0)
+        if key == "occ":
+            return op.occupancy if op.blocks_channel() else 0
+        if key.startswith("p"):
+            idx = int(key[1:])
+            return 1 if any(p.index == idx and name in p.ops
+                            for p in model.ports) else 0
+        return 0
+
+    def on_data_table_header_selected(self, event) -> None:
+        if event.data_table.id != "machine-matrix":
+            return
+        event.stop()
+        key = event.column_key.value
+        if key == self._matrix_sort_key:
+            self._matrix_sort_rev = not self._matrix_sort_rev
+        else:
+            self._matrix_sort_key = key
+            self._matrix_sort_rev = self.MATRIX_SORT_DEFAULT_REV.get(key, True)
+        self._draw_machine_matrix()
+
+    def on_input_changed(self, event) -> None:
+        if event.input.id != "machine-filter":
+            return
+        event.stop()
+        self._matrix_filter = event.value.strip().lower()
+        self._draw_machine_matrix()
+
     def _draw_machine_matrix(self) -> None:
         table = self.query_one("#machine-matrix", DataTable)
         foot = self.query_one("#machine-foot", Static)
@@ -2398,18 +2450,36 @@ class LabScreen(ModeScreen):
         title = palette.role_hex("title")
         accent = palette.role_hex("accent")
 
-        table.clear(columns=True)
-        table.add_column(Text("операция", style=dim), width=10, key="op")
-        for port in model.ports:
-            table.add_column(Text(port.label, style=dim), width=4,
-                             key=f"p{port.index}")
-        table.add_column(Text("ждать", style=dim), width=7, key="lat")
-        table.add_column(Text("держит порт", style=dim), width=13, key="occ")
-        table.add_column(Text("в участке", style=dim), width=11, key="cnt")
+        # Стрелка в заголовке — единственное, что показывает, чем СЕЙЧАС
+        # отсортирована таблица: без неё пересортировка кликом читалась бы
+        # как случайность, а не как манипуляция данными.
+        def head(label: str, key: str) -> Text:
+            t = Text(label, style=dim)
+            if key == self._matrix_sort_key:
+                t.append(" ▾" if self._matrix_sort_rev else " ▴",
+                        style=palette.role_hex("accent_soft"))
+            return t
 
-        self._matrix_ops = sorted(model.ops,
-                                  key=lambda n: (-counts.get(n, 0),
-                                                 model.ops[n].latency, n))
+        table.clear(columns=True)
+        table.add_column(head("операция", "op"), width=10, key="op")
+        for port in model.ports:
+            table.add_column(head(port.label, f"p{port.index}"), width=4,
+                             key=f"p{port.index}")
+        table.add_column(head("ждать", "lat"), width=7, key="lat")
+        table.add_column(head("держит порт", "occ"), width=13, key="occ")
+        table.add_column(head("в участке", "cnt"), width=11, key="cnt")
+
+        pool = [n for n in model.ops
+                if not self._matrix_filter or self._matrix_filter in n.lower()]
+        self._matrix_ops = sorted(
+            pool,
+            key=lambda n: self._matrix_sort_value(n, self._matrix_sort_key,
+                                                  model, counts),
+            reverse=self._matrix_sort_rev)
+        if not self._matrix_ops:
+            foot.update(Text(f"    ничего не совпало с «{self._matrix_filter}»",
+                             style=faint))
+            return
         for name in self._matrix_ops:
             op = model.ops[name]
             n = counts.get(name, 0)
@@ -2488,9 +2558,11 @@ class LabScreen(ModeScreen):
         matrix = self.query_one("#machine-matrix", DataTable)
         foot = self.query_one("#machine-foot", Static)
         short = self.query_one("#machine", Static)
+        filt = self.query_one("#machine-filter-row")
         panel = self.query_one("#p-machine", Panel)
         matrix.display = self._machine_expanded
         foot.display = self._machine_expanded
+        filt.display = self._machine_expanded
         short.display = not self._machine_expanded
         if self._machine_expanded:
             model = self.app.session.model()

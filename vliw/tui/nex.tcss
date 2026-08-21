@@ -280,12 +280,18 @@ Console {
     scrollbar-size-horizontal: 1;
 }
 
-/* Мостик под решёткой к развёрнутому ДИАГНОЗУ — пуст и невидим, пока
-   решётка не развёрнута (см. GridLink в lab_screen.py). */
+/* Мостик под решёткой к развёрнутому ДИАГНОЗУ. `display: none` — не
+   украшение, а обязательство: в обычном виде он отбирал у расписания целую
+   строку (было видно до т.21, стало до т.20), то есть платил главным окном
+   инструмента за подсказку, которая нужна только развёрнутой решётке.
+   Показывается из кода ровно на время разворота. */
 #grid-link {
+    display: none;
     height: 1;
     padding: 0 1;
 }
+
+#grid-link.on { display: block; }
 
 /* --- ДИАГНОЗ: полный список находок при развороте ---------------------- */
 
@@ -309,8 +315,12 @@ Console {
     background: $nex-raised;
 }
 
+/* Находка про клетку под курсором. Не заливка на всю ширину — она читалась
+   как отдельный блок и спорила с рамкой панели, — а полоса слева: тот же
+   приём, что у цитаты в тексте. */
 .finding-row.here {
-    background: $primary 15%;
+    border-left: thick $primary;
+    padding-left: 1;
 }
 
 #diag-scroll {
@@ -455,3 +465,38 @@ ModeScreen.tight #p-console { height: 5; }
     width: auto;
     margin-top: 1;
 }
+
+/* --- развёрнутые панели РАЗБОРА: у каждой свой слой --------------------- */
+/* Слои живут в тех же панелях и включаются только на разворот: рисование
+   зависит от режима, а не от размера, поэтому переключает их код. */
+
+#numbers-why, #machine-matrix, #machine-foot, #detail-graph {
+    display: none;
+}
+
+#numbers-why { height: 1fr; scrollbar-size-vertical: 1; }
+#numbers-head { height: auto; }
+#numbers-chain { height: auto; }
+#numbers-res { height: auto; }
+
+/* auto, а не 1fr: с 1fr таблица распирала себя на весь экран, и занятость
+   портов уезжала в самый низ — между матрицей и полосами зияло полтысячи
+   пустых строк. Блоки должны идти подряд, пустота — оставаться под ними. */
+#machine-matrix { height: auto; max-height: 60%; background: transparent; }
+#machine-matrix > .datatable--header {
+    background: transparent;
+    color: $nex-dim;
+    text-style: none;
+}
+#machine-matrix > .datatable--cursor { background: $primary 30%; }
+#machine-matrix > .datatable--hover { background: $nex-raised; }
+#machine-foot { height: auto; padding-top: 1; }
+
+#detail-graph { height: 1fr; width: 100%; }
+#detail-preds, #detail-succs { width: 1fr; height: 100%; }
+
+/* Ссылка на операцию: подчёркнута наведением, как ссылка и должна быть.
+   Отдельного цвета не получает — цвет в этом интерфейсе уже занят
+   операциями и режимом, и пятый смысл он бы не выдержал. */
+.instr-link { height: 1; width: 100%; }
+.instr-link:hover { background: $nex-raised; }

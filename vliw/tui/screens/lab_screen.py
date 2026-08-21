@@ -112,6 +112,30 @@ class GridLink(Static):
             self.post_message(self.Picked())
 
 
+class InstrLink(Static):
+    """Ссылка на операцию: клик переводит курсор решётки на её клетку.
+
+    Появилась потому, что развёрнутые панели говорят про операции, а показать
+    их могут только словами: «звено критического пути», «её ждала dc». Ссылка
+    делает то же, что ссылка в тексте, — переводит взгляд, а не пересказывает.
+    Панели она не унифицирует: у ЧИСЕЛ это цепочка предела, у «ПОЧЕМУ ЗДЕСЬ» —
+    соседи по графу, у МАШИНЫ клик вообще по строке таблицы.
+    """
+
+    class Picked(Message):
+        def __init__(self, instr: int) -> None:
+            super().__init__()
+            self.instr = instr
+
+    def __init__(self, instr: int, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.instr = instr
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.instr))
+
+
 class LabScreen(ModeScreen):
     mode = "lab"
     mode_title = "РАЗБОР"
@@ -162,6 +186,10 @@ class LabScreen(ModeScreen):
         # от размера.
         self._diag_expanded = False
         self._grid_expanded = False
+        self._numbers_expanded = False
+        self._machine_expanded = False
+        self._detail_expanded = False
+        self._matrix_ops: list[str] = []
         self._diag_filter = "all"      # all | high | medium | low | limit
         self._find_pos = -1            # позиция в отфильтрованном списке
 
@@ -177,18 +205,33 @@ class LabScreen(ModeScreen):
                                          zebra_stripes=False),
                             GridLink(id="grid-link"),
                             title="РАСПИСАНИЕ", id="p-grid", topic="grid")
-                yield Panel(Static(id="detail"), title="ПОЧЕМУ ЗДЕСЬ",
+                yield Panel(Static(id="detail"),
+                            Horizontal(
+                                Vertical(id="detail-preds"),
+                                Vertical(id="detail-succs"),
+                                id="detail-graph"),
+                            title="ПОЧЕМУ ЗДЕСЬ",
                             id="p-detail", topic="detail")
                 yield Panel(Console(id="console"), title="ВЫВОД КОМАНД",
                             id="p-console", topic="console",
                             has_own_input=True)
             with Vertical(id="lab-right"):
-                yield Panel(Static(id="numbers"), title="ЧИСЛА",
+                yield Panel(Static(id="numbers"),
+                            VerticalScroll(
+                                Static(id="numbers-head"),
+                                Vertical(id="numbers-chain"),
+                                Static(id="numbers-res"),
+                                id="numbers-why"),
+                            title="ЧИСЛА",
                             id="p-numbers", topic="numbers")
                 yield Panel(Horizontal(id="diag-filter"),
                             VerticalScroll(id="diag-scroll"),
                             title="ДИАГНОЗ", id="p-diag", topic="diag")
-                yield Panel(Static(id="machine"), title="МАШИНА",
+                yield Panel(Static(id="machine"),
+                            DataTable(id="machine-matrix", cursor_type="row",
+                                      zebra_stripes=False),
+                            Static(id="machine-foot"),
+                            title="МАШИНА",
                             id="p-machine", topic="machine")
 
     def on_ready(self) -> None:
@@ -949,19 +992,91 @@ class LabScreen(ModeScreen):
         elif topic == "grid":
             self._grid_expanded = True
             self._draw_grid_link()
+        elif topic == "numbers":
+            self._numbers_expanded = True
+            self._draw_numbers()
+        elif topic == "machine":
+            self._machine_expanded = True
+            self._draw_machine()
+        elif topic == "detail":
+            self._detail_expanded = True
+            self._draw_detail()
 
     def on_panel_collapsed(self, event) -> None:
         event.stop()
         self._diag_expanded = False
         self._grid_expanded = False
+        self._numbers_expanded = False
+        self._machine_expanded = False
+        self._detail_expanded = False
         self._draw_diag()
         self._draw_grid_link()
+        self._draw_numbers()
+        self._draw_machine()
+        self._draw_detail()
+
+    def _jump_to_instr(self, instr: int) -> bool:
+        """Курсор решётки — на клетку этой операции. False, если её там нет.
+
+        Общий низ для всех ссылок между панелями: цепочка предела в ЧИСЛАХ,
+        соседи по графу в «ПОЧЕМУ ЗДЕСЬ», строка операции в МАШИНЕ. Панели
+        разные, а «показать это место» у них одно и то же — и оно обязано
+        быть одним, иначе развёрнутые блоки перестают быть одним экраном.
+        """
+        pos = next((rc for rc, i in self._cells.items() if i == instr), None)
+        if pos is None:
+            return False
+        grid = self.query_one("#grid", ScheduleGrid)
+        grid.move_cursor(row=pos[0], column=pos[1])
+        self._draw_detail()
+        self._draw_diag()
+        self._draw_grid_link()
+        return True
+
+    def _show_instr(self, instr: int) -> None:
+        """Перейти к операции и развернуть РЕШЁТКУ — там, где место видно.
+
+        Ссылка обещала показать место; оставить развёрнутой исходную панель
+        значило бы обещание не сдержать — курсор уехал бы за кадром.
+        """
+        if not self._jump_to_instr(instr):
+            return
+        self._numbers_expanded = False
+        self._machine_expanded = False
+        self._detail_expanded = False
+        self._grid_expanded = True
+        self.screen.minimize()
+        self.screen.maximize(self.query_one("#p-grid", Panel), container=False)
+        self._draw_numbers()
+        self._draw_machine()
+        self._draw_detail()
+        self._draw_grid_link()
+
+    def on_instr_link_picked(self, event) -> None:
+        event.stop()
+        self._show_instr(event.instr)
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Строка матрицы МАШИНЫ — переход к первой такой операции участка."""
+        if event.data_table.id != "machine-matrix":
+            return
+        event.stop()
+        idx = event.cursor_row
+        if not (0 <= idx < len(self._matrix_ops)):
+            return
+        op = self._matrix_ops[idx]
+        dag = self.app.session.dag_obj
+        first = next((i.id for i in dag if i.op == op), None)
+        if first is None:
+            return
+        self._show_instr(first)
 
     def _draw_grid_link(self) -> None:
         try:
             link = self.query_one("#grid-link", GridLink)
         except Exception:
             return
+        link.set_class(self._grid_expanded, "on")
         if not self._grid_expanded:
             link.active = False
             link.update("")
@@ -1215,7 +1330,151 @@ class LabScreen(ModeScreen):
         self._detail_base = text
         self._render_detail()
 
+    # --- ПОЧЕМУ ЗДЕСЬ развёрнутое: паспорт операции и ходьба по графу -------
+    #
+    # Свёрнутая панель отвечает про одну клетку и замолкает. Развёрнутая
+    # добавляет то, чего в решётке нет вообще: окно, в котором операция могла
+    # бы стоять (раньше всех зависимостей — позже без удлинения расписания),
+    # запас до критического пути, и обе стороны графа списком. Соседи —
+    # ссылки: по ним ходят. Получается не «панель с текстом», а обход
+    # зависимостей, ради которого раньше приходилось читать /explain подряд.
+
+    def _draw_detail_graph(self) -> None:
+        preds_box = self.query_one("#detail-preds", Vertical)
+        succs_box = self.query_one("#detail-succs", Vertical)
+        graph = self.query_one("#detail-graph", Horizontal)
+        graph.display = self._detail_expanded
+        if not self._detail_expanded:
+            return
+        preds_box.remove_children()
+        succs_box.remove_children()
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        title = palette.role_hex("title")
+        target = self._cursor_target()
+        instr = target[3] if (target and target[0] == "такт") else None
+        if instr is None:
+            preds_box.mount(Static(Text("наведите курсор на операцию",
+                                        style=faint)))
+            return
+        dag = self.app.session.dag_obj
+        placed = self.base.schedule.placements if self.base else {}
+        model = self.app.session.model()
+
+        def cone(seed: int, step) -> dict[int, int]:
+            """Все, до кого дотягивается зависимость, с глубиной обхода.
+
+            Прямых соседей мало (у dc в slotclash по одному с каждой стороны),
+            и панель из двух строк не стоила разворота. Смысл же в конусе:
+            операцию держит не сосед, а вся цепь за ним — её и показываем,
+            отступом по глубине.
+            """
+            out: dict[int, int] = {}
+            frontier = [(seed, 0)]
+            while frontier:
+                node, d = frontier.pop()
+                for nxt in step(node):
+                    if nxt in out and out[nxt] <= d + 1:
+                        continue
+                    out[nxt] = d + 1
+                    frontier.append((nxt, d + 1))
+            return out
+
+        def column(box, head: str, cone_map: dict[int, int], direct: int,
+                   phrase) -> None:
+            h = Text()
+            h.append(head + "   ", style=palette.role_hex("accent"))
+            h.append(f"{direct} напрямую", style=title)
+            if len(cone_map) > direct:
+                h.append(f",  {len(cone_map)} всего по цепи", style=dim)
+            h.append("\n", style=dim)
+            box.mount(Static(h))
+            if not cone_map:
+                box.mount(Static(Text("   никого — край участка\n",
+                                      style=faint)))
+                return
+            for i, depth in sorted(cone_map.items(),
+                                   key=lambda kv: (kv[1], placed[kv[0]].cycle
+                                                   if kv[0] in placed else 0)):
+                ins = dag[i]
+                row = Text()
+                # Отступ по глубине: прямые соседи у края, дальняя родня
+                # правее. Форма сразу показывает, длинная цепь или широкая.
+                row.append("  " + "· " * (depth - 1), style=faint)
+                row.append(ins.name[:5].ljust(6), style=title if depth == 1
+                           else dim)
+                row.append(ins.op.lower()[:3].ljust(4),
+                           style=palette.op_style(ins.op))
+                pl = placed.get(i)
+                row.append((f"т.{pl.cycle}" if pl else "—").rjust(5), style=dim)
+                row.append("  " + phrase(i, depth), style=faint)
+                box.mount(InstrLink(i, row, classes="instr-link"))
+
+        up = cone(instr, lambda n: dag[n].preds)
+        down = cone(instr, lambda n: dag.succs[n])
+        own = placed.get(instr)
+        own_ready = (own.cycle + model.latency(dag[instr].op)) if own else None
+
+        def up_note(i: int, depth: int) -> str:
+            pl = placed.get(i)
+            if pl is None:
+                return ""
+            ready = pl.cycle + model.latency(dag[i].op)
+            if depth > 1:
+                return f"готова к т.{ready}"
+            return f"готова к т.{ready} — с неё и начался отсчёт"
+
+        def down_note(i: int, depth: int) -> str:
+            if depth > 1 or own_ready is None:
+                return ""
+            return f"не могла раньше т.{own_ready}"
+
+        column(preds_box, "ЖДАЛА", up, len(dag[instr].preds), up_note)
+        column(succs_box, "ДЕРЖИТ", down, len(dag.succs[instr]), down_note)
+
+    def _detail_window(self, instr: int) -> Text:
+        """Окно операции: раньше всех зависимостей, позже без удлинения.
+
+        Именно этого не хватало, чтобы понять «а могла ли она стоять иначе»:
+        решётка показывает один такт и молчит о том, был ли выбор. Запас 0
+        значит, что операция на критическом пути и двигать её некуда.
+        """
+        met, dag = self.met, self.app.session.dag_obj
+        t = Text()
+        if met is None or self.base is None:
+            return t
+        dim = palette.role_hex("dim")
+        title = palette.role_hex("title")
+        asap = met.asap[instr]
+        alap = met.critical_path_bound - met.height[instr]
+        pl = self.base.schedule.placements.get(instr)
+        slack = alap - asap
+        t.append("\n\n")
+        t.append("окно  ", style=dim)
+        t.append(f"т.{asap}", style=title)
+        t.append(" … ", style=dim)
+        t.append(f"т.{alap}", style=title)
+        t.append("      стоит  ", style=dim)
+        t.append(f"т.{pl.cycle}" if pl else "—", style=title)
+        t.append("      запас  ", style=dim)
+        if slack <= 0:
+            t.append("0 — на критическом пути",
+                     style=palette.role_hex("error"))
+        else:
+            t.append(f"{slack} т.", style=palette.role_hex("success"))
+        return t
+
     def _draw_detail(self) -> None:
+        panel = self.query_one("#p-detail", Panel)
+        if self._detail_expanded:
+            target = self._cursor_target()
+            instr = target[3] if (target and target[0] == "такт") else None
+            dag = self.app.session.dag_obj
+            name = dag[instr].name if instr is not None else "—"
+            panel.set_title(f"ПОЧЕМУ ЗДЕСЬ   ·   {name}   ·   обход графа")
+        else:
+            panel.set_title("ПОЧЕМУ ЗДЕСЬ")
+        self._draw_detail_graph()
         if self.view == "model":
             self._set_detail(self._detail_model())
             return
@@ -1234,7 +1493,11 @@ class LabScreen(ModeScreen):
         if instr is None:
             self._set_detail(self._detail_empty(cycle, port))
         else:
-            self._set_detail(self._detail_instr(cycle, port, instr))
+            t = self._detail_instr(cycle, port, instr)
+            if self._detail_expanded:
+                t = t.copy()
+                t.append_text(self._detail_window(instr))
+            self._set_detail(t)
 
     def _detail_model(self) -> Text:
         """Почему клетка красная — на месте, а не строчкой в отчёте.
@@ -1438,7 +1701,235 @@ class LabScreen(ModeScreen):
 
     # --- правая колонка ---------------------------------------------------
 
+    # --- ЧИСЛА развёрнутые: откуда взялся предел ---------------------------
+    #
+    # Свёрнутая панель отвечает «сколько». Развёрнутая — «почему столько»:
+    # предел это max(критический путь, ресурсы), и обе половины показаны так,
+    # что их видно, а не сказано словом. Критический путь — цепочкой операций
+    # со ссылками в решётку; ресурсная граница — делением «операций на порты».
+    # Это не список находок (ДИАГНОЗ) и не матрица (МАШИНА): это вывод числа.
+
+    def _critical_chain(self) -> list[int]:
+        """Цепочка операций, из которой и складывается критический путь.
+
+        «Предел 22» сам по себе не объясняет ничего: непонятно, какие именно
+        операции его держат. Цепочка восстанавливается по метрикам: операция
+        лежит на критическом пути, если asap+height равно границе, а следующее
+        звено — тот её потомок, что начинается ровно тогда, когда предыдущее
+        звено готово.
+        """
+        met = self.met
+        if met is None:
+            return []
+        dag = self.app.session.dag_obj
+        model = self.app.session.model()
+        cp = met.critical_path_bound
+        on = [i for i in range(len(dag)) if met.asap[i] + met.height[i] == cp]
+        if not on:
+            return []
+        cur = min(on, key=lambda i: met.asap[i])
+        chain = [cur]
+        seen = {cur}
+        while True:
+            lat = model.latency(dag[cur].op)
+            nxt = [x for x in dag.succs[cur]
+                   if x not in seen
+                   and met.asap[x] == met.asap[cur] + lat
+                   and met.asap[x] + met.height[x] == cp]
+            if not nxt:
+                break
+            cur = nxt[0]
+            seen.add(cur)
+            chain.append(cur)
+        return chain
+
+    def _resource_groups(self):
+        """Из чего сложена ресурсная граница: (порты, операции, слотов, тактов).
+
+        Повторяет группировку `compute_metrics`: операции, исполнимые лишь на
+        части портов, упираются в эту часть раньше, чем машина упрётся в свою
+        ширину. Именно это и надо показать — иначе «ресурсы 4» выглядит числом
+        с потолка.
+        """
+        dag = self.app.session.dag_obj
+        model = self.app.session.model()
+        groups: dict[tuple[int, ...], int] = {}
+        names: dict[tuple[int, ...], set[str]] = {}
+        for ins in dag:
+            chans = model.channels_for(ins.op)
+            groups[chans] = groups.get(chans, 0) + model.occupancy(ins.op)
+            names.setdefault(chans, set()).add(ins.op)
+        out = []
+        for chans in groups:
+            if not chans:
+                continue
+            total = sum(v for other, v in groups.items()
+                        if set(other) <= set(chans))
+            ops = sorted({o for other, ns in names.items()
+                          if set(other) <= set(chans) for o in ns})
+            out.append((chans, ops, total, -(-total // len(chans))))
+        out.sort(key=lambda r: (-r[3], len(r[0])))
+        return out
+
+    SCALE_LEFT = 22
+    """Ширина подписи слева от шкалы: имя, операция, такт выдачи."""
+
+    def _scale(self) -> tuple[int, int]:
+        """Сколько символов на такт. Один такт — одна ширина везде.
+
+        Разворот даёт 150 колонок, и тратить их на колонку цифр — то же
+        расточительство, что и в свёрнутом виде. Масштаб общий для всех
+        полос, иначе диаграмма врёт про длительность.
+        """
+        # Ширину берём у экрана, а не у панели: рисуем в тот же кадр, в
+        # котором панель разворачивают, и её собственный size.width ещё
+        # старый — 42 колонки правой колонки. Масштаб схлопывался в один
+        # символ на такт, то есть диаграмма выходила вчетверо мельче, чем
+        # позволяет экран. Развёрнутая панель занимает его целиком, так что
+        # ширина экрана и есть её ширина.
+        w = max(60, self.app.size.width - 6)
+        span = max(self.base.schedule.makespan, 1) if self.base else 1
+        room = max(20, w - self.SCALE_LEFT - 18)
+        return max(1, room // span), self.SCALE_LEFT
+
+    def _ruler(self, cpc: int) -> Text:
+        """Линейка тактов над диаграммой — иначе длина ни к чему не привязана."""
+        faint = palette.role_hex("faint")
+        span = max(self.base.schedule.makespan, 1) if self.base else 1
+        step = 5 if cpc * 5 >= 6 else 10
+        line = ""
+        for c in range(0, span + 1, step):
+            mark = f"т.{c}" if c == 0 else str(c)
+            pad = c * cpc - len(line)
+            if pad < 0:
+                continue
+            line += " " * pad + mark
+        return Text(" " * self.SCALE_LEFT + line, style=faint)
+
+    def _draw_numbers_why(self) -> None:
+        head = self.query_one("#numbers-head", Static)
+        chain_box = self.query_one("#numbers-chain", Vertical)
+        res = self.query_one("#numbers-res", Static)
+        chain_box.remove_children()
+        if self.base is None or self.met is None:
+            head.update(Text("расписание ещё не посчитано",
+                             style=palette.role_hex("faint")))
+            res.update("")
+            return
+        dag = self.app.session.dag_obj
+        model = self.app.session.model()
+        met = self.met
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        title = palette.role_hex("title")
+        accent = palette.role_hex("accent")
+        b = self.base.schedule.makespan
+        o = self.orc.schedule.makespan
+        lb = met.lower_bound
+        cp, rb = met.critical_path_bound, met.resource_bound
+        cpc, left = self._scale()
+
+        # Три полосы по ТОЙ ЖЕ шкале, что и диаграмма ниже: такт везде одной
+        # ширины, поэтому «на 1 т. длиннее предела» — видимый хвост, а не
+        # цифра, которую надо вычитать в уме.
+        t = Text()
+        for name, val, style in (
+                ("baseline", b, title),
+                ("оракул", o, palette.role_hex("success")),
+                ("предел", lb, accent),
+        ):
+            t.append(("  " + name).ljust(left), style=dim)
+            t.append("█" * (min(val, lb) * cpc), style=style)
+            if val > lb:
+                # Хвост сверх предела — ровно то, что вообще можно отыграть.
+                t.append("▒" * ((val - lb) * cpc),
+                         style=palette.role_hex("error"))
+            t.append(f"  {val}", style=style)
+            if val > lb:
+                t.append(f"   +{val - lb} т. сверх предела",
+                         style=palette.role_hex("error"))
+            t.append("\n")
+        t.append("\n")
+        t.append("  предел ", style=dim)
+        t.append(str(lb), style=f"{accent} bold")
+        t.append("  =  max(  критический путь ", style=dim)
+        t.append(str(cp), style=title if cp >= rb else faint)
+        t.append(" ,  ресурсы ", style=dim)
+        t.append(str(rb), style=title if rb >= cp else faint)
+        t.append(" )", style=dim)
+        head.update(t)
+
+        chain = self._critical_chain()
+        placed = self.base.schedule.placements
+        hdr = Text()
+        hdr.append("\n  КРИТИЧЕСКИЙ ПУТЬ  ", style=accent)
+        hdr.append(f"{cp} т.", style=f"{title} bold")
+        if cp >= rb:
+            hdr.append("   ← он и держит предел",
+                       style=palette.role_hex("accent_soft"))
+        hdr.append("   ·   цепочка сцеплена без просветов — двигать нечего",
+                   style=faint)
+        chain_box.mount(Static(hdr))
+        chain_box.mount(Static(self._ruler(cpc)))
+        if not chain:
+            chain_box.mount(Static(Text("  цепочка не восстановилась",
+                                        style=faint)))
+        else:
+            for i in chain:
+                ins = dag[i]
+                lat = model.latency(ins.op)
+                pl = placed.get(i)
+                row = Text()
+                # Префикс ровно SCALE_LEFT символов: 2+6+4+6+4. Линейка тактов
+                # отбивается тем же числом, и стоит разойтись на символ — вся
+                # диаграмма начинает врать про такты.
+                row.append("  ")
+                row.append(ins.name[:5].ljust(6), style=title)
+                row.append(ins.op.lower()[:3].ljust(4),
+                           style=palette.op_style(ins.op))
+                row.append((f"т.{pl.cycle}" if pl else "—").rjust(6) + "    ",
+                           style=dim)
+                # Отрезок стоит на самом раннем возможном такте и длиной ровно
+                # в латентность: видно, из чего сложились эти такты.
+                row.append(" " * (met.asap[i] * cpc))
+                row.append("█" * max(1, lat * cpc),
+                           style=palette.op_style(ins.op))
+                row.append(f" {lat}", style=faint)
+                chain_box.mount(InstrLink(i, row, classes="instr-link"))
+
+        r = Text()
+        r.append("\n  РЕСУРСЫ  ", style=accent)
+        r.append(f"{rb} т.", style=f"{title} bold")
+        if rb > cp:
+            r.append("   ← он и держит предел",
+                     style=palette.role_hex("accent_soft"))
+        r.append("   ·   операций больше, чем портов, которые их исполняют\n",
+                 style=faint)
+        for chans, ops, slots, need in self._resource_groups():
+            label = " ".join(model.port_label(c) for c in chans)
+            r.append("  " + label.ljust(24)[:24], style=dim)
+            r.append(f"{slots:>3} слот.", style=title)
+            r.append(f"  ÷ {len(chans)} порт. =", style=dim)
+            r.append(f"{need:>3} т.", style=title)
+            r.append("   " + "/".join(o.lower() for o in ops)[:26],
+                     style=palette.op_style(ops[0]) if ops else dim)
+            r.append("\n")
+        r.append("\n  строка пути — ссылка: клик ведёт к этой операции "
+                 "в решётке.", style=palette.role_hex("accent_soft"))
+        res.update(r)
+
     def _draw_numbers(self) -> None:
+        # Развёрнутая панель — другой инструмент, а не тот же текст крупнее.
+        why = self.query_one("#numbers-why", VerticalScroll)
+        short = self.query_one("#numbers", Static)
+        why.display = self._numbers_expanded
+        short.display = not self._numbers_expanded
+        panel = self.query_one("#p-numbers", Panel)
+        if self._numbers_expanded:
+            panel.set_title("ЧИСЛА   ·   откуда взялся предел")
+            self._draw_numbers_why()
+            return
+        panel.set_title("ЧИСЛА")
         target = self.query_one("#numbers", Static)
         if self.base is None:
             return
@@ -1638,7 +2129,121 @@ class LabScreen(ModeScreen):
             row = FindingItem(i, t, classes="finding-row" + (" here" if here else ""))
             scroll.mount(row)
 
+    # --- МАШИНА развёрнутая: матрица возможностей ---------------------------
+    #
+    # Свёрнутая панель — справка в три строки. Развёрнутая — сама матрица:
+    # какая операция на каком порту исполнима, сколько её ждать и сколько
+    # таких операций в этом участке. Это не список и не вывод числа, это
+    # таблица, и строка в ней кликабельна: строка → первая такая операция в
+    # решётке. Ровно тот вопрос, который возникает над матрицей: «а где это
+    # у меня?»
+
+    def _draw_machine_matrix(self) -> None:
+        table = self.query_one("#machine-matrix", DataTable)
+        foot = self.query_one("#machine-foot", Static)
+        model = self.app.session.model()
+        dag = self.app.session.dag_obj
+        counts = dag.op_counts() if dag is not None else {}
+        sole = model.sole_host_ops()
+        mono = {op for ops in sole.values() for op in ops}
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        title = palette.role_hex("title")
+        accent = palette.role_hex("accent")
+
+        table.clear(columns=True)
+        table.add_column(Text("операция", style=dim), width=10, key="op")
+        for port in model.ports:
+            table.add_column(Text(port.label, style=dim), width=4,
+                             key=f"p{port.index}")
+        table.add_column(Text("ждать", style=dim), width=7, key="lat")
+        table.add_column(Text("держит порт", style=dim), width=13, key="occ")
+        table.add_column(Text("в участке", style=dim), width=11, key="cnt")
+
+        self._matrix_ops = sorted(model.ops,
+                                  key=lambda n: (-counts.get(n, 0),
+                                                 model.ops[n].latency, n))
+        for name in self._matrix_ops:
+            op = model.ops[name]
+            n = counts.get(name, 0)
+            row = [Text(name.lower(), style=palette.op_style(name)
+                        if n else faint)]
+            for port in model.ports:
+                if name not in port.ops:
+                    row.append(Text("  ·", style=faint))
+                elif name in mono:
+                    # Единственный исполнитель — то самое место, где расписание
+                    # чаще всего и упирается. Помечено формой, не только цветом.
+                    row.append(Text("  ◆", style=accent))
+                else:
+                    row.append(Text("  ●", style=palette.op_style(name)))
+            row.append(Text(f"{op.latency} т.".rjust(6),
+                            style=title if n else faint))
+            row.append(Text((f"{op.occupancy} т." if op.blocks_channel()
+                             else "—").rjust(11),
+                            style=palette.role_hex("warning")
+                            if op.blocks_channel() else faint))
+            row.append(Text((str(n) if n else "—").rjust(9),
+                            style=title if n else faint))
+            table.add_row(*row)
+
+        # Занятость портов ЭТИМ участком. Матрица говорит, что порт умеет;
+        # без второй половины непонятно, при чём тут расписание. На slotclash
+        # ,5 занят 11 т. из 23 — это и есть узкое место, видимое длиной
+        # полосы, а не выводимое из чисел в трёх разных панелях.
+        t = Text()
+        if self.base is not None:
+            busy = self.base.schedule.busy_map()
+            span = max(self.base.schedule.makespan, 1)
+            per: dict[int, int] = {}
+            for (_c, port) in busy:
+                per[port] = per.get(port, 0) + 1
+            worst = max(per.values(), default=0)
+            t.append("\n  ЗАНЯТОСТЬ ПОРТОВ", style=accent)
+            t.append(f"   ·   участок укладывается в {span} т.\n", style=faint)
+            for port in model.ports:
+                held = per.get(port.index, 0)
+                t.append("  " + port.label.ljust(5), style=dim)
+                bar_w = max(0, min(48, round(48 * held / span)))
+                t.append("█" * bar_w, style=accent if held == worst and held
+                         else palette.role_hex("success"))
+                t.append("·" * (48 - bar_w), style=faint)
+                t.append(f"  {held:>3} т.", style=title if held else faint)
+                t.append(f"{held * 100 // span:>5}%", style=dim if held
+                         else faint)
+                if held == worst and held:
+                    t.append("   ← держит участок", style=accent)
+                elif not held:
+                    t.append("   не занят ни разу", style=faint)
+                t.append("\n")
+            t.append("\n")
+        t.append("◆ ", style=accent)
+        t.append("единственный исполнитель", style=dim)
+        t.append("      ● исполним      · нет\n", style=faint)
+        # Откуда цифры. Проект держится на том, что измеренное отделено от
+        # предположенного, и в матрице это должно быть видно, а не в отчёте.
+        srcs = {model.matrix_source}
+        srcs |= {o.latency_source for o in model.ops.values()}
+        t.append("источник: " + ", ".join(sorted(srcs)), style=faint)
+        t.append("        строка → первая такая операция в решётке",
+                 style=palette.role_hex("accent_soft"))
+        foot.update(t)
+
     def _draw_machine(self) -> None:
+        matrix = self.query_one("#machine-matrix", DataTable)
+        foot = self.query_one("#machine-foot", Static)
+        short = self.query_one("#machine", Static)
+        panel = self.query_one("#p-machine", Panel)
+        matrix.display = self._machine_expanded
+        foot.display = self._machine_expanded
+        short.display = not self._machine_expanded
+        if self._machine_expanded:
+            model = self.app.session.model()
+            panel.set_title(f"МАШИНА   ·   {model.name}   ·   "
+                            f"{model.width} портов   ·   что где исполнимо")
+            self._draw_machine_matrix()
+            return
+        panel.set_title("МАШИНА")
         target = self.query_one("#machine", Static)
         model = self.app.session.model()
         dim = palette.role_hex("dim")

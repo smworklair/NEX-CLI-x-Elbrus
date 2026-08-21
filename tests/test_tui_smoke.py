@@ -266,7 +266,10 @@ class TestModelViewIsLive(unittest.TestCase):
                     sc._model_done(None)
                     await pilot.pause()
                     cur = sc.query_one("#grid").cursor_coordinate
+                    target = sc._cursor_target()
                     out = {
+                        "cursor_cycle": target[1] if target else None,
+                        "cursor_port": cur.column,
                         "view": sc.view,
                         "placed_live": placed_live,
                         "illegal": sorted(sc._model_illegal()),
@@ -300,9 +303,13 @@ class TestModelViewIsLive(unittest.TestCase):
         На `slotclash` ошибка модели в такте 22 из 23: без этого шага
         заголовок пишет «незаконных 1», а увидеть её можно, только
         пролистав двадцать два такта вниз.
+
+        Проверяем ТАКТ, а не номер строки: простои схлопнуты, и строка
+        решётке больше не равна такту. Именно ради этого и заведён
+        `_cursor_target()` — он единственный знает про схлопывание.
         """
         got = self._run()
-        self.assertEqual(got["cursor"], (22, 0))
+        self.assertEqual((got["cursor_cycle"], got["cursor_port"]), (22, 0))
 
     def test_repair_is_a_separate_action(self) -> None:
         """Само по себе ничего не чинится: сырой ответ остаётся сырым."""

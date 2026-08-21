@@ -32,6 +32,17 @@ EMPTY = "·"
 VIEWS = {"baseline": "baseline", "oracle": "оракул", "model": "модель"}
 
 
+def _takt(n: int) -> str:
+    """такт / такта / тактов — по числу.
+
+    Мелочь, но заголовок решётки читают чаще любой другой строки в
+    инструменте, и «23 тактов» там мозолит глаза каждый запуск.
+    """
+    if 11 <= n % 100 <= 14:
+        return "тактов"
+    return {1: "такт", 2: "такта", 3: "такта", 4: "такта"}.get(n % 10, "тактов")
+
+
 def _wrapped(text: str, width: int, indent: int) -> str:
     """Перенос с висячим отступом: продолжение находки не липнет к краю."""
     import textwrap
@@ -95,6 +106,9 @@ class LabScreen(ModeScreen):
         self._cell_ai_state = ""        # "" | "ждёт" | "готово" | текст ошибки
         self._cell_ai_on = True
         self._cell_ai_facts: list[str] = []
+        # Строка решётки больше не равна такту: простои схлопнуты в одну.
+        self._rows: list[tuple] = []
+        self._expanded_gaps: set[tuple[int, int]] = set()
 
     # --- раскладка --------------------------------------------------------
 
@@ -398,11 +412,16 @@ class LabScreen(ModeScreen):
     def _cursor_facts(self) -> list[str]:
         """Про клетку под курсором — то же, что видно в панели."""
         s = self.app.session
-        grid = self.query_one("#grid", ScheduleGrid)
-        coord = grid.cursor_coordinate
-        cycle, port = coord.row, coord.column
+        target = self._cursor_target()
+        if target is None:
+            return []
         machine, dag = s.model(), s.dag_obj
-        instr = self._cells.get((cycle, port))
+        if target[0] == "простой":
+            f = self._gap_finding(target[1], target[2])
+            if f is None:
+                return []
+            return [f"Простой {f.cycles_lost} т., {f.where}.", f.why, f.fix]
+        _kind, cycle, port, instr = target
         head = (f"Курсор стоит на такте {cycle}, порт "
                 f"{machine.port_label(port)} (вид «{VIEWS.get(self.view, self.view)}»).")
         if instr is None:
@@ -513,7 +532,8 @@ class LabScreen(ModeScreen):
         # долго после того, как его выдали. В решётке видна выдача, поэтому
         # обе величины стоят в заголовке рядом, чтобы их не путать.
         if span == sched.makespan:
-            title = f"РАСПИСАНИЕ   {VIEWS[self.view]}   {sched.makespan} тактов"
+            title = (f"РАСПИСАНИЕ   {VIEWS[self.view]}   "
+                     f"{sched.makespan} {_takt(sched.makespan)}")
         else:
             title = (f"РАСПИСАНИЕ   {VIEWS[self.view]}   выдача {span} т."
                      f"   ·   всё готово к т.{sched.makespan}")
@@ -556,6 +576,60 @@ class LabScreen(ModeScreen):
             title += f"   ·   {sched.makespan} тактов"
         self._render_grid(sched, title, illegal)
 
+    MIN_GAP = 3
+    """Со скольких подряд пустых тактов простой схлопывается в одну строку.
+
+    Три — не круглое число, а порог доктора: короче трёх он простой находкой
+    и не считает (`_rule_idle_stretches`). Пороги должны совпадать, иначе
+    решётка схлопывает то, чего диагноз не объясняет.
+    """
+
+    def _gaps(self, sched) -> list[tuple[int, int]]:
+        """Отрезки тактов без единой выдачи: [(первый, последний), …].
+
+        ЗАЧЕМ ЭТО ВООБЩЕ. Замерено по всем сценариям: пустые такты занимают
+        от 23% до 69% строк решётки (simple4 — 69%, ptrchase — 62%,
+        slotclash — 52%). До сих пор через них приходилось скроллить, а
+        объяснение простоя лежало в панели ДИАГНОЗ, то есть в другом месте
+        экрана и другими словами.
+
+        При этом простой — не пустое место, а ГЛАВНОЕ, что показывает
+        инструмент: именно там теряются такты. Двенадцать одинаковых пустых
+        строк прячут находку ровно тем, что показывают её слишком подробно.
+        """
+        used = {p.cycle for p in sched.placements.values()}
+        out: list[tuple[int, int]] = []
+        span = max(sched.span_cycles, 1)
+        t = 0
+        while t < span:
+            if t in used:
+                t += 1
+                continue
+            start = t
+            while t < span and t not in used:
+                t += 1
+            if t - start >= self.MIN_GAP:
+                out.append((start, t - 1))
+        return out
+
+    def _gap_finding(self, start: int, end: int):
+        """Находка доктора про этот простой — источник объяснения."""
+        for f in self._findings():
+            if f.code == "idle-stall" and f.where == f"такты {start}–{end}":
+                return f
+        return None
+
+    def _findings(self):
+        if self.base is None or self.met is None:
+            return []
+        try:
+            from ...core.doctor import diagnose
+
+            return diagnose(self.app.session.dag_obj, self.app.session.model(),
+                            self.base.schedule, self.met).findings
+        except Exception:
+            return []
+
     def _render_grid(self, sched, title: str,
                      illegal: frozenset[int] = frozenset()) -> None:
         model = self.app.session.model()
@@ -569,8 +643,23 @@ class LabScreen(ModeScreen):
         busy = sched.busy_map()
         crit = self._critical_set()
         self._cells = {}
+        # Строка решётки больше НЕ равна такту: простои схлопнуты. Список
+        # переводит номер строки обратно — ("такт", n) или ("простой", a, b).
+        self._rows = []
         span = max(sched.span_cycles, 1)
-        for cycle in range(span):
+        gaps = {a: b for a, b in self._gaps(sched)
+                if (a, b) not in self._expanded_gaps}
+
+        cycle = 0
+        while cycle < span:
+            if cycle in gaps:
+                end = gaps[cycle]
+                grid.add_row(*self._gap_cells(cycle, end, model.width),
+                             label=self._gap_label(cycle, end))
+                self._rows.append(("простой", cycle, end))
+                cycle = end + 1
+                continue
+            row = len(self._rows)
             cells = []
             issued = 0
             for port in range(model.width):
@@ -579,19 +668,50 @@ class LabScreen(ModeScreen):
                     cells.append(Text(f" {EMPTY}", style=palette.role_hex("faint")))
                     continue
                 instr, head = slot
-                self._cells[(cycle, port)] = instr
+                self._cells[(row, port)] = instr
                 if not head:
                     cells.append(Text(f" {CONT}", style=palette.op_style(dag[instr].op)))
                     continue
                 issued += 1
                 cells.append(self._cell_text(dag, instr, crit, instr in illegal))
-            grid.add_row(*cells, label=self._row_label(cycle, issued, model.width),
-                         key=str(cycle))
+            grid.add_row(*cells, label=self._row_label(cycle, issued, model.width))
+            self._rows.append(("такт", cycle))
+            cycle += 1
+
         self.query_one("#p-grid", Panel).set_title(title)
-        if span:
-            row, col = self._want_cell or (0, 0)
-            grid.move_cursor(row=min(row, span - 1),
-                             column=min(col, model.width - 1))
+        if self._rows:
+            want = self._want_cell or (0, 0)
+            grid.move_cursor(row=min(self._row_of_cycle(want[0]), len(self._rows) - 1),
+                             column=min(want[1], model.width - 1))
+
+    def _row_of_cycle(self, cycle: int) -> int:
+        """Номер строки, в которой виден этот такт (или его простой)."""
+        for i, r in enumerate(self._rows):
+            if r[0] == "такт" and r[1] == cycle:
+                return i
+            if r[0] == "простой" and r[1] <= cycle <= r[2]:
+                return i
+        return 0
+
+    def _gap_cells(self, start: int, end: int, width: int) -> list[Text]:
+        """Строка простоя: сплошная черта вместо точек «слот пуст».
+
+        Разница видна боковым зрением и означает ровно то, что произошло:
+        не «здесь ничего не выдали в этот такт», а «здесь не выдавали
+        несколько тактов подряд».
+        """
+        style = palette.role_hex("faint")
+        return [Text(" ─────────", style=style) for _ in range(width)]
+
+    def _gap_label(self, start: int, end: int) -> Text:
+        f = self._gap_finding(start, end)
+        # Потеря или предел машины — разные вещи, и цвет здесь единственное
+        # место, где это видно до наведения курсора.
+        role = "error" if (f is not None and f.recoverable) else "dim"
+        t = Text()
+        t.append(f"т.{start}–{end}", style=palette.role_hex(role))
+        t.append(f" ⌄{end - start + 1}", style=palette.role_hex("faint"))
+        return t
 
     def _cell_text(self, dag, instr: int, crit: set[int],
                    illegal: bool = False) -> Text:
@@ -709,10 +829,12 @@ class LabScreen(ModeScreen):
         ответ — молчание. Заодно это совпадает с ощущением: инструмент не
         бубнит над ухом, а подаёт голос там, где есть находка.
         """
-        grid = self.query_one("#grid", ScheduleGrid)
-        coord = grid.cursor_coordinate
-        cycle, port = coord.row, coord.column
-        instr = self._cells.get((cycle, port))
+        target = self._cursor_target()
+        if target is None:
+            return False
+        if target[0] == "простой":
+            return True                       # потерянные такты — всегда тема
+        instr = target[3]
         if instr is None:
             return True                       # пустой слот — тоже вопрос
         if self.view == "model":
@@ -790,8 +912,39 @@ class LabScreen(ModeScreen):
 
     def on_data_table_cell_selected(self, event) -> None:
         event.stop()
-        row = event.coordinate.row
-        self.run_core(f"/explain {row}")
+        target = self._cursor_target()
+        if target is not None and target[0] == "простой":
+            # Схлопнутое всегда можно раскрыть: инструмент ничего не прячет,
+            # он лишь не показывает двенадцать одинаковых пустых строк, пока
+            # их не попросили.
+            key = (target[1], target[2])
+            if key in self._expanded_gaps:
+                self._expanded_gaps.discard(key)
+            else:
+                self._expanded_gaps.add(key)
+            self._want_cell = (target[1], event.coordinate.column)
+            self._draw_grid()
+            self._draw_detail()
+            return
+        if target is not None:
+            self.run_core(f"/explain {target[1]}")
+
+    def _cursor_target(self):
+        """На чём стоит курсор: («такт», такт, порт, инстр) или («простой», a, b).
+
+        Единственное место, которое знает про схлопывание. Всё остальное
+        (разбор, факты для ИИ, Enter) спрашивает здесь и про строки решётки
+        больше не думает.
+        """
+        grid = self.query_one("#grid", ScheduleGrid)
+        coord = grid.cursor_coordinate
+        row, port = coord.row, coord.column
+        if not (0 <= row < len(self._rows)):
+            return None
+        r = self._rows[row]
+        if r[0] == "простой":
+            return ("простой", r[1], r[2])
+        return ("такт", r[1], port, self._cells.get((row, port)))
 
     def _render_detail(self) -> None:
         """Точный разбор + фраза ИИ под ним, разделённые чертой.
@@ -828,10 +981,13 @@ class LabScreen(ModeScreen):
             self._set_detail(Text("расписание ещё не посчитано",
                                   style=palette.role_hex("faint")))
             return
-        grid = self.query_one("#grid", ScheduleGrid)
-        coord = grid.cursor_coordinate
-        cycle, port = coord.row, coord.column
-        instr = self._cells.get((cycle, port))
+        target = self._cursor_target()
+        if target is None:
+            return
+        if target[0] == "простой":
+            self._set_detail(self._detail_gap(target[1], target[2]))
+            return
+        _kind, cycle, port, instr = target
         if instr is None:
             self._set_detail(self._detail_empty(cycle, port))
         else:
@@ -888,6 +1044,34 @@ class LabScreen(ModeScreen):
         if self.model_repairs:
             t.append("починить каналы, не трогая такты:  /repair",
                      style=palette.role_hex("warning"))
+        return t
+
+    def _detail_gap(self, start: int, end: int) -> Text:
+        """Простой как объект: сколько потеряно, почему и можно ли отыграть.
+
+        Текст берётся у доктора, а не пишется заново: в панели ДИАГНОЗ он уже
+        есть, и две формулировки одного простоя разошлись бы на первой же
+        правке.
+        """
+        dim, title = palette.role_hex("dim"), palette.role_hex("title")
+        t = Text()
+        t.append(f"простой {end - start + 1} т.", style=f"{title} bold")
+        t.append(f"   такты {start}–{end}\n", style=dim)
+        f = self._gap_finding(start, end)
+        if f is None:
+            t.append("короткий разрыв — доктор его находкой не считает",
+                     style=palette.role_hex("faint"))
+            return t
+        if f.recoverable:
+            t.append(f"−{f.cycles_lost} т. можно отыграть\n",
+                     style=palette.role_hex("error") + " bold")
+        else:
+            t.append("предел участка, а не просчёт\n",
+                     style=palette.role_hex("success"))
+        t.append(_wrapped(f.why, 70, 0) + "\n", style=dim)
+        t.append(_wrapped(f.fix, 70, 0) + "\n", style=palette.role_hex("faint"))
+        t.append("\nEnter — развернуть такты по одному",
+                 style=palette.role_hex("faint"))
         return t
 
     def _detail_empty(self, cycle: int, port: int) -> Text:
@@ -1112,7 +1296,16 @@ class LabScreen(ModeScreen):
         marks = {"high": ("!!", "error"), "medium": ("!", "warning"),
                  "low": ("·", "dim")}
         width = max(24, self.query_one("#p-diag", Panel).size.width - 4)
-        for i, f in enumerate(diag.top):
+        # Простои НЕ повторяем: они теперь видны в самой решётке отдельными
+        # строками, и наведение на них даёт этот же разбор. Две формулировки
+        # одного факта на одном экране — это и есть лишнее; панель оставляет
+        # себе то, чего в решётке не видно.
+        shown_in_grid = {f"такты {a}–{b}" for a, b in self._gaps(self.base.schedule)
+                         if (a, b) not in self._expanded_gaps}
+        rest = [f for f in diag.top
+                if not (f.code == "idle-stall" and f.where in shown_in_grid)]
+        hidden = len(diag.top) - len(rest)
+        for i, f in enumerate(rest):
             if i:
                 t.append("\n")
             mark, role = ("=", "dim") if f.kind == "limit" \
@@ -1123,6 +1316,12 @@ class LabScreen(ModeScreen):
                      style=palette.role_hex("text"))
             t.append("\n")
             t.append("     " + _wrapped(f.where, width, 5), style=dim)
+            t.append("\n")
+        if hidden:
+            if rest:
+                t.append("\n")
+            t.append(f"простои ({hidden}) — строками в решётке, "
+                     "наведите курсор", style=palette.role_hex("faint"))
             t.append("\n")
         t.append("\n")
         t.append("/doctor — подробно", style=palette.role_hex("accent_soft"))

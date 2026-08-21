@@ -198,6 +198,12 @@ class LabScreen(ModeScreen):
         self._matrix_sort_key = "cnt"
         self._matrix_sort_rev = True
         self._matrix_filter = ""
+        # Каталог УЧАСТКА — та же аналитика: сортировка по столбцу (в т.ч.
+        # «семья» вместо прежней зашитой группировки) и живой фильтр.
+        self._scen_sort_key = "family"
+        self._scen_sort_rev = False
+        self._scen_filter = ""
+        self._scen_keys: list[str] = []
         self._diag_filter = "all"      # all | high | medium | low | limit
         self._find_pos = -1            # позиция в отфильтрованном списке
 
@@ -208,8 +214,18 @@ class LabScreen(ModeScreen):
             with Vertical(id="lab-left"):
                 yield Panel(Horizontal(id="view-chips"),
                             ItemGrid(id="scenario-chips", min_column_width=15),
-                            VerticalScroll(Static(id="scen-full"),
-                                           id="scen-wide"),
+                            Vertical(
+                                Static(id="scen-head"),
+                                Horizontal(
+                                    Static("фильтр", id="scen-filter-label"),
+                                    Input(placeholder="имя, семья или "
+                                                      "описание",
+                                          id="scen-filter"),
+                                    id="scen-filter-row"),
+                                DataTable(id="scen-table", cursor_type="row",
+                                         zebra_stripes=False),
+                                Static(id="scen-foot"),
+                                id="scen-wide"),
                             title="УЧАСТОК", id="p-scen", topic="scen")
                 yield Panel(ScheduleGrid(id="grid", cursor_type="cell",
                                          zebra_stripes=False),
@@ -1167,15 +1183,65 @@ class LabScreen(ModeScreen):
         self._draw_machine()
         self._draw_detail()
 
+    # Заголовок столбца каталога → чем сортировать. "семья" сортировкой
+    # воспроизводит прежнюю группировку по семействам, только интерактивно —
+    # кликом, а не раз навсегда зашитым порядком.
+    SCEN_SORT_DEFAULT_REV = {"key": False, "family": False, "binding": False}
+
+    def _scen_sort_value(self, key: str, sort_key: str, dag, met):
+        if sort_key == "key":
+            return key
+        if sort_key == "family":
+            return (dag.family or "прочее", key)
+        if sort_key == "ops":
+            return len(dag)
+        if sort_key == "lb":
+            return met.lower_bound if met else -1
+        if sort_key == "binding":
+            return (met.binding if met else "", key)
+        return key
+
+    def on_input_changed(self, event) -> None:
+        if event.input.id == "machine-filter":
+            event.stop()
+            self._matrix_filter = event.value.strip().lower()
+            self._draw_machine_matrix()
+        elif event.input.id == "scen-filter":
+            event.stop()
+            self._scen_filter = event.value.strip().lower()
+            self._draw_scen_catalog()
+
+    def on_data_table_row_selected(self, event) -> None:
+        if event.data_table.id not in ("machine-matrix", "scen-table"):
+            return
+        event.stop()
+        if event.data_table.id == "machine-matrix":
+            idx = event.cursor_row
+            if not (0 <= idx < len(self._matrix_ops)):
+                return
+            op = self._matrix_ops[idx]
+            dag = self.app.session.dag_obj
+            first = next((i.id for i in dag if i.op == op), None)
+            if first is None:
+                return
+            self._show_instr(first)
+        elif event.data_table.id == "scen-table":
+            idx = event.cursor_row
+            if not (0 <= idx < len(self._scen_keys)):
+                return
+            key = self._scen_keys[idx]
+            if key != self.app.session.scenario:
+                self.run_core(f"/run {key}")
+
     def _draw_scen_catalog(self) -> None:
-        """Развёрнутый УЧАСТОК — каталог с числами, а не те же четырнадцать чипов.
+        """Развёрнутый УЧАСТОК — каталог, которым управляют, а не читают.
 
         Чипы отвечают на «переключить», но не на «на что переключить»: имена
         вроде divstrength или wide_ilp ничего не говорят, пока не запустишь.
         Каталог считает то, что считается мгновенно (метрики графа — это не
-        планирование), и потому может показать сразу все участки: сколько
-        операций, чем связан участок — цепочкой зависимостей или портами, и
-        что он вообще разбирает.
+        планирование) и показывает сразу все участки: сколько операций, чем
+        связан участок и что он разбирает — сортируемо кликом по заголовку и
+        фильтруемо на лету, а строка переключает участок по-настоящему.
         """
         wide = self._scen_expanded
         self.query_one("#scen-wide").display = wide
@@ -1187,55 +1253,87 @@ class LabScreen(ModeScreen):
             return
         from ...core.dag import compute_metrics
 
-        target = self.query_one("#scen-full", Static)
+        head = self.query_one("#scen-head", Static)
+        foot = self.query_one("#scen-foot", Static)
+        table = self.query_one("#scen-table", DataTable)
         model = self.app.session.model()
         cur = self.app.session.scenario
         dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
         title, accent = palette.role_hex("title"), palette.role_hex("accent")
         panel.set_title(f"УЧАСТОК   ·   каталог   ·   {len(SCENARIOS)} участков")
-        t = Text()
-        t.append_text(self._section("что можно разобрать",
-                                    "· — текущий · /run <имя> или клик"))
-        t.append("\n\n")
-        t.append("      " + "участок".ljust(14) + "оп.".rjust(4)
-                 + "  " + "предел".rjust(7) + "   " + "связан".ljust(18)
-                 + "что разбирает\n", style=faint)
-        by_family: dict[str, list[str]] = {}
+
+        h = Text()
+        h.append_text(self._section("что можно разобрать",
+                                    "· — текущий · клик — переключить"))
+        head.update(h)
+
+        def col(label: str, key: str) -> Text:
+            t = Text(label, style=dim)
+            if key == self._scen_sort_key:
+                t.append(" ▾" if self._scen_sort_rev else " ▴",
+                        style=palette.role_hex("accent_soft"))
+            return t
+
+        table.clear(columns=True)
+        table.add_column(col("участок", "key"), width=14, key="key")
+        table.add_column(col("оп.", "ops"), width=5, key="ops")
+        table.add_column(col("предел", "lb"), width=9, key="lb")
+        table.add_column(col("связан", "binding"), width=20, key="binding")
+        table.add_column(col("семья", "family"), width=16, key="family")
+        width = max(24, self.app.size.width - 78)
+        table.add_column(Text("что разбирает", style=dim), width=width,
+                         key="lesson")
+
+        metrics: dict[str, tuple] = {}
         for key, dag in SCENARIOS.items():
-            by_family.setdefault(dag.family or "прочее", []).append(key)
-        width = max(30, self.app.size.width - 60)
-        for family in sorted(by_family):
-            t.append("\n    " + family + "\n", style=dim)
-            for key in sorted(by_family[family]):
-                dag = SCENARIOS[key]
-                try:
-                    met = compute_metrics(dag, model)
-                    lb, binding = met.lower_bound, met.binding
-                except Exception:
-                    lb, binding = 0, "—"
-                here = key == cur
-                t.append("    ")
-                t.append("· " if here else "  ",
-                         style=accent if here else faint)
-                t.append(key.ljust(14),
-                         style=(title + " bold") if here else palette.role_hex("text"))
-                t.append(str(len(dag)).rjust(4), style=dim)
-                t.append(f"{lb:>7} т.".rjust(9), style=title if here else dim)
-                t.append("  " + binding.ljust(18),
-                         style=palette.role_hex("warning")
-                         if binding == "ресурсы" else faint)
-                t.append((dag.lesson or dag.note or dag.title)[:width],
-                         style=faint)
-                t.append("\n")
-        t.append("\n")
-        t.append_text(self._section("как читать"))
-        t.append("\n\n")
-        t.append("    «предел» — сколько тактов участок не может пройти "
+            try:
+                met = compute_metrics(dag, model)
+            except Exception:
+                met = None
+            metrics[key] = (dag, met)
+
+        pool = [k for k in SCENARIOS
+                if not self._scen_filter or self._scen_filter in
+                (k + " " + (SCENARIOS[k].family or "") + " "
+                 + (SCENARIOS[k].lesson or SCENARIOS[k].note or "")).lower()]
+        self._scen_keys = sorted(
+            pool,
+            key=lambda k: self._scen_sort_value(k, self._scen_sort_key,
+                                                *metrics[k]),
+            reverse=self._scen_sort_rev)
+
+        if not self._scen_keys:
+            foot.update(Text(f"    ничего не совпало с «{self._scen_filter}»",
+                             style=faint))
+            table.clear()
+            return
+
+        for key in self._scen_keys:
+            dag, met = metrics[key]
+            lb, binding = (met.lower_bound, met.binding) if met else (0, "—")
+            here = key == cur
+            row_style = (title + " bold") if here else palette.role_hex("text")
+            row = [
+                Text(("▸ " if here else "  ") + key, style=row_style),
+                Text(str(len(dag)), style=dim),
+                Text(f"{lb} т.", style=title if here else dim),
+                Text(binding, style=palette.role_hex("warning")
+                     if binding == "ресурсы" else faint),
+                Text(dag.family or "прочее", style=faint),
+                Text((dag.lesson or dag.note or dag.title)[:width],
+                     style=faint),
+            ]
+            table.add_row(*row)
+
+        f = Text()
+        f.append_text(self._section("как читать"))
+        f.append("\n\n")
+        f.append("    «предел» — сколько тактов участок не может пройти "
                  "быстрее ни одним\n    планировщиком. «связан» — чем именно: "
                  "длиной цепочки зависимостей\n    (критический путь) или "
                  "нехваткой портов (ресурсы). Второе лечится\n    машиной, "
                  "первое — только переписыванием кода.", style=faint)
-        target.update(t)
+        foot.update(f)
 
     def _draw_journal(self) -> None:
         """Развёрнутый ВЫВОД КОМАНД — журнал запусков, а не лента подлиннее."""
@@ -1292,21 +1390,6 @@ class LabScreen(ModeScreen):
     def on_instr_link_picked(self, event) -> None:
         event.stop()
         self._show_instr(event.instr)
-
-    def on_data_table_row_selected(self, event) -> None:
-        """Строка матрицы МАШИНЫ — переход к первой такой операции участка."""
-        if event.data_table.id != "machine-matrix":
-            return
-        event.stop()
-        idx = event.cursor_row
-        if not (0 <= idx < len(self._matrix_ops)):
-            return
-        op = self._matrix_ops[idx]
-        dag = self.app.session.dag_obj
-        first = next((i.id for i in dag if i.op == op), None)
-        if first is None:
-            return
-        self._show_instr(first)
 
     def _draw_grid_link(self) -> None:
         try:
@@ -2419,23 +2502,25 @@ class LabScreen(ModeScreen):
         return 0
 
     def on_data_table_header_selected(self, event) -> None:
-        if event.data_table.id != "machine-matrix":
+        table_id = event.data_table.id
+        if table_id not in ("machine-matrix", "scen-table"):
             return
         event.stop()
         key = event.column_key.value
-        if key == self._matrix_sort_key:
-            self._matrix_sort_rev = not self._matrix_sort_rev
+        if table_id == "machine-matrix":
+            if key == self._matrix_sort_key:
+                self._matrix_sort_rev = not self._matrix_sort_rev
+            else:
+                self._matrix_sort_key = key
+                self._matrix_sort_rev = self.MATRIX_SORT_DEFAULT_REV.get(key, True)
+            self._draw_machine_matrix()
         else:
-            self._matrix_sort_key = key
-            self._matrix_sort_rev = self.MATRIX_SORT_DEFAULT_REV.get(key, True)
-        self._draw_machine_matrix()
-
-    def on_input_changed(self, event) -> None:
-        if event.input.id != "machine-filter":
-            return
-        event.stop()
-        self._matrix_filter = event.value.strip().lower()
-        self._draw_machine_matrix()
+            if key == self._scen_sort_key:
+                self._scen_sort_rev = not self._scen_sort_rev
+            else:
+                self._scen_sort_key = key
+                self._scen_sort_rev = self.SCEN_SORT_DEFAULT_REV.get(key, True)
+            self._draw_scen_catalog()
 
     def _draw_machine_matrix(self) -> None:
         table = self.query_one("#machine-matrix", DataTable)

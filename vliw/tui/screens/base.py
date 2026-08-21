@@ -155,7 +155,19 @@ class ModeScreen(Screen):
 
     def on_prompt_bar_submitted(self, event: PromptBar.Submitted) -> None:
         event.stop()
-        line = event.value.strip()
+        self.submit_line(event.value)
+
+    def on_console_journal_run_requested(self, event) -> None:
+        """Команда набрана прямо в развёрнутом ВЫВОДЕ КОМАНД — терминал
+        внутри панели, а не только общий док внизу экрана. Тот же путь, что
+        и у общей строки ввода: /exit, /clear и остальное работают одинаково
+        независимо от того, откуда набрана команда.
+        """
+        event.stop()
+        self.submit_line(event.line)
+
+    def submit_line(self, raw: str) -> None:
+        line = raw.strip()
         low = line.lower().lstrip("/")
         if low in ("exit", "quit"):
             self.app.exit(0)

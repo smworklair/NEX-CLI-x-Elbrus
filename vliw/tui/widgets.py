@@ -229,20 +229,57 @@ class ConsoleJournal(Horizontal):
     что там не запуски команд, а вычисления с значениями.
     """
 
+    class RunRequested(Message):
+        """Команда, набранная прямо в развёрнутом журнале — не в общем доке."""
+
+        def __init__(self, line: str) -> None:
+            super().__init__()
+            self.line = line
+
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
         self.runs: list[dict] = []
         self.pos = -1
         self._seen = 0     # сколько запусков уже показывали (для терминала)
+        self.mode = "lab"
 
     def compose(self):
         yield Vertical(id="journal-list")
-        yield RichLog(id="journal-out", highlight=False, markup=False,
-                      wrap=False, auto_scroll=False)
+        # Вывод и строка ввода — в одной колонке: журнал должен работать как
+        # терминал сам по себе, а не подразумевать, что где-то далеко внизу
+        # экрана есть общий док ввода, про который ещё нужно догадаться.
+        with Vertical(id="journal-right"):
+            yield RichLog(id="journal-out", highlight=False, markup=False,
+                          wrap=False, auto_scroll=False)
+            with Horizontal(id="journal-field"):
+                yield Static("", id="journal-mark")
+                yield Input(placeholder="команда прямо здесь — тот же ввод, "
+                                        "что и внизу экрана",
+                           id="journal-input")
+
+    def on_mount(self) -> None:
+        self._repaint_mark()
+
+    def _repaint_mark(self) -> None:
+        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        mark = Text()
+        mark.append("nex ", style=f"{accent} bold")
+        mark.append(ARROW, style=palette.role_hex("dim"))
+        mark.append(" ", style="")
+        self.query_one("#journal-mark", Static).update(mark)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        line = event.value.strip()
+        event.input.value = ""
+        if line:
+            self.post_message(self.RunRequested(line))
 
     def load(self, runs: list[dict], mode: str = "lab") -> None:
         self.runs = runs
-        self.mode = mode
+        if mode != self.mode:
+            self.mode = mode
+            self._repaint_mark()
         box = self.query_one("#journal-list", Vertical)
         box.remove_children()
         dim = palette.role_hex("dim")

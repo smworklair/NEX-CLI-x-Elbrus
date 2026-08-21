@@ -154,3 +154,49 @@ class TestSmalltalkSkipsNudge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCellAnswerGuard(unittest.TestCase):
+    """Сторож на выдуманные числа в подписи под курсором.
+
+    Появился не из осторожности, а по факту: локальная 3B на вопрос «почему
+    операция здесь» сочинила «блокировала канал 2 на 21 такта» — таких чисел
+    в разборе не было вовсе.
+    """
+
+    FACTS = ["выдана в такте 2, результат готов к 13, латентность 11",
+             "ждала операндов: a0 готов к т.1"]
+
+    def test_answer_within_the_facts_passes(self) -> None:
+        from vliw.agent import context
+
+        ok = context.cell_answer_is_grounded(
+            "Ждала операнд a0 до такта 1, потому и вышла только в такте 2.",
+            self.FACTS)
+        self.assertTrue(ok)
+
+    def test_invented_number_is_caught(self) -> None:
+        from vliw.agent import context
+
+        ok = context.cell_answer_is_grounded(
+            "Блокировала канал 2 на 21 такта.", self.FACTS)
+        self.assertFalse(ok, "21 в разборе нет — обязано отлавливаться")
+
+    def test_answer_without_numbers_passes(self) -> None:
+        """Фраза без чисел безопасна по построению — её пропускаем."""
+        from vliw.agent import context
+
+        self.assertTrue(context.cell_answer_is_grounded(
+            "Операция ждала операнд и потому вышла позже.", self.FACTS))
+
+    def test_guard_does_not_catch_wrong_relations(self) -> None:
+        """ЧЕГО СТОРОЖ НЕ УМЕЕТ — записано, чтобы на него не полагались.
+
+        Все числа взяты из разбора, а связаны неверно: латентность приписана
+        не тому. Регуляркой это не ловится, только чтением — поэтому разбор
+        ядра всегда висит НАД фразой, а не заменяется ею.
+        """
+        from vliw.agent import context
+
+        self.assertTrue(context.cell_answer_is_grounded(
+            "Вышла в такте 11, латентность 2.", self.FACTS))

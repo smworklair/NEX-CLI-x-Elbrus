@@ -18,6 +18,7 @@ Esc отдаёт клавиатуру решётке, Esc из решётки в
 from __future__ import annotations
 
 from rich.text import Text
+from textual import work
 from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.widgets import DataTable, Static
 
@@ -85,6 +86,15 @@ class LabScreen(ModeScreen):
         # (`after_command` → `recompute` → `_compute_done`), и без этого
         # найденная незаконная клетка теряется: прокрутка уезжает наверх.
         self._want_cell: tuple[int, int] | None = None
+        # ИИ, подключённый к курсору. `_cell_ai_token` — номер текущего
+        # запроса: любое движение курсора его увеличивает, и работающий
+        # запрос, увидев чужой номер, бросает генерацию на полуслове.
+        self._detail_base: Text | None = None
+        self._cell_ai_token = 0
+        self._cell_ai_text = ""
+        self._cell_ai_state = ""        # "" | "ждёт" | "готово" | текст ошибки
+        self._cell_ai_on = True
+        self._cell_ai_facts: list[str] = []
 
     # --- раскладка --------------------------------------------------------
 
@@ -335,28 +345,18 @@ class LabScreen(ModeScreen):
             con.note("  починить каналы, не трогая такты:  /repair", "warning")
 
     def panel_facts(self, topic: str) -> list[str]:
-        """Что именно эта панель показывает — словами, для ИИ.
+        """В РАЗБОРЕ чата сбоку НЕТ — и это решение, а не недоделка.
 
-        Берём из уже посчитанного ядром, а не пересказываем отрисовку: цифры
-        в ответе должны совпадать с цифрами на экране, потому что источник у
-        них один.
+        Здесь уже есть свой способ спросить: курсор. Он ходит по решётке, а
+        панель «ПОЧЕМУ ЗДЕСЬ» отвечает про клетку под ним — мгновенно и
+        точно. Поле ввода рядом заставляло бы человека ПЕРЕСПРАШИВАТЬ
+        словами то, на что он уже показал курсором, — шаг назад от того, что
+        в экране и так работало.
+
+        Поэтому ИИ здесь подключён к курсору (см. `_cell_ai_*` ниже), а не к
+        строке ввода. Чат сбоку остаётся крайним средством для поверхностей,
+        где показать не на что.
         """
-        from ...agent import context as agent_context
-
-        s = self.app.session
-        if topic == "machine":
-            return agent_context.machine_facts(s.model())
-        if topic == "diag":
-            return agent_context.doctor_facts(s) or [
-                "Диагностика ещё не считалась — нужна команда /run."]
-        if topic == "numbers":
-            return agent_context.schedule_facts(s)
-        if topic == "grid":
-            return self._grid_facts()
-        if topic == "detail":
-            return self._cursor_facts()
-        if topic == "console":
-            return agent_context.schedule_facts(s)
         return []
 
     def _grid_facts(self) -> list[str]:
@@ -645,30 +645,197 @@ class LabScreen(ModeScreen):
     def on_data_table_cell_highlighted(self, event) -> None:
         event.stop()
         self._draw_detail()
+        self._cell_ai_restart()
+
+    # --- ИИ по курсору -----------------------------------------------------
+    #
+    # ЗАЧЕМ ИМЕННО ТАК. У этого экрана уже есть способ спросить — курсор.
+    # Человек показывает на клетку, «ПОЧЕМУ ЗДЕСЬ» отвечает точно и мгновенно.
+    # ИИ дописывает к этому одну фразу обычным языком — и тоже без вопроса,
+    # по тому же движению курсора.
+    #
+    # ПОЧЕМУ С ЗАДЕРЖКОЙ. Ответ на этой машине идёт секунды, а курсор ходит
+    # быстрее. Запуск на каждое нажатие стрелки означал бы очередь из
+    # брошенных запросов и шесть занятых потоков впустую. Ждём, пока курсор
+    # ОСТАНОВИТСЯ: остановился — значит на эту клетку и смотрят.
+    #
+    # ПОЧЕМУ ИИ НИЧЕГО НЕ РЕШАЕТ. В подсказку уходит ровно то, что уже
+    # написано в панели, и задача ставится как пересказ, а не разбор. Числа
+    # он не считает и добавлять их ему запрещено — считает ядро. На 3B это
+    # единственный режим, в котором ему можно верить: он ошибается, когда
+    # надо связать несколько чисел, и не ошибается, когда надо переформулировать
+    # одно готовое утверждение.
+
+    CELL_AI_DELAY = 1.5
+
+    CELL_AI_QUESTION = "Скажи это одной фразой обычным языком."
+    """Переформулировать, а не рассуждать.
+
+    Пробовали спрашивать «почему эта операция оказалась здесь» — вопрос сам по
+    себе требует ПРИЧИНЫ, и 3B её выдаёт всегда, даже когда причины нет: на
+    клетке такта 0 сочинила ожидание предыдущих операций, которых не было.
+    Причину считает ядро и уже написало её выше; модели остаются слова.
+    """
+
+    def _cell_ai_restart(self) -> None:
+        """Курсор двинулся: прежний ответ недействителен, новый — не сразу."""
+        self._cell_ai_token += 1
+        self._cell_ai_text = ""
+        self._cell_ai_state = ""
+        self._render_detail()
+        if not self._cell_ai_on or self.view == "model" and self.model_sched is None:
+            return
+        if not self._cell_has_a_story():
+            return
+        tok = self._cell_ai_token
+        self.set_timer(self.CELL_AI_DELAY, lambda: self._cell_ai_start(tok))
+
+    def _cell_has_a_story(self) -> bool:
+        """Есть ли про эту клетку что рассказывать. Если нет — ИИ молчит.
+
+        Это не оптимизация, а защита от выдумки, и она нужна именно этой
+        модели. Проверено вживую: на клетке «DIV z0, такт 0» — где ничего не
+        предшествует и ждать нечего — 3B сочинила «пришлось ждать завершения
+        предыдущих операций». Она не умеет ответить «здесь всё обычно»: на
+        прямой вопрос «почему здесь» она ОБЯЗАНА выдать причину и берёт её
+        откуда придётся.
+
+        Поэтому решаем МЫ, а не она. Рассказывать есть что, когда:
+          · размещение незаконно — модель ошиблась каналом;
+          · baseline и точный поиск разошлись — здесь и потерян такт;
+          · операция на критическом пути — она задаёт длину всего участка;
+          · клетка пуста — почему простаивает порт, вопрос не праздный.
+        Во всех остальных клетках операция просто стоит где стоит, и честный
+        ответ — молчание. Заодно это совпадает с ощущением: инструмент не
+        бубнит над ухом, а подаёт голос там, где есть находка.
+        """
+        grid = self.query_one("#grid", ScheduleGrid)
+        coord = grid.cursor_coordinate
+        cycle, port = coord.row, coord.column
+        instr = self._cells.get((cycle, port))
+        if instr is None:
+            return True                       # пустой слот — тоже вопрос
+        if self.view == "model":
+            return instr in self._model_illegal()
+        return instr in self.diverged or instr in self._critical_set()
+
+    def _cell_ai_start(self, tok: int) -> None:
+        if tok != self._cell_ai_token:
+            return                      # курсор уже ушёл, пока ждали
+        # Источник — ТЕКСТ САМОЙ ПАНЕЛИ, а не отдельно собранный список.
+        # Во-первых, в панели лежит настоящее рассуждение («готова в т.1,
+        # выдана только в т.2»), а плоский список свойств модель просто
+        # зачитывала обратно. Во-вторых, так ИИ и панель физически не могут
+        # разойтись: у них один и тот же текст.
+        base = self._detail_base
+        facts = [l for l in (base.plain.split("\n") if base else []) if l.strip()]
+        if len(facts) < 2:
+            return
+        self._cell_ai_state = "ждёт"
+        self._cell_ai_facts = facts
+        self._render_detail()
+        self._cell_ai_worker(tok, facts)
+
+    @work(thread=True, group="cellai")
+    def _cell_ai_worker(self, tok: int, facts: list[str]) -> None:
+        from ...agent import context, llm
+
+        system = context.cell_prompt(facts)
+        gen = llm.stream(system, self.CELL_AI_QUESTION, None, nudge=False)
+        try:
+            for piece in gen:
+                if tok != self._cell_ai_token:
+                    break               # курсор ушёл — бросаем на полуслове
+                self.app.call_from_thread(self._cell_ai_piece, tok, piece)
+        except Exception as e:
+            self.app.call_from_thread(self._cell_ai_failed, tok, str(e))
+        finally:
+            # Закрываем в СВОЁМ потоке: генератор рвёт соединение, сервер
+            # снимает задачу и остаётся жив для следующей клетки.
+            closer = getattr(gen, "close", None)
+            if closer is not None:
+                closer()
+        self.app.call_from_thread(self._cell_ai_done, tok)
+
+    def _cell_ai_piece(self, tok: int, piece: str) -> None:
+        if tok != self._cell_ai_token:
+            return
+        self._cell_ai_state = "готово"
+        self._cell_ai_text += piece
+        self._render_detail()
+
+    def _cell_ai_done(self, tok: int) -> None:
+        if tok != self._cell_ai_token:
+            return
+        if self._cell_ai_state == "ждёт":
+            self._cell_ai_state = ""
+            self._render_detail()
+            return
+        # Сторож на выдуманные числа. Ответ уже показан по частям — если он
+        # не прошёл проверку, убираем его целиком: пустое место честнее
+        # уверенной ошибки, а разбор ядра над ним никуда не делся.
+        from ...agent import context
+
+        if not context.cell_answer_is_grounded(self._cell_ai_text,
+                                               self._cell_ai_facts):
+            self._cell_ai_text = ""
+            self._cell_ai_state = "NEX сочинил числа — ответ убран"
+            self._render_detail()
+
+    def _cell_ai_failed(self, tok: int, msg: str) -> None:
+        if tok != self._cell_ai_token:
+            return
+        self._cell_ai_state = "нет модели"
+        self._render_detail()
 
     def on_data_table_cell_selected(self, event) -> None:
         event.stop()
         row = event.coordinate.row
         self.run_core(f"/explain {row}")
 
-    def _draw_detail(self) -> None:
+    def _render_detail(self) -> None:
+        """Точный разбор + фраза ИИ под ним, разделённые чертой.
+
+        Порядок принципиален: сверху то, что посчитано, снизу то, что
+        пересказано. Не наоборот — иначе человек читает сперва пересказ и
+        принимает его за источник.
+        """
         target = self.query_one("#detail", Static)
+        base = self._detail_base
+        if base is None:
+            return
+        t = base.copy()
+        faint = palette.role_hex("faint")
+        if self._cell_ai_state == "ждёт":
+            t.append("\n\n" + "─" * 3 + " NEX разбирает…", style=faint)
+        elif self._cell_ai_state == "готово":
+            t.append("\n\n" + "─" * 3 + " NEX\n", style=faint)
+            t.append(self._cell_ai_text.strip(), style=palette.role_hex("dim"))
+        elif self._cell_ai_state:
+            t.append("\n\n" + "─" * 3 + " " + self._cell_ai_state, style=faint)
+        target.update(t)
+
+    def _set_detail(self, text: Text) -> None:
+        self._detail_base = text
+        self._render_detail()
+
+    def _draw_detail(self) -> None:
         if self.view == "model":
-            target.update(self._detail_model())
+            self._set_detail(self._detail_model())
             return
         res = self._result
         if res is None:
-            target.update(Text("расписание ещё не посчитано",
-                               style=palette.role_hex("faint")))
+            self._set_detail(Text("расписание ещё не посчитано",
+                                  style=palette.role_hex("faint")))
             return
         grid = self.query_one("#grid", ScheduleGrid)
         coord = grid.cursor_coordinate
         cycle, port = coord.row, coord.column
         instr = self._cells.get((cycle, port))
         if instr is None:
-            target.update(self._detail_empty(cycle, port))
+            self._set_detail(self._detail_empty(cycle, port))
         else:
-            target.update(self._detail_instr(cycle, port, instr))
+            self._set_detail(self._detail_instr(cycle, port, instr))
 
     def _detail_model(self) -> Text:
         """Почему клетка красная — на месте, а не строчкой в отчёте.

@@ -357,68 +357,93 @@ class TestMaximizedPanelFillsScreen(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
-class TestPanelChat(unittest.TestCase):
-    """Чат по развёрнутой панели: контекст берётся из НЕЁ, а не вообще.
+class TestCursorAI(unittest.TestCase):
+    """ИИ в РАЗБОРЕ подключён к курсору, а не к строке ввода.
 
-    Модель здесь не запускается — проверяется сборка контекста и раскладка.
+    Решение по интерфейсу: у этого экрана уже есть способ спросить — курсор.
+    Человек показывает на клетку, панель «ПОЧЕМУ ЗДЕСЬ» отвечает точно, а ИИ
+    дописывает фразу обычным языком. Поле ввода рядом заставляло бы
+    ПЕРЕСПРАШИВАТЬ словами то, на что уже показали курсором.
+
+    Модель здесь не запускается: проверяется механика — отмена по движению,
+    задержка перед запуском и узость подсказки.
     """
 
-    def _open(self, panel_id: str):
+    def _screen(self, body):
         async def go():
             app, _ = _make_app("lab")
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
                     await pilot.pause()
-                    from vliw.tui.widgets import Panel, PanelChat
-
-                    sc = app.screen
-                    panel = sc.query_one(panel_id, Panel)
-                    sc.maximize(panel, container=False)
-                    panel.post_message(Panel.Expanded(panel))
-                    for _ in range(6):
-                        await pilot.pause(0.05)
-                    chats = list(sc.query(PanelChat))
-                    return {
-                        "open": bool(chats),
-                        "facts": list(sc._chat_facts),
-                        "panel_w": panel.size.width,
-                        "screen_w": sc.size.width,
-                    }
+                    return await body(app.screen, pilot)
 
         return asyncio.run(go())
 
-    def test_chat_opens_and_takes_its_share(self) -> None:
-        """Панель уступает чату место, а не прячется под ним."""
-        got = self._open("#p-grid")
-        self.assertTrue(got["open"])
-        self.assertLess(got["panel_w"], got["screen_w"],
-                        "чат не отобрал ширину — значит висит поверх панели")
+    def test_lab_has_no_side_chat(self) -> None:
+        """Чат сбоку в РАЗБОРЕ не открывается — это решение, не недоделка."""
 
-    def test_facts_come_from_that_panel(self) -> None:
-        """У МАШИНЫ — про порты, у ДИАГНОЗА — про потери. Не одно и то же."""
-        machine = " ".join(self._open("#p-machine")["facts"])
-        diag = " ".join(self._open("#p-diag")["facts"])
-        self.assertIn("порт", machine.lower())
-        self.assertNotEqual(machine, diag)
+        async def body(sc, pilot):
+            from vliw.tui.widgets import Panel, PanelChat
 
-    def test_panel_with_own_input_does_not_grab_space(self) -> None:
-        """У ВЫВОДА КОМАНД свой ввод — чат сам не лезет и ширину не забирает."""
-        got = self._open("#p-console")
-        self.assertFalse(got["open"])
-        self.assertEqual(got["panel_w"], got["screen_w"] - 4)
+            panel = sc.query_one("#p-grid", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            for _ in range(6):
+                await pilot.pause(0.05)
+            return len(list(sc.query(PanelChat))), sc.panel_facts("grid")
 
-    def test_prompt_is_narrow_by_design(self) -> None:
-        """Панельный промпт НЕ тащит общий блок фактов.
+        chats, facts = self._screen(body)
+        self.assertEqual(chats, 0)
+        self.assertEqual(facts, [])
 
-        Первая версия тащила, и это стоило и точности, и скорости: на вопрос
-        про монопольные порты модель перевернула утверждение, а ответ шёл
-        минуты. Узкий контекст — часть защиты от выдумки, а не экономия.
+    def test_cursor_move_invalidates_previous_answer(self) -> None:
+        """Ушёл с клетки — прежний ответ снят, а не дописывается к чужой."""
+
+        async def body(sc, pilot):
+            sc._cell_ai_token = 5
+            sc._cell_ai_text = "старый ответ"
+            sc._cell_ai_state = "готово"
+            sc._cell_ai_restart()
+            await pilot.pause()
+            return sc._cell_ai_token, sc._cell_ai_text, sc._cell_ai_state
+
+        tok, text, state = self._screen(body)
+        self.assertEqual(tok, 6)
+        self.assertEqual(text, "")
+        self.assertEqual(state, "")
+
+    def test_stale_request_cannot_write(self) -> None:
+        """Запрос с чужим номером молчит, даже если успел вернуться."""
+
+        async def body(sc, pilot):
+            sc._cell_ai_token = 9
+            sc._cell_ai_piece(3, "ответ от прошлой клетки")
+            await pilot.pause()
+            return sc._cell_ai_text
+
+        self.assertEqual(self._screen(body), "")
+
+    def test_ai_starts_only_after_the_cursor_rests(self) -> None:
+        """Запуск не на каждое нажатие стрелки: иначе очередь брошенных задач.
+
+        Здесь проверяется не число, а сам факт задержки: без неё быстрая
+        прокрутка решётки на двадцать тактов подняла бы двадцать запросов к
+        модели, каждый по несколько секунд и шесть потоков.
         """
+        from vliw.tui.screens.lab_screen import LabScreen
+
+        self.assertGreaterEqual(LabScreen.CELL_AI_DELAY, 1.0)
+
+    def test_cell_prompt_is_a_retelling_not_a_reasoning_task(self) -> None:
+        """В подсказку уходит только разбор панели, и считать запрещено."""
         from vliw.agent import context
 
-        facts = self._open("#p-machine")["facts"]
-        prompt = context.panel_prompt("МАШИНА", facts)
-        self.assertIn("МАШИНА", prompt)
+        prompt = context.cell_prompt(["store out #12 стоит в такте 22 на порту ,0",
+                                      "STORE исполняют только ,2 и ,5"])
+        self.assertIn("store out #12", prompt)
+        self.assertIn("НИ ОДНОГО числа, которого нет", prompt)
         self.assertNotIn("ФАКТЫ (единственный источник чисел)", prompt)
-        self.assertLess(len(prompt), 2500)
+        self.assertLess(len(prompt), 1500)
+
+

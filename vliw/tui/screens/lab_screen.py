@@ -176,8 +176,7 @@ class LabScreen(ModeScreen):
                 yield Panel(ScheduleGrid(id="grid", cursor_type="cell",
                                          zebra_stripes=False),
                             GridLink(id="grid-link"),
-                            title="РАСПИСАНИЕ", id="p-grid", topic="grid",
-                            classes="primary")
+                            title="РАСПИСАНИЕ", id="p-grid", topic="grid")
                 yield Panel(Static(id="detail"), title="ПОЧЕМУ ЗДЕСЬ",
                             id="p-detail", topic="detail")
                 yield Panel(Console(id="console"), title="ВЫВОД КОМАНД",
@@ -190,7 +189,7 @@ class LabScreen(ModeScreen):
                             VerticalScroll(id="diag-scroll"),
                             title="ДИАГНОЗ", id="p-diag", topic="diag")
                 yield Panel(Static(id="machine"), title="МАШИНА",
-                            id="p-machine", topic="machine", classes="quiet")
+                            id="p-machine", topic="machine")
 
     def on_ready(self) -> None:
         self._fill_chips()

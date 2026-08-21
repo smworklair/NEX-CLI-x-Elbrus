@@ -122,34 +122,6 @@ Panel:focus-within {
     border-title-color: $primary;
 }
 
-/* Семь одинаковых рамок читались как семь одинаково важных панелей — а
-   инструмент один на экран (решётка в РАЗБОРЕ, лента в ЯДРЕ, диалог в
-   АГЕНТЕ), остальное или ввод, или справка. Два модификатора расставляют
-   вес взглядом, без слов «главное» и «второстепенное» на экране. */
-Panel.primary {
-    border: heavy $nex-line;
-    background: $nex-raised;
-    border-title-color: $nex-title;
-}
-
-Panel.primary:focus-within {
-    border: heavy $primary;
-    border-title-color: $primary;
-}
-
-/* Справочные панели (МАШИНА, ПАМЯТЬ, ЧТО ВИДИТ АГЕНТ) не меняются от
-   действий человека — это статичный факт участка/машины/контекста, а не
-   рабочая поверхность. Тише рамка — тише заголовок. */
-Panel.quiet {
-    border: round $nex-shadow;
-    border-title-color: $nex-faint;
-}
-
-Panel.quiet:focus-within {
-    border: round $nex-dim;
-    border-title-color: $nex-dim;
-}
-
 /* Развёрнутая панель занимает весь экран — чем бы ни была её обычная высота.
    Textual вешает класс `-maximized` на развёрнутый виджет, но собственная
    высота панели никуда не девается: у половины панелей она задана числом по

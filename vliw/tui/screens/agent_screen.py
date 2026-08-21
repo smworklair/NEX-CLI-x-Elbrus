@@ -58,13 +58,11 @@ class AgentScreen(ModeScreen):
     def compose_body(self):
         with Horizontal(id="mind-body"):
             with Vertical(id="mind-left"):
-                yield Panel(VerticalScroll(id="chat"), title="ДИАЛОГ", id="p-chat",
-                            classes="primary")
+                yield Panel(VerticalScroll(id="chat"), title="ДИАЛОГ", id="p-chat")
                 yield Panel(ItemGrid(id="question-chips", min_column_width=34),
                             title="О ЧЁМ СПРОСИТЬ", id="p-questions")
             with Vertical(id="mind-right"):
-                yield Panel(Static(id="seen"), title="ЧТО ВИДИТ АГЕНТ", id="p-seen",
-                            classes="quiet")
+                yield Panel(Static(id="seen"), title="ЧТО ВИДИТ АГЕНТ", id="p-seen")
                 yield Panel(VerticalScroll(Static(id="trace")),
                             title="ТРАССА", id="p-trace")
                 yield Panel(Console(id="console"), title="ВЫВОД КОМАНД",

@@ -832,3 +832,91 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
 
         ops = self._screen(body)
         self.assertEqual(ops, ["DIV"])
+
+
+class TestDialogIsAWorkspace(unittest.TestCase):
+    """Развёрнутый ДИАЛОГ — рабочая область: история вопросов + /clear.
+
+    Долгое время разворот ДИАЛОГА был просто лентой покрупнее — ровно то,
+    за что критиковали остальные панели до переделки. Теперь слева история
+    вопросов с их счётом, клик повторяет вопрос, а `/clear` стирает ленту,
+    не покидая режим (история остаётся: чистится разговор, не работа).
+    """
+
+    def _screen(self, body):
+        async def go():
+            app, session = _make_app("mind")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_clear_wipes_dialog_but_keeps_history(self) -> None:
+        """`/clear` в АГЕНТЕ чистит ленту диалога, а не уводит к выбору режима.
+
+        Лента растёт и при активном использовании занимает весь экран.
+        Раньше /clear означал «покинуть режим» — стереть разговор, не
+        уходя, было нельзя вообще.
+        """
+        from textual.widgets import Static
+
+        async def body(sc, pilot, session):
+            sc._asked = [{"q": "почему медленно?", "seconds": 14.0, "acts": 2}]
+            for _ in range(6):
+                sc._bubble(Static("сообщение", classes="msg-note"))
+            before = len(list(sc.chat.children))
+            sc.submit_line("/clear")
+            await pilot.pause()
+            return (before, len(list(sc.chat.children)), len(sc._asked))
+
+        before, after, asked = self._screen(body)
+        self.assertGreater(before, 1)
+        self.assertLessEqual(after, 2, "лента должна стереться до приветствия")
+        self.assertEqual(asked, 1, "история вопросов должна остаться")
+
+    def test_expanded_dialog_shows_history_column(self) -> None:
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot, session):
+            sc._asked = [{"q": "почему медленно?", "seconds": 14.0, "acts": 2}]
+            panel = sc.query_one("#p-chat", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            await pilot.pause()
+            return (sc.query_one("#chat-hist-col").display,
+                    len(list(sc.query(".hist-item"))),
+                    "/clear" in panel._title)
+
+        shown, items, title = self._screen(body)
+        self.assertTrue(shown, "колонка истории видна при развороте")
+        self.assertEqual(items, 1)
+        self.assertTrue(title, "клавиша очистки напечатана в заголовке")
+
+    def test_ctrl_g_returns_closed_prompt(self) -> None:
+        """Esc закрыл строку вопроса — ^G возвращает её без пересворачивания.
+
+        До этого скрытие было необратимым: панель развёрнута, факты те же,
+        а спросить снова — только сворачивать и разворачивать заново.
+        """
+        from vliw.tui.widgets import Panel, PanelPrompt
+
+        async def body(sc, pilot, session):
+            panel = sc.query_one("#p-seen", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            for _ in range(4):
+                await pilot.pause(0.05)
+            had = len(list(sc.query(PanelPrompt)))
+            sc.action_toggle_panel_prompt()      # скрыть
+            await pilot.pause()
+            hidden = len(list(sc.query(PanelPrompt)))
+            sc.action_toggle_panel_prompt()      # вернуть
+            await pilot.pause()
+            return had, hidden, len(list(sc.query(PanelPrompt)))
+
+        had, hidden, back = self._screen(body)
+        self.assertEqual((had, hidden, back), (1, 0, 1))

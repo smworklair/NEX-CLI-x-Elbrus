@@ -38,6 +38,10 @@ class ModeScreen(Screen):
     BINDINGS = [
         ("ctrl+b", "toggle_side", "боковая панель"),
         ("ctrl+t", "toggle_tips", "полоса подсказок"),
+        # Строка вопроса по развёрнутой панели: закрыл по Esc — и вернуть её
+        # было нельзя, только сворачивать панель и разворачивать заново.
+        # ^G возвращает её на место; клавиша видна в полосе подсказок.
+        ("ctrl+g", "toggle_panel_prompt", "вопрос по панели"),
         ("ctrl+o", "to_picker", "к выбору режима"),
         ("ctrl+q", "quit_app", "выход"),
     ]
@@ -78,6 +82,7 @@ class ModeScreen(Screen):
     _chat_facts: list[str] = []
     _chat_offer = None
     _prompt_panel = None
+    _expanded_panel = None
 
     def on_mount(self) -> None:
         self.app.set_mode_theme(self.mode)
@@ -142,6 +147,13 @@ class ModeScreen(Screen):
             out.append(("^B", "панель" if self.side_shown else "панель ↩"))
         if self.TIPS_ID:
             out.append(("^T", "подсказки" if self.tips_shown else "подсказки ↩"))
+        # Строка вопроса скрывается по Esc (написано на ней), а возвращается
+        # по ^G — и это тоже должно быть видно, иначе скрытие выглядит
+        # необратимым и Esc нажимать не хочется.
+        if (self.screen is self and self.maximized is not None
+                and self._expanded_panel is not None):
+            out.append(("^G", "вопрос ↩" if not list(self.query(PanelPrompt))
+                        else "вопрос"))
         return out
 
     def refresh_hints(self) -> None:
@@ -297,16 +309,39 @@ class ModeScreen(Screen):
     def on_panel_expanded(self, event) -> None:
         event.stop()
         panel = event.panel
+        # Помним, какая панель развёрнута: ^G возвращает строку вопроса без
+        # того, чтобы сворачивать и разворачивать панель заново.
+        self._expanded_panel = panel if getattr(panel, "topic", "") else None
         if not getattr(panel, "topic", ""):
             return
         self.open_panel_prompt(panel)
+        self.refresh_hints()
 
     def on_panel_collapsed(self, event) -> None:
         event.stop()
+        self._expanded_panel = None
         self.close_panel_prompt()
         self.close_panel_chat()
+        self.refresh_hints()
 
     # --- всплывающая строка вопроса ---------------------------------------
+
+    def action_toggle_panel_prompt(self) -> None:
+        """^G — скрыть/вернуть строку вопроса у развёрнутой панели.
+
+        Esc её закрывает (и это написано на ней самой), но вернуть было
+        нельзя: панель развёрнута, факты те же, а спросить — заново
+        разворачивать. Теперь скрытие обратимо, и обе клавиши видны: Esc на
+        самой строке, ^G — в полосе подсказок.
+        """
+        if list(self.query(PanelPrompt)):
+            self.close_panel_prompt()
+            self.refresh_hints()
+            return
+        panel = getattr(self, "_expanded_panel", None)
+        if panel is not None:
+            self.open_panel_prompt(panel)
+            self.refresh_hints()
 
     def open_panel_prompt(self, panel) -> None:
         """Строка вопроса внизу развёрнутой панели.
@@ -343,6 +378,9 @@ class ModeScreen(Screen):
     def on_panel_prompt_closed(self, event) -> None:
         event.stop()
         self.close_panel_prompt()
+        # Полоса подсказок должна сразу показать, что строку можно вернуть:
+        # иначе скрытие по Esc выглядит как «функцию убрал навсегда».
+        self.refresh_hints()
 
     def on_panel_prompt_asked(self, event) -> None:
         event.stop()

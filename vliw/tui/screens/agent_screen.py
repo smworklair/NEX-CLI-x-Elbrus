@@ -42,7 +42,8 @@ class AgentScreen(ModeScreen):
     mode = "mind"
     mode_title = "АГЕНТ"
     mode_subtitle = "диалог"
-    placeholder = "спросите обычным языком   ·   /ai — состояние модели   ·   /команда"
+    placeholder = ("спросите обычным языком   ·   /clear — очистить диалог   ·   "
+                   "/ai — состояние модели")
     SIDE_ID = "#mind-right"
     TIPS_ID = "#p-questions"
 
@@ -54,14 +55,27 @@ class AgentScreen(ModeScreen):
         self._model: tuple[bool | None, str] = (None, "проверяю…")
         self._console_expanded = False
         self._wide = ""
+        # Каждый заданный вопрос с его счётом: сколько модель думала и сколько
+        # действий успела сделать до ответа. Это история рабочей области, а не
+        # украшение: развёрнутый ДИАЛОГ показывает её слева, и клик повторяет
+        # вопрос — тот же приём, что и журнал запусков в ВЫВОДЕ КОМАНД.
+        self._asked: list[dict] = []
+        self._last_q = ""
+        self._t0 = 0.0
 
     # --- раскладка --------------------------------------------------------
 
     def compose_body(self):
         with Horizontal(id="mind-body"):
             with Vertical(id="mind-left"):
-                yield Panel(VerticalScroll(id="chat"), title="ДИАЛОГ",
-                            id="p-chat", topic="chat")
+                # Развёрнутый ДИАЛОГ — рабочая область с историей слева
+                # (заполняется кодом при развороте, как слои у других панелей),
+                # а не та же лента в большем размере.
+                with Panel(title="ДИАЛОГ", id="p-chat", topic="chat"):
+                    with Horizontal(id="chat-body"):
+                        yield Vertical(VerticalScroll(id="chat-hist"),
+                                       id="chat-hist-col")
+                        yield VerticalScroll(id="chat")
                 yield Panel(ItemGrid(id="question-chips", min_column_width=34),
                             title="О ЧЁМ СПРОСИТЬ", id="p-questions")
             with Vertical(id="mind-right"):
@@ -125,7 +139,45 @@ class AgentScreen(ModeScreen):
             con.write(row)
 
     def hint_pairs(self):
-        return [("Enter", "спросить"), ("/", "команды"), ("Esc", "к выбору режима")]
+        out = [("Enter", "спросить"), ("/", "команды"),
+               ("Esc", "к выбору режима")]
+        # Клавишу очистки — текстом в подсказки: лента растёт и при активном
+        # использовании занимает весь экран, а «/clear уводит к выбору режима»
+        # никто не угадает, пока не попробовал случайно.
+        if self._wide == "chat":
+            out.append(("/clear", "очистить диалог"))
+        return out
+
+    # --- ввод -------------------------------------------------------------
+
+    def submit_line(self, raw: str) -> None:
+        """В АГЕНТЕ `/clear` чистит диалог, а не уводит к выбору режима.
+
+        Базовый экран — про команды, и там /clear действительно выход. Здесь
+        разговор и есть рабочая область: после десятка вопросов лента занимает
+        весь экран, и стереть её — первое, что хочется сделать, не покидая
+        режим. К выбору режима по-прежнему ведут Esc и ^O, а история вопросов
+        слева остаётся: чистится лента, не работа.
+        """
+        import time as _time
+
+        line = raw.strip()
+        if line.lstrip("/").lower() in ("clear", "cls"):
+            self.clear_dialog()
+            self._t0 = _time.monotonic()   # приветствие не должно ломать таймер
+            return
+        super().submit_line(raw)
+
+    def clear_dialog(self) -> None:
+        self.chat.remove_children()
+        self._buf = ""
+        self._answer = None
+        self._greet()
+        self._bubble(Static(Text("— лента очищена, история вопросов слева —",
+                                 style=palette.role_hex("faint")),
+                            classes="msg-note"))
+        self._draw_chat()
+        self.chat.scroll_end(animate=False)
 
     def context_bits(self) -> str:
         from ...agent import llm
@@ -179,6 +231,10 @@ class AgentScreen(ModeScreen):
         self._ask(line)
 
     def _ask(self, question: str) -> None:
+        import time
+
+        self._last_q = question
+        self._t0 = time.monotonic()
         head = Text()
         head.append("▌ ", style=palette.role_hex("faint"))
         head.append("вы", style=palette.role_hex("dim"))
@@ -239,11 +295,22 @@ class AgentScreen(ModeScreen):
         return out
 
     def _ask_done(self) -> None:
+        import time
+
         self.set_busy(False)
         if self._answer is not None and not self._buf.strip():
             self._answer.update(Text("ответа не было",
                                      style=palette.role_hex("warning")))
+        # Вопрос в историю — только когда ответ закончился: строка без счёта
+        # («сколько думала», «что успела сделать») вела бы себя как кнопка, у
+        # которой половина функции не работает.
+        if self._last_q:
+            self._asked.append({"q": self._last_q,
+                                "seconds": time.monotonic() - self._t0,
+                                "acts": len(self._actions)})
+            self._last_q = ""
         self._draw_seen()
+        self._draw_chat()
         self.refresh_context()
         self.chat.scroll_end(animate=False)
 
@@ -259,6 +326,51 @@ class AgentScreen(ModeScreen):
 
     # --- развороты панелей --------------------------------------------------
 
+    def _draw_chat(self) -> None:
+        """Развёрнутый ДИАЛОГ — рабочая область, а не лента покрупнее.
+
+        Слева — каждый заданный вопрос с его счётом (время, действия);
+        клик повторяет вопрос, как клик по запуску в журнале команд повторяет
+        просмотр его вывода. Справа — сама лента на всю оставшуюся ширину.
+        Свёрнутая панель истории не видит: там вопрос задают один раз и
+        уходят, возвращаться не к чему.
+        """
+        wide = self._wide == "chat"
+        try:
+            self.query_one("#chat-hist-col").display = wide
+        except Exception:
+            return
+        panel = self.query_one("#p-chat", Panel)
+        if not wide:
+            panel.set_title("ДИАЛОГ")
+            return
+        n = len(self._asked)
+        panel.set_title(f"ДИАЛОГ   ·   {n} "
+                        f"{plural(n, 'вопрос', 'вопроса', 'вопросов')}"
+                        f"   ·   /clear — очистить ленту")
+        hist = self.query_one("#chat-hist", VerticalScroll)
+        hist.remove_children()
+        faint = palette.role_hex("faint")
+        if not n:
+            hist.mount(Static(Text("  задайте первый вопрос — он появится "
+                                   "здесь,\n  и его можно будет повторить "
+                                   "кликом", style=faint)))
+            return
+        accent = palette.role_hex("mind")
+        title = palette.role_hex("title")
+        for i, it in enumerate(self._asked, 1):
+            row = Text()
+            row.append(f"{i:>2}  ", style=faint)
+            row.append(_wrap(it["q"], 40, 5), style=title)
+            row.append("\n     ")
+            row.append(f"{it['seconds']:.0f} с", style=faint)
+            if it["acts"]:
+                row.append(f"   ·   ⚙ {it['acts']} "
+                           + plural(it["acts"], "действие", "действия",
+                                    "действий"), style=accent)
+            row.append("\n")
+            hist.mount(Chip(row, value=it["q"], classes="hist-item"))
+
     def on_panel_expanded(self, event) -> None:
         topic = getattr(event.panel, "topic", "")
         self._console_expanded = topic == "console"
@@ -266,6 +378,8 @@ class AgentScreen(ModeScreen):
         self._draw_journal()
         self._draw_seen()
         self._draw_trace()
+        self._draw_chat()
+        self.refresh_hints()
         # Строку вопроса поднимает ModeScreen: Textual зовёт обработчик у
         # КАЖДОГО класса в MRO, поэтому super() здесь звать не надо — иначе
         # строка монтируется дважды и падает на дублирующемся id.
@@ -276,6 +390,8 @@ class AgentScreen(ModeScreen):
         self._draw_journal()
         self._draw_seen()
         self._draw_trace()
+        self._draw_chat()
+        self.refresh_hints()
 
     def panel_facts(self, topic: str) -> list[str]:
         """Факты по теме открытой панели. Спрашивают про то, на что смотрят."""
@@ -292,8 +408,14 @@ class AgentScreen(ModeScreen):
             return base + (["Агент сделал: " + a for a in self._actions[-8:]]
                            or ["Агент ещё ничего не делал."])
         if topic == "chat":
-            return base + ["В диалоге "
-                           f"{len(list(self.chat.children))} сообщений."]
+            asked = self._asked
+            lines = [f"В диалоге {len(list(self.chat.children))} сообщений, "
+                     f"вопросов задано {len(asked)}."]
+            if asked:
+                lines.append("Последний вопрос: " + asked[-1]["q"])
+                lines.append("Повторить любой вопрос можно кликом по нему "
+                             "в истории слева.")
+            return base + lines
         if topic == "console":
             con = self.query_one("#console", Console)
             return base + [f"Запусков в журнале: {len(con.runs)}."]

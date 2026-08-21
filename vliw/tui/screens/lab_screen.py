@@ -636,11 +636,19 @@ class LabScreen(ModeScreen):
         dag = self.app.session.dag_obj
         grid = self.query_one("#grid", ScheduleGrid)
         grid.clear(columns=True)
-        for p in range(model.width):
-            label = Text(model.port_label(p), style=palette.role_hex("dim"))
-            grid.add_column(label, width=11, key=str(p))
-
         busy = sched.busy_map()
+        # Порты, на которые за всё расписание не встало ни одной операции.
+        # На slotclash таких три из шести: они занимали половину ширины
+        # решётки и не несли ничего, кроме точек. Сужаем до метки — простой
+        # порта остаётся видимым (это те же 9% занятости слотов, только по
+        # горизонтали), но перестаёт отбирать место у рабочих колонок.
+        used_ports = {p.channel for p in sched.placements.values()}
+        for p in range(model.width):
+            idle = p not in used_ports
+            role = "faint" if idle else "dim"
+            label = Text(model.port_label(p), style=palette.role_hex(role))
+            grid.add_column(label, width=4 if idle else 11, key=str(p))
+
         crit = self._critical_set()
         self._cells = {}
         # Строка решётки больше НЕ равна такту: простои схлопнуты. Список
@@ -702,6 +710,29 @@ class LabScreen(ModeScreen):
         """
         style = palette.role_hex("faint")
         return [Text(" ─────────", style=style) for _ in range(width)]
+
+    def _active_finding(self):
+        """Находка доктора, к которой относится клетка под курсором.
+
+        Связь, которой не было: ДИАГНОЗ говорит «монопольный порт ,5 занят
+        менее срочной z0», в решётке есть та самая z0 — а понять, что это
+        одно и то же, было нельзя. Теперь наведение на клетку подсвечивает
+        находку про неё, и наоборот: читая находку, видно, о какой клетке
+        речь. Ткнуть по находке мышью в терминале нельзя, зато курсор уже
+        ходит — используем то, что есть.
+        """
+        target = self._cursor_target()
+        if target is None:
+            return None
+        if target[0] == "простой":
+            return self._gap_finding(target[1], target[2])
+        instr = target[3]
+        if instr is None:
+            return None
+        for f in self._findings():
+            if instr in f.instrs:
+                return f
+        return None
 
     def _gap_label(self, start: int, end: int) -> Text:
         f = self._gap_finding(start, end)
@@ -765,6 +796,7 @@ class LabScreen(ModeScreen):
     def on_data_table_cell_highlighted(self, event) -> None:
         event.stop()
         self._draw_detail()
+        self._draw_diag()          # подсветить находку про эту клетку
         self._cell_ai_restart()
 
     # --- ИИ по курсору -----------------------------------------------------
@@ -1305,17 +1337,24 @@ class LabScreen(ModeScreen):
         rest = [f for f in diag.top
                 if not (f.code == "idle-stall" and f.where in shown_in_grid)]
         hidden = len(diag.top) - len(rest)
+        active = self._active_finding()
         for i, f in enumerate(rest):
             if i:
                 t.append("\n")
+            here = active is not None and f is active
             mark, role = ("=", "dim") if f.kind == "limit" \
                 else marks.get(f.severity, ("·", "dim"))
-            head = f"{mark:<3}−{f.cycles_lost} т. "
-            t.append(head, style=palette.role_hex(role))
+            # Находка про клетку под курсором помечена стрелкой и подсвечена.
+            # Без этого ДИАГНОЗ и решётка говорили об одном и том же, но
+            # связать их взглядом было нельзя.
+            head = f"{'▸' if here else mark:<3}−{f.cycles_lost} т. "
+            t.append(head, style=palette.role_hex("accent" if here else role))
             t.append(_wrapped(f.title, width, len(head)),
-                     style=palette.role_hex("text"))
+                     style=(palette.role_hex("title") + " bold") if here
+                     else palette.role_hex("text"))
             t.append("\n")
-            t.append("     " + _wrapped(f.where, width, 5), style=dim)
+            t.append("     " + _wrapped(f.where, width, 5),
+                     style=palette.role_hex("accent_soft") if here else dim)
             t.append("\n")
         if hidden:
             if rest:

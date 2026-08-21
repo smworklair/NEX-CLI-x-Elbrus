@@ -54,7 +54,8 @@ class CoreScreen(ModeScreen):
     def compose_body(self):
         with Horizontal(id="core-body"):
             with Vertical(id="core-left"):
-                yield Panel(Console(id="console"), title="ЛЕНТА", id="p-tape")
+                yield Panel(Console(id="console"), title="ЛЕНТА", id="p-tape",
+                            classes="primary")
                 yield Panel(
                     Horizontal(id="kernel-chips"),
                     Horizontal(id="verb-chips"),
@@ -63,7 +64,8 @@ class CoreScreen(ModeScreen):
             with Vertical(id="core-right"):
                 yield Panel(VerticalScroll(Static(id="names")),
                             title="ИМЕНА", id="p-names")
-                yield Panel(Static(id="memory"), title="ПАМЯТЬ", id="p-mem")
+                yield Panel(Static(id="memory"), title="ПАМЯТЬ", id="p-mem",
+                            classes="quiet")
                 yield Panel(VerticalScroll(Static(id="program")),
                             title="ПРОГРАММА", id="p-prog")
 

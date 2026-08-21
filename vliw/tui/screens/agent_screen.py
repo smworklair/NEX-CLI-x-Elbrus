@@ -53,19 +53,26 @@ class AgentScreen(ModeScreen):
         self._actions: list[str] = []
         self._model: tuple[bool | None, str] = (None, "проверяю…")
         self._console_expanded = False
+        self._wide = ""
 
     # --- раскладка --------------------------------------------------------
 
     def compose_body(self):
         with Horizontal(id="mind-body"):
             with Vertical(id="mind-left"):
-                yield Panel(VerticalScroll(id="chat"), title="ДИАЛОГ", id="p-chat")
+                yield Panel(VerticalScroll(id="chat"), title="ДИАЛОГ",
+                            id="p-chat", topic="chat")
                 yield Panel(ItemGrid(id="question-chips", min_column_width=34),
                             title="О ЧЁМ СПРОСИТЬ", id="p-questions")
             with Vertical(id="mind-right"):
-                yield Panel(Static(id="seen"), title="ЧТО ВИДИТ АГЕНТ", id="p-seen")
+                yield Panel(Static(id="seen"),
+                            VerticalScroll(Static(id="seen-full"),
+                                           id="seen-wide"),
+                            title="ЧТО ВИДИТ АГЕНТ", id="p-seen", topic="seen")
                 yield Panel(VerticalScroll(Static(id="trace")),
-                            title="ТРАССА", id="p-trace")
+                            VerticalScroll(Static(id="trace-full"),
+                                           id="trace-wide"),
+                            title="ТРАССА", id="p-trace", topic="trace")
                 yield Panel(Console(id="console"),
                             ConsoleJournal(id="journal"),
                             title="ВЫВОД КОМАНД",
@@ -252,15 +259,162 @@ class AgentScreen(ModeScreen):
     # --- развороты панелей --------------------------------------------------
 
     def on_panel_expanded(self, event) -> None:
-        event.stop()
-        if getattr(event.panel, "topic", "") == "console":
-            self._console_expanded = True
-            self._draw_journal()
+        topic = getattr(event.panel, "topic", "")
+        self._console_expanded = topic == "console"
+        self._wide = topic
+        self._draw_journal()
+        self._draw_seen()
+        self._draw_trace()
+        # Строку вопроса поднимает ModeScreen: Textual зовёт обработчик у
+        # КАЖДОГО класса в MRO, поэтому super() здесь звать не надо — иначе
+        # строка монтируется дважды и падает на дублирующемся id.
 
     def on_panel_collapsed(self, event) -> None:
-        event.stop()
         self._console_expanded = False
+        self._wide = ""
         self._draw_journal()
+        self._draw_seen()
+        self._draw_trace()
+
+    def panel_facts(self, topic: str) -> list[str]:
+        """Факты по теме открытой панели. Спрашивают про то, на что смотрят."""
+        s = self.app.session
+        base = [f"Участок {s.scenario}, {len(s.dag_obj)} операций, "
+                f"машина {s.model().name}."]
+        cached = s.peek()
+        if cached is not None:
+            b, o, met = cached
+            base.append(f"baseline {b.schedule.makespan} т., "
+                        f"оракул {o.schedule.makespan} т., "
+                        f"нижняя граница {met.lower_bound} т.")
+        if topic == "trace":
+            return base + (["Агент сделал: " + a for a in self._actions[-8:]]
+                           or ["Агент ещё ничего не делал."])
+        if topic == "chat":
+            return base + ["В диалоге "
+                           f"{len(list(self.chat.children))} сообщений."]
+        if topic == "console":
+            con = self.query_one("#console", Console)
+            return base + [f"Запусков в журнале: {len(con.runs)}."]
+        return base
+
+    def panel_chips(self, topic: str) -> list[str]:
+        return {
+            "seen": ["что из этого ты придумал, а что посчитано?",
+                     "какие числа ты видишь прямо сейчас?",
+                     "чего тебе не хватает, чтобы ответить точно?"],
+            "trace": ["зачем ты это сделал?",
+                      "какой командой это перепроверить?",
+                      "что ты сделаешь следующим?"],
+            "chat": ["повтори короче",
+                     "с чего начать разбор этого участка?",
+                     "какой вопрос стоит задать следующим?"],
+            "console": ["перескажи последний отчёт",
+                        "какую команду дать следующей?"],
+        }.get(topic, [])
+
+    def _section(self, label: str, note: str = "") -> Text:
+        """Заголовок раздела: строчными и линейка до края."""
+        width = max(40, self.app.size.width - 8)
+        t = Text()
+        t.append("  " + label + "  ", style=palette.role_hex("title") + " bold")
+        used = len(label) + 4
+        if note:
+            t.append(note + "  ", style=palette.role_hex("faint"))
+            used += len(note) + 2
+        t.append("─" * max(0, width - used), style=palette.role_hex("line"))
+        return t
+
+    def _draw_seen_full(self) -> None:
+        """Развёрнутое «ЧТО ВИДИТ АГЕНТ» — дословный контекст, а не сводка.
+
+        Свёрнутая панель показывает вывеску: модель, участок, три числа.
+        Развёрнутая показывает ровно те строки, которые уходят в модель, —
+        столько, сколько их есть. Это единственное место, где видно, на чём
+        ответ основан; без него «проверяемость» остаётся словом.
+        """
+        target = self.query_one("#seen-full", Static)
+        panel = self.query_one("#p-seen", Panel)
+        from ...agent import context, llm
+
+        s = self.app.session
+        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        title = palette.role_hex("title")
+        # Ровно те строки, что собирает контекст агента, — не пересказ их
+        # своими словами: панель обязана показывать то, что реально уходит.
+        try:
+            facts = (context.machine_facts(s.model())
+                     + context.schedule_facts(s)
+                     + context.doctor_facts(s))
+        except Exception:
+            facts = self.panel_facts("seen")
+        chars = sum(len(f) for f in facts)
+        panel.set_title(f"ЧТО ВИДИТ АГЕНТ   ·   контекст дословно   ·   "
+                        f"{len(facts)} {plural(len(facts), 'факт', 'факта', 'фактов')}")
+        t = Text()
+        t.append_text(self._section("модель"))
+        t.append("\n\n")
+        ok, detail = self._model
+        t.append("    " + ("проверяю…" if ok is None else
+                           (llm.describe() if ok else "нет модели: " + detail)),
+                 style=(faint if ok is None else
+                        (palette.role_hex("success") if ok
+                         else palette.role_hex("warning"))))
+        t.append("\n\n")
+        t.append_text(self._section(
+            "факты, которые уходят в модель",
+            f"{chars} символов  ·  примерно {max(1, chars // 3)} токенов"))
+        t.append("\n\n")
+        for i, f in enumerate(facts, 1):
+            t.append(f"    {i:>2}  ", style=faint)
+            t.append(_wrap(f, max(40, self.app.size.width - 14), 8),
+                     style=dim)
+            t.append("\n")
+        t.append("\n")
+        t.append_text(self._section("чего тут нет"))
+        t.append("\n\n")
+        t.append("    Модель не видит исходник, не видит решётку и не умеет\n"
+                 "    считать. Всё, что она может, — пересказать строки выше.\n"
+                 "    Любое число из ответа, которого нет в этом списке,\n"
+                 "    выдумано: сверьте командой (/doctor, /bounds, /compare).",
+                 style=faint)
+        target.update(t)
+
+    def _draw_trace_full(self) -> None:
+        """Развёрнутая ТРАССА — что агент делал сам, по шагам и с проверкой."""
+        target = self.query_one("#trace-full", Static)
+        panel = self.query_one("#p-trace", Panel)
+        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        n = len(self._actions)
+        panel.set_title(f"ТРАССА   ·   действия агента   ·   "
+                        f"{n} {plural(n, 'шаг', 'шага', 'шагов')}")
+        t = Text()
+        t.append_text(self._section("что агент сделал сам",
+                                    "прежде чем отвечать"))
+        t.append("\n\n")
+        if not self._actions:
+            t.append("    Агент ещё ничего не делал. Он берётся за действия\n"
+                     "    сам: загрузить файл, переключить участок, посчитать\n"
+                     "    расписание — и каждое попадает сюда.", style=faint)
+        else:
+            for i, note in enumerate(self._actions, 1):
+                t.append(f"    {i:>2}  ", style=palette.role_hex("mind"))
+                t.append(_wrap(note, max(40, self.app.size.width - 14), 8),
+                         style=dim)
+                t.append("\n")
+        t.append("\n")
+        t.append_text(self._section("перепроверить"))
+        t.append("\n\n")
+        for cmd, note in (("/doctor", "где именно теряются такты"),
+                          ("/compare", "оба расписания бок о бок"),
+                          ("/bounds", "предел участка"),
+                          ("/ai", "состояние модели")):
+            t.append("    " + cmd.ljust(12), style=palette.role_hex("mind"))
+            t.append(note + "\n", style=faint)
+        t.append("\n    Числа считает ядро. Трасса нужна, чтобы не верить\n"
+                 "    агенту на слово, а повторить его шаги руками.",
+                 style=faint)
+        target.update(t)
 
     def _draw_journal(self) -> None:
         journal = self.query_one("#journal", ConsoleJournal)
@@ -277,6 +431,13 @@ class AgentScreen(ModeScreen):
         journal.load(con.runs, self.mode)
 
     def _draw_seen(self) -> None:
+        wide = self._wide == "seen"
+        self.query_one("#seen-wide").display = wide
+        self.query_one("#seen", Static).display = not wide
+        if wide:
+            self._draw_seen_full()
+            return
+        self.query_one("#p-seen", Panel).set_title("ЧТО ВИДИТ АГЕНТ")
         target = self.query_one("#seen", Static)
         s = self.app.session
         dim = palette.role_hex("dim")
@@ -334,6 +495,13 @@ class AgentScreen(ModeScreen):
         target.update(t)
 
     def _draw_trace(self) -> None:
+        wide = self._wide == "trace"
+        self.query_one("#trace-wide").display = wide
+        self.query_one("#trace", Static).display = not wide
+        if wide:
+            self._draw_trace_full()
+            return
+        self.query_one("#p-trace", Panel).set_title("ТРАССА")
         target = self.query_one("#trace", Static)
         if not self._actions:
             target.update(Text("агент ещё ничего не делал",

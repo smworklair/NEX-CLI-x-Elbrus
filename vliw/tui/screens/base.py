@@ -301,7 +301,12 @@ class ModeScreen(Screen):
         chips = self.panel_chips(topic)
         if not facts and not chips:
             return
-        self.close_panel_prompt()
+        # remove() у Textual отложенный: если просто позвать close перед
+        # mount, старый виджет ещё жив и новый падает на дублирующемся id.
+        for old in self.query(PanelPrompt):
+            old.remove()
+            self._prompt_panel = None
+            return self.call_after_refresh(self.open_panel_prompt, panel)
         full = getattr(panel, "_title", "") or topic
         title = full.split("   ")[0].strip() or topic
         prompt = PanelPrompt(title=title, chips=chips, facts=facts,

@@ -593,3 +593,11 @@ PanelPrompt {
 }
 
 #pp-input > .input--placeholder { color: $nex-faint; }
+
+/* --- развёрнутые панели АГЕНТА ------------------------------------------ */
+
+#seen-wide, #trace-wide { display: none; height: 1fr; scrollbar-size-vertical: 1; }
+
+#scen-wide { display: none; height: 1fr; scrollbar-size-vertical: 1; }
+
+#tape-wide, #kern-wide { display: none; height: 1fr; scrollbar-size-vertical: 1; }

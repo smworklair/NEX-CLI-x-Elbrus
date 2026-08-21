@@ -71,6 +71,11 @@ class CoreScreen(ModeScreen):
         self._prev_mem: list[int] = []
         self._changed_regs: set[str] = set()
         self._changed_mem: set[int] = set()
+        self._prev_ops = 0
+        # Лист вычислений: что каждая введённая строка изменила. Лента
+        # показывает вывод, но не «какие имена появились и сколько операций
+        # добавилось» — а это и есть работа интерпретатора.
+        self._history: list[dict] = []
         # Какая панель развёрнута. Разворот здесь — не «то же крупнее»: у
         # ИМЁН это происхождение значений, у ПАМЯТИ — карта, из которой
         # можно считать, у ПРОГРАММЫ — ярусы графа, то есть тот самый
@@ -82,11 +87,15 @@ class CoreScreen(ModeScreen):
     def compose_body(self):
         with Horizontal(id="core-body"):
             with Vertical(id="core-left"):
-                yield Panel(Console(id="console"), title="ЛЕНТА", id="p-tape")
+                yield Panel(Console(id="console"),
+                            VerticalScroll(Static(id="tape-full"),
+                                           id="tape-wide"),
+                            title="ЛЕНТА", id="p-tape", topic="tape")
                 yield Panel(
                     Horizontal(id="kernel-chips"),
                     Horizontal(id="verb-chips"),
-                    title="ЧЕМ СЧИТАТЬ", id="p-kernels",
+                    VerticalScroll(Static(id="kern-full"), id="kern-wide"),
+                    title="ЧЕМ СЧИТАТЬ", id="p-kernels", topic="kernels",
                 )
             with Vertical(id="core-right"):
                 yield Panel(VerticalScroll(Static(id="names")),
@@ -200,6 +209,15 @@ class CoreScreen(ModeScreen):
                 con.write("")
             return
 
+        added = len(ws.snapshot()) - self._prev_ops
+        self._history.append({
+            "line": line,
+            "value": result.value,
+            "names": sorted(n for n, v in ws.regs.items()
+                            if self._prev_regs.get(n) != v),
+            "ops": max(0, added),
+            "kind": result.kind,
+        })
         if result.kind not in ("reset", "empty") and not ws.empty():
             self.app.session.set_dag(ws.snapshot(), "interp")
         if con is not None:
@@ -306,6 +324,7 @@ class CoreScreen(ModeScreen):
         ws = self.app.session.workspace()
         self._prev_regs = dict(ws.regs)
         self._prev_mem = list(ws.mem)
+        self._prev_ops = len(ws.snapshot())
 
     def refresh_state(self) -> None:
         ws = self.app.session.workspace()
@@ -313,12 +332,15 @@ class CoreScreen(ModeScreen):
                               if self._prev_regs.get(k) != v}
         self._changed_mem = {i for i, v in enumerate(ws.mem)
                              if i < len(self._prev_mem) and self._prev_mem[i] != v}
-        for wide_id, short_id, topic in (
-                ("#names-wide", "#names", "names"),
-                ("#mem-wide", "#memory", "memory"),
-                ("#prog-wide", "#program", "program")):
+        for wide_id, short_ids, topic in (
+                ("#names-wide", ("#names",), "names"),
+                ("#mem-wide", ("#memory",), "memory"),
+                ("#prog-wide", ("#program",), "program"),
+                ("#tape-wide", ("#console",), "tape"),
+                ("#kern-wide", ("#kernel-chips", "#verb-chips"), "kernels")):
             self.query_one(wide_id).display = self._wide == topic
-            self.query_one(short_id).display = self._wide != topic
+            for short_id in short_ids:
+                self.query_one(short_id).display = self._wide != topic
         self._draw_names(ws)
         self._draw_memory(ws)
         self._draw_program(ws)
@@ -330,6 +352,14 @@ class CoreScreen(ModeScreen):
             self._draw_mem_map(ws)
         elif self._wide == "program":
             self._draw_prog_tiers(ws)
+        elif self._wide == "tape":
+            self._draw_tape_full(ws)
+        elif self._wide == "kernels":
+            self._draw_kern_full()
+        else:
+            for pid, name in (("#p-tape", "ЛЕНТА"),
+                              ("#p-kernels", "ЧЕМ СЧИТАТЬ")):
+                self.query_one(pid, Panel).set_title(name)
 
     # --- развороты ЯДРА -----------------------------------------------------
     #
@@ -371,6 +401,135 @@ class CoreScreen(ModeScreen):
             seen.add(i)
             stack.extend(dag[i].preds)
         return seen
+
+    def panel_facts(self, topic: str) -> list[str]:
+        ws = self.app.session.workspace()
+        dag = ws.snapshot()
+        base = [f"Интерпретатор: имён {len(ws.regs)}, операций в графе "
+                f"{len(dag)}, машина {self.app.session.model().name}."]
+        if topic == "names":
+            return base + [f"{n} = {v}" for n, v in list(ws.regs.items())[:12]]
+        if topic == "memory":
+            filled = [(i, v) for i, v in enumerate(ws.mem) if v][:12]
+            return base + [f"Ячейка {i} = {v}" for i, v in filled]
+        if topic == "program":
+            return base + [f"{i.name}: {i.text} ({i.op})"
+                           for i in list(dag)[:12]]
+        if topic == "tape":
+            return base + [f"Строка «{h['line']}» дала {h['value']}, "
+                           f"операций +{h['ops']}." for h in self._history[-8:]]
+        if topic == "kernels":
+            return base + [f"Ядро {n} {d}: {h}" for n, d, h in kernel_help()]
+        return base
+
+    def panel_chips(self, topic: str) -> list[str]:
+        return {
+            "names": ["какое имя тут самое дорогое?",
+                      "что значит «операций» в этой таблице?"],
+            "memory": ["что лежит в памяти по умолчанию?",
+                       "чем load отличается от store?"],
+            "program": ["что тут можно распараллелить?",
+                        "почему ярусы такие узкие?"],
+            "tape": ["что я вообще посчитал?",
+                     "какие строки положили операции в граф?"],
+            "kernels": ["какое ядро взять для начала?",
+                        "чем dot отличается от saxpy?"],
+        }.get(topic, [])
+
+    def _draw_tape_full(self, ws) -> None:
+        """Развёрнутая ЛЕНТА — лист вычислений, а не тот же лог подлиннее.
+
+        Лента отвечает «что напечаталось». Лист отвечает на другой вопрос:
+        что каждая строка СДЕЛАЛА — какое значение дала, какие имена завела и
+        сколько операций добавила в граф. Из этих операций потом и собирается
+        расписание, а по логу их не сосчитать.
+        """
+        target = self.query_one("#tape-full", Static)
+        panel = self.query_one("#p-tape", Panel)
+        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        title, work = palette.role_hex("title"), palette.role_hex("work")
+        n = len(self._history)
+        total_ops = len(ws.snapshot())
+        panel.set_title(f"ЛЕНТА   ·   лист вычислений   ·   "
+                        f"{n} {plural(n, 'строка', 'строки', 'строк')}")
+        t = Text()
+        t.append_text(self._section("что вы считали",
+                                    f"в графе {total_ops} оп."))
+        t.append("\n\n")
+        if not self._history:
+            t.append("    Пока ничего. Наберите  2+2  ·  a=10  ·  sum 8  ·  go",
+                     style=faint)
+            target.update(t)
+            return
+        # Ровно тот же отступ, что у строк ниже (4, не 5): иначе шапка стоит
+        # на символ левее своих же колонок.
+        t.append("    " + "#".rjust(3) + "  " + "строка".ljust(34)
+                 + "значение".rjust(12) + "   " + "+оп.".rjust(5)
+                 + "   имена\n", style=faint)
+        for i, h in enumerate(self._history, 1):
+            t.append(f"    {i:>3}  ", style=faint)
+            t.append(h["line"][:33].ljust(34), style=title)
+            val = "—" if h["value"] is None else str(h["value"])
+            t.append(val[:11].rjust(12),
+                     style=work if h["value"] is not None else faint)
+            t.append(("+" + str(h["ops"]) if h["ops"] else "·").rjust(5),
+                     style=palette.role_hex("accent2") if h["ops"] else faint)
+            t.append("   " + ", ".join(h["names"])[:40], style=dim)
+            t.append("\n")
+        t.append("\n")
+        t.append_text(self._section("дальше"))
+        t.append("\n\n")
+        t.append("    Строки со знаком «+» положили операции в граф — их и\n"
+                 "    будет планировать РАЗБОР. Чистая арифметика (2+2) граф\n"
+                 "    не трогает: считать можно сколько угодно.\n\n",
+                 style=faint)
+        t.append("    go", style=work)
+        t.append("  — отдать граф в РАЗБОР и посчитать расписание.",
+                 style=faint)
+        target.update(t)
+
+    def _draw_kern_full(self) -> None:
+        """Развёрнутое «ЧЕМ СЧИТАТЬ» — каталог ядер, а не ряд чипов.
+
+        Чип говорит имя, но не говорит, что ядро посчитает: `chase` и `dot`
+        для нового человека одинаково пусты. Каталог показывает форму вызова
+        и что она делает.
+        """
+        target = self.query_one("#kern-full", Static)
+        panel = self.query_one("#p-kernels", Panel)
+        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        work = palette.role_hex("work")
+        rows = kernel_help()
+        panel.set_title(f"ЧЕМ СЧИТАТЬ   ·   каталог   ·   {len(rows)} ядер")
+        t = Text()
+        t.append_text(self._section("ядра", "вызов подставляется кликом по чипу"))
+        t.append("\n\n")
+        t.append("      " + "вызов".ljust(18) + "что считает\n", style=faint)
+        for name, default, hint in rows:
+            t.append("      ")
+            t.append(f"{name} {default}".ljust(18), style=work)
+            t.append(hint, style=dim)
+            t.append("\n")
+        t.append("\n")
+        t.append_text(self._section("служебные слова"))
+        t.append("\n\n")
+        for word, hint in (("names", "показать имена и значения"),
+                           ("mem", "показать память"),
+                           ("list", "показать накопленный граф"),
+                           ("reset", "очистить имена и память"),
+                           ("go", "отдать граф в РАЗБОР и посчитать")):
+            t.append("      " + word.ljust(18), style=palette.role_hex("text"))
+            t.append(hint + "\n", style=faint)
+        t.append("\n")
+        t.append_text(self._section("как писать"))
+        t.append("\n\n")
+        t.append("      a0 = load [0]        взять из памяти\n"
+                 "      s = a0 * b0          арифметика с именами\n"
+                 "      store s 7            положить обратно\n\n", style=dim)
+        t.append("      Здесь считают выражениями, а не мнемониками e2k:\n"
+                 "      `mul m0 a0 b0` — это ассемблер, его разбирает /load.",
+                 style=faint)
+        target.update(t)
 
     def _draw_names_full(self, ws) -> None:
         target = self.query_one("#names-full", Static)

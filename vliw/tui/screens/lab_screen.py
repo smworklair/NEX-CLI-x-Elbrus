@@ -190,6 +190,7 @@ class LabScreen(ModeScreen):
         self._machine_expanded = False
         self._detail_expanded = False
         self._console_expanded = False
+        self._scen_expanded = False
         self._matrix_ops: list[str] = []
         self._diag_filter = "all"      # all | high | medium | low | limit
         self._find_pos = -1            # позиция в отфильтрованном списке
@@ -201,7 +202,9 @@ class LabScreen(ModeScreen):
             with Vertical(id="lab-left"):
                 yield Panel(Horizontal(id="view-chips"),
                             ItemGrid(id="scenario-chips", min_column_width=15),
-                            title="УЧАСТОК", id="p-scen")
+                            VerticalScroll(Static(id="scen-full"),
+                                           id="scen-wide"),
+                            title="УЧАСТОК", id="p-scen", topic="scen")
                 yield Panel(ScheduleGrid(id="grid", cursor_type="cell",
                                          zebra_stripes=False),
                             GridLink(id="grid-link"),
@@ -491,6 +494,13 @@ class LabScreen(ModeScreen):
             return base + self._machine_facts()
         if topic == "detail":
             return base + self._detail_facts()
+        if topic == "scen":
+            return base + [
+                f"Доступно участков: {len(SCENARIOS)}.",
+                "Список: " + ", ".join(sorted(SCENARIOS)) + ".",
+                f"Сейчас открыт {s.scenario}: "
+                + (SCENARIOS[s.scenario].lesson or SCENARIOS[s.scenario].note
+                   or "")]
         if topic == "console":
             con = self.query_one("#console", Console)
             return base + [f"Запусков в журнале: {len(con.runs)}."] + \
@@ -516,6 +526,9 @@ class LabScreen(ModeScreen):
             "detail": ["почему её нельзя выдать раньше?",
                        "кого она задерживает?",
                        "что будет, если её убрать?"],
+            "scen": ["какой участок разобрать следующим?",
+                     "чем этот участок отличается от соседнего?",
+                     "что тут вообще ломается?"],
             "console": ["перескажи последний отчёт",
                         "чем /doctor отличается от /compare?",
                         "какую команду дать следующей?"],
@@ -1111,6 +1124,9 @@ class LabScreen(ModeScreen):
         elif topic == "console":
             self._console_expanded = True
             self._draw_journal()
+        elif topic == "scen":
+            self._scen_expanded = True
+            self._draw_scen_catalog()
 
     def on_panel_collapsed(self, event) -> None:
         event.stop()
@@ -1120,12 +1136,84 @@ class LabScreen(ModeScreen):
         self._machine_expanded = False
         self._detail_expanded = False
         self._console_expanded = False
+        self._scen_expanded = False
         self._draw_journal()
+        self._draw_scen_catalog()
         self._draw_diag()
         self._draw_grid_link()
         self._draw_numbers()
         self._draw_machine()
         self._draw_detail()
+
+    def _draw_scen_catalog(self) -> None:
+        """Развёрнутый УЧАСТОК — каталог с числами, а не те же четырнадцать чипов.
+
+        Чипы отвечают на «переключить», но не на «на что переключить»: имена
+        вроде divstrength или wide_ilp ничего не говорят, пока не запустишь.
+        Каталог считает то, что считается мгновенно (метрики графа — это не
+        планирование), и потому может показать сразу все участки: сколько
+        операций, чем связан участок — цепочкой зависимостей или портами, и
+        что он вообще разбирает.
+        """
+        wide = self._scen_expanded
+        self.query_one("#scen-wide").display = wide
+        self.query_one("#view-chips").display = not wide
+        self.query_one("#scenario-chips").display = not wide
+        panel = self.query_one("#p-scen", Panel)
+        if not wide:
+            panel.set_title("УЧАСТОК")
+            return
+        from ...core.dag import compute_metrics
+
+        target = self.query_one("#scen-full", Static)
+        model = self.app.session.model()
+        cur = self.app.session.scenario
+        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        title, accent = palette.role_hex("title"), palette.role_hex("accent")
+        panel.set_title(f"УЧАСТОК   ·   каталог   ·   {len(SCENARIOS)} участков")
+        t = Text()
+        t.append_text(self._section("что можно разобрать",
+                                    "· — текущий · /run <имя> или клик"))
+        t.append("\n\n")
+        t.append("      " + "участок".ljust(14) + "оп.".rjust(4)
+                 + "  " + "предел".rjust(7) + "   " + "связан".ljust(18)
+                 + "что разбирает\n", style=faint)
+        by_family: dict[str, list[str]] = {}
+        for key, dag in SCENARIOS.items():
+            by_family.setdefault(dag.family or "прочее", []).append(key)
+        width = max(30, self.app.size.width - 60)
+        for family in sorted(by_family):
+            t.append("\n    " + family + "\n", style=dim)
+            for key in sorted(by_family[family]):
+                dag = SCENARIOS[key]
+                try:
+                    met = compute_metrics(dag, model)
+                    lb, binding = met.lower_bound, met.binding
+                except Exception:
+                    lb, binding = 0, "—"
+                here = key == cur
+                t.append("    ")
+                t.append("· " if here else "  ",
+                         style=accent if here else faint)
+                t.append(key.ljust(14),
+                         style=(title + " bold") if here else palette.role_hex("text"))
+                t.append(str(len(dag)).rjust(4), style=dim)
+                t.append(f"{lb:>7} т.".rjust(9), style=title if here else dim)
+                t.append("  " + binding.ljust(18),
+                         style=palette.role_hex("warning")
+                         if binding == "ресурсы" else faint)
+                t.append((dag.lesson or dag.note or dag.title)[:width],
+                         style=faint)
+                t.append("\n")
+        t.append("\n")
+        t.append_text(self._section("как читать"))
+        t.append("\n\n")
+        t.append("    «предел» — сколько тактов участок не может пройти "
+                 "быстрее ни одним\n    планировщиком. «связан» — чем именно: "
+                 "длиной цепочки зависимостей\n    (критический путь) или "
+                 "нехваткой портов (ресурсы). Второе лечится\n    машиной, "
+                 "первое — только переписыванием кода.", style=faint)
+        target.update(t)
 
     def _draw_journal(self) -> None:
         """Развёрнутый ВЫВОД КОМАНД — журнал запусков, а не лента подлиннее."""

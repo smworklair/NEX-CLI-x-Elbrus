@@ -127,7 +127,7 @@ class ModeScreen(Screen):
             pass
 
     def hint_pairs(self) -> list[tuple[str, str]]:
-        return [("/", "команды"), ("^O", "выбор режима"), ("/exit", "выход")]
+        return [("/", "команды"), ("Esc", "к выбору режима"), ("/exit", "выход")]
 
     def toggle_hints(self) -> list[tuple[str, str]]:
         """Подсказки про скрываемые панели — одинаковые во всех режимах."""
@@ -187,8 +187,17 @@ class ModeScreen(Screen):
         self.handle_line(event.value)
 
     def on_prompt_bar_escaped(self, event) -> None:
-        """Esc при закрытой палитре. По умолчанию — ничего."""
+        """Esc при закрытой палитре и пустом вводе — назад к выбору режима.
+
+        В ЯДРЕ и АГЕНТЕ Esc из поля ввода ничем больше не занят: развёрнутая
+        панель и всплывающая строка вопроса перехватывают его раньше (у них
+        свой `on_key`/`Binding`, и они получают событие первыми), так что сюда
+        он доходит только «сверху», когда экран в обычном виде. РАЗБОР этот
+        обработчик переопределяет своим — там Esc уже занят переключением
+        решётка ⇄ ввод, и это не трогаем.
+        """
         event.stop()
+        self.app.to_picker()
 
     # --- выполнение команд ядра -------------------------------------------
 
@@ -335,23 +344,44 @@ class ModeScreen(Screen):
 
     @work(thread=True, exclusive=True, group="panel-prompt")
     def _panel_prompt_worker(self, question: str) -> None:
-        import time
+        """Отвечает НАСТОЯЩИЙ агент — тот же, что в АГЕНТЕ, не облегчённая копия.
 
-        from ...agent import context, llm
+        Раньше здесь стоял отдельный, узкий путь: `context.panel_prompt` +
+        голый `llm.stream` — только текст, без единого действия. Спросить
+        «переключись на wide_ilp» из всплывающей строки МАШИНЫ было нельзя:
+        агент такого не умел, отвечал про факты, которые ему дали, и точка.
+        Теперь это тот же `Agent.ask_stream`, что ведёт ДИАЛОГ в АГЕНТЕ: он
+        сам распознаёт намерение, переключает сценарий, грузит файл, считает
+        расписание — а панельные факты идут суффиксом (см. `panel=` в
+        `Agent.ask_stream`), чтобы ответ не терял их и не портил кэш префикса.
+        """
+        import time
 
         panel = getattr(self, "_prompt_panel", None)
         full = getattr(panel, "_title", "") if panel is not None else ""
         title = full.split("   ")[0].strip() or "панель"
         prompts = list(self.query(PanelPrompt))
         facts = list(prompts[0].facts) if prompts else []
-        system = context.panel_prompt(title, facts)
+        agent = self.app.session.agent()
         t0 = time.monotonic()
+        acted = False
         try:
-            for piece in llm.stream(system, question, None):
-                self.app.call_from_thread(self._pp_piece, piece)
+            for kind, value in agent.ask_stream(question, panel=(title, facts)):
+                if kind == "action":
+                    acted = True
+                    self.app.call_from_thread(self._pp_action, value)
+                elif kind == "text":
+                    self.app.call_from_thread(self._pp_piece, value)
+                elif kind == "error":
+                    self.app.call_from_thread(self._pp_fail, value)
         except Exception as e:
             self.app.call_from_thread(self._pp_fail, str(e))
-        self.app.call_from_thread(self._pp_done, time.monotonic() - t0)
+        self.app.call_from_thread(self._pp_done, time.monotonic() - t0, acted)
+
+    def _pp_action(self, note: str) -> None:
+        for p in self.query(PanelPrompt):
+            p.action(note)
+            return
 
     def _pp_piece(self, piece: str) -> None:
         for p in self.query(PanelPrompt):
@@ -359,10 +389,22 @@ class ModeScreen(Screen):
             p.append(piece)
             return
 
-    def _pp_done(self, seconds: float) -> None:
+    def _pp_done(self, seconds: float, acted: bool = False) -> None:
         for p in self.query(PanelPrompt):
             p.finish(seconds)
-            return
+            break
+        if acted:
+            # after_command(), А НЕ redraw(): redraw() красит уже посчитанное
+            # (единственный прежний вызывающий — repaint() при смене темы, где
+            # self.base и session.dag_obj гарантированно согласованы). Действие
+            # агента могло переключить сценарий — session.dag_obj уехал вперёд,
+            # а self.base/orc/met в РАЗБОРЕ ещё старые до асинхронного
+            # recompute(). Однажды так и упало: агент переключал на mulclash,
+            # redraw() лез в старое self.base с DAG уже нового сценария и
+            # получал IndexError на несуществующей инструкции. after_command()
+            # — тот же путь, что и после обычной команды из дока ввода.
+            self.refresh_context()
+            self.after_command()
 
     def _pp_fail(self, message: str) -> None:
         for p in self.query(PanelPrompt):

@@ -150,8 +150,19 @@ class Agent:
                 pairs.append(("model", t.answer))
         return pairs
 
-    def ask_stream(self, question: str):
-        """Ответ по частям. Отдаёт кортежи ('action'|'text'|'error', значение)."""
+    def ask_stream(self, question: str,
+                   panel: tuple[str, list[str]] | None = None):
+        """Ответ по частям. Отдаёт кортежи ('action'|'text'|'error', значение).
+
+        `panel` — (заголовок, факты) открытой панели, если спрашивают ИЗ
+        всплывающей строки конкретной панели, а не из общего диалога АГЕНТА.
+        Это НЕ отдельный урезанный режим: действия (переключить сценарий,
+        загрузить файл, посчитать расписание) выполняются те же самые — то
+        есть спросить «переключись на wide_ilp и сравни» можно из всплывающей
+        строки МАШИНЫ в РАЗБОРЕ точно так же, как из ДИАЛОГА в АГЕНТЕ.
+        `panel` лишь сужает, о чём говорить в ответе, и идёт суффиксом
+        промпта (см. `context.system_prompt`), не ломая кэш префикса.
+        """
         turn = Turn(question=question)
         self.history.append(turn)
 
@@ -159,7 +170,8 @@ class Agent:
             turn.actions.append(note)
             yield ("action", note)
 
-        system = context.system_prompt(self.session, self._needs_layout(question))
+        system = context.system_prompt(self.session, self._needs_layout(question),
+                                       panel=panel)
         chunks: list[str] = []
         try:
             for piece in llm.stream(system, question, self._history_pairs(),

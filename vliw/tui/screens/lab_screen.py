@@ -668,6 +668,10 @@ class LabScreen(ModeScreen):
         return out
 
     def after_command(self) -> None:
+        # Журнал — раньше пересчёта: команда могла провалиться или ничего не
+        # менять в расписании (/doctor, /bounds), а её вывод в журнале должен
+        # появиться сразу, не дожидаясь recompute.
+        self._draw_journal()
         self.recompute()
 
     def redraw(self) -> None:
@@ -682,7 +686,14 @@ class LabScreen(ModeScreen):
         self._draw_grid_link()
 
     def on_prompt_bar_escaped(self, event) -> None:
+        # prevent_default(), а не только stop(): Textual зовёт обработчик с
+        # таким именем у КАЖДОГО класса в MRO (см. `_get_dispatch_methods`),
+        # а не только у самого специфичного. Без prevent_default() базовый
+        # ModeScreen.on_prompt_bar_escaped срабатывал следом за этим же
+        # событием и уводил на пикер ОДНОВРЕМЕННО с переключением фокуса на
+        # решётку — Esc в РАЗБОРЕ делал два взаимоисключающих действия разом.
         event.stop()
+        event.prevent_default()
         self.query_one("#grid", ScheduleGrid).focus()
 
     def action_swap_focus(self) -> None:

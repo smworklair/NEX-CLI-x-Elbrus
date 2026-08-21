@@ -594,3 +594,171 @@ class TestDiagGridBridge(unittest.TestCase):
                     f"находка {f.code} {f.where} не подсветилась после /find")
 
 
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestPanelPromptIsAgentic(unittest.TestCase):
+    """Всплывающая строка панели отвечает НАСТОЯЩИМ агентом, а не облегчённой копией.
+
+    Раньше `_panel_prompt_worker` строил свой собственный узкий промпт и звал
+    голый `llm.stream` — ни одного действия агент оттуда сделать не мог.
+    Теперь это тот же `Agent.ask_stream`, что ведёт ДИАЛОГ в АГЕНТЕ: спросить
+    «переключись на X» можно из всплывающей строки ЛЮБОЙ панели.
+    """
+
+    def _screen(self, body, mode="lab"):
+        async def go():
+            app, session = _make_app(mode)
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_scenario_switch_from_popup_does_not_crash_and_updates_screen(self) -> None:
+        """Регрессия: действие агента меняло сценарий, `redraw()` падал IndexError.
+
+        `redraw()` красит уже посчитанное — единственный прежний вызывающий,
+        `repaint()`, зовёт его при смене темы, когда `self.base` и
+        `session.dag_obj` гарантированно согласованы. Действие агента уводит
+        `session.dag_obj` вперёд раньше, чем в РАЗБОРЕ пересчитается
+        `self.base` — звать `redraw()` напрямую значило читать старое
+        расписание для нового графа. На mulclash (другое число инструкций)
+        это падало `IndexError` в `_render_grid`. Правильный хук —
+        `after_command()`: он либо ничего не делает, либо (в РАЗБОРЕ) сам
+        запускает пересчёт в фоне.
+        """
+        import unittest.mock as mock
+
+        from vliw.agent import llm
+        from vliw.tui.widgets import Panel, PanelPrompt
+
+        def fake_stream(system, q, history=None, temperature=0.3, nudge=True):
+            yield "готово"
+
+        async def body(sc, pilot, session):
+            panel = sc.query_one("#p-machine", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            await pilot.pause()
+            pp = sc.query_one(PanelPrompt)
+            inp = pp.query_one("#pp-input")
+            with mock.patch.object(llm, "stream", fake_stream):
+                inp.value = "переключись на mulclash и сравни"
+                await pilot.press("enter")
+                for _ in range(30):
+                    await pilot.pause(0.05)
+            return session.scenario
+
+        scenario = self._screen(body)
+        self.assertEqual(scenario, "mulclash")
+
+    def test_clear_wipes_answer_log_but_keeps_facts_and_chips(self) -> None:
+        """`/clear` — не закрытие: факты и готовые вопросы остаются на месте."""
+        import unittest.mock as mock
+
+        from vliw.agent import llm
+        from vliw.tui.widgets import Panel, PanelPrompt
+
+        def fake_stream(system, q, history=None, temperature=0.3, nudge=True):
+            yield "короткий ответ"
+
+        async def body(sc, pilot, session):
+            panel = sc.query_one("#p-numbers", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            await pilot.pause()
+            pp = sc.query_one(PanelPrompt)
+            inp = pp.query_one("#pp-input")
+            with mock.patch.object(llm, "stream", fake_stream):
+                inp.value = "почему предел такой?"
+                await pilot.press("enter")
+                for _ in range(20):
+                    await pilot.pause(0.05)
+            lines_before = len(list(pp.query(".pp-line")))
+            facts_before = len(pp.facts)
+            inp.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause()
+            return (lines_before, len(list(pp.query(".pp-line"))),
+                    facts_before, len(pp.facts),
+                    pp.query_one("#pp-answer").display)
+
+        before, after, facts_before, facts_after, log_visible = self._screen(body)
+        self.assertGreater(before, 0)
+        self.assertEqual(after, 0)
+        self.assertEqual(facts_before, facts_after)
+        self.assertFalse(log_visible)
+
+    def test_close_key_is_printed_not_only_a_tooltip(self) -> None:
+        """Клавиша закрытия видна текстом — подсказка по наведению мышью в
+        терминале не видна ни на скриншоте, ни без мыши."""
+        from vliw.tui.widgets import Panel, PanelPrompt
+
+        async def body(sc, pilot, session):
+            panel = sc.query_one("#p-machine", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            await pilot.pause()
+            pp = sc.query_one(PanelPrompt)
+            return pp.query_one("#pp-close").content.plain
+
+        text = self._screen(body)
+        self.assertIn("Esc", text)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestConsoleJournalIsATerminal(unittest.TestCase):
+    """Развёрнутый ВЫВОД КОМАНД — живой терминал, а не список для чтения.
+
+    Глобальная строка ввода остаётся доступной, пока панель развёрнута
+    (`ALLOW_IN_MAXIMIZED_VIEW`), и команда, набранная там, обязана сразу
+    появиться в журнале — иначе разворот выглядит терминалом только на
+    словах: набрал команду, а видишь по-прежнему старый запуск.
+    """
+
+    def test_new_run_while_maximized_jumps_to_it(self) -> None:
+        async def go():
+            app, session = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.handle_line("/doctor")
+                    for _ in range(12):
+                        await pilot.pause()
+
+                    from vliw.tui.widgets import Panel, PromptBar
+
+                    panel = sc.query_one("#p-console", Panel)
+                    sc.maximize(panel, container=False)
+                    panel.post_message(Panel.Expanded(panel))
+                    await pilot.pause()
+                    await pilot.pause()
+
+                    bar = sc.query_one("#prompt", PromptBar)
+                    bar.focus_input()
+                    bar.set_value("/bounds")
+                    await pilot.press("enter")
+                    for _ in range(12):
+                        await pilot.pause()
+
+                    journal = sc.query_one("#journal")
+                    return len(journal.runs), journal.pos
+
+            return None
+
+        n, pos = asyncio.run(go())
+        self.assertEqual(n, 2)
+        self.assertEqual(pos, 1, "после набора второй команды журнал обязан "
+                                 "показывать именно её, а не первую")
+
+
+if __name__ == "__main__":
+    unittest.main()

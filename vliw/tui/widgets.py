@@ -233,6 +233,7 @@ class ConsoleJournal(Horizontal):
         super().__init__(**kw)
         self.runs: list[dict] = []
         self.pos = -1
+        self._seen = 0     # сколько запусков уже показывали (для терминала)
 
     def compose(self):
         yield Vertical(id="journal-list")
@@ -248,10 +249,18 @@ class ConsoleJournal(Horizontal):
         if not runs:
             box.mount(Static(Text("  команд ещё не было", style=dim)))
             self.query_one("#journal-out", RichLog).clear()
+            self._seen = 0
             return
-        # Последний запуск открыт сразу: чаще всего вернуться хотят к нему,
-        # а пустая правая половина на входе выглядела бы поломкой.
-        if not 0 <= self.pos < len(runs):
+        # Последний запуск открыт сразу на входе — а если появился НОВЫЙ
+        # запуск с прошлой отрисовки, прыгаем на него всегда, даже если до
+        # этого читали старый: журнал развёрнут поверх терминала (глобальный
+        # ввод остаётся доступным при разворачивании панели), и набранная
+        # команда должна показать СВОЙ вывод, а не оставить читателя на
+        # чужом. Без этого разворот был терминалом только на словах: набрал
+        # команду — а видишь по-прежнему то, что открыл до неё.
+        grew = len(runs) > self._seen
+        self._seen = len(runs)
+        if grew or not 0 <= self.pos < len(runs):
             self.pos = len(runs) - 1
         for i, run in enumerate(runs):
             box.mount(RunItem(i, self._row(i, run),
@@ -567,6 +576,17 @@ class PromptChip(Static):
         self.post_message(self.Picked(self.question))
 
 
+class CloseBtn(Static):
+    """Крестик закрытия — кликабельная альтернатива Esc, не только клавиша."""
+
+    class Picked(Message):
+        pass
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked())
+
+
 class PanelPrompt(Vertical):
     """Строка вопроса, всплывающая внизу развёрнутой панели.
 
@@ -597,9 +617,17 @@ class PanelPrompt(Vertical):
         self.facts = facts or []
         self.mode = mode
         self._answer: Static | None = None
+        self._wait: Static | None = None
         self._buf = ""
 
     def compose(self):
+        # Заголовок — свой ряд внутри рамки, а не border_title: у
+        # border_title нет клика, и крестик закрытия было бы некуда деть,
+        # кроме как в отдельный виджет поверх линии рамки, что менее
+        # надёжно, чем обычная строка.
+        with Horizontal(id="pp-header"):
+            yield Static("", id="pp-title")
+            yield CloseBtn("✕", id="pp-close")
         yield VerticalScroll(id="pp-answer")
         yield ItemGrid(id="pp-chips", min_column_width=30)
         with Horizontal(id="pp-field"):
@@ -608,8 +636,19 @@ class PanelPrompt(Vertical):
 
     def on_mount(self) -> None:
         accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
-        self.border_title = f"NEX  ·  {self._title}"
         self.styles.border_title_color = accent
+        head = Text()
+        head.append(f"NEX  ·  {self._title}", style=f"{accent} bold")
+        self.query_one("#pp-title", Static).update(head)
+        # Клавиша закрытия — ТЕКСТОМ рядом с крестиком, не только всплывающей
+        # подсказкой по наведению: подсказка по hover не видна ни на
+        # скриншоте, ни во многих терминалах без мыши, и тогда крестик без
+        # подписи ничем не выдаёт, чем его закрыть.
+        close = Text()
+        close.append("✕ ", style=palette.role_hex("dim"))
+        close.append("Esc", style=palette.role_hex("faint"))
+        self.query_one("#pp-close", CloseBtn).update(close)
+        self.query_one("#pp-close", CloseBtn).tooltip = "закрыть (Esc)"
         mark = Text()
         mark.append("? ", style=f"{accent} bold")
         self.query_one("#pp-mark", Static).update(mark)
@@ -617,17 +656,26 @@ class PanelPrompt(Vertical):
         for q in self._chips:
             chips.mount(PromptChip(q, "‹ " + q, classes="chip prompt-chip"))
         self.query_one("#pp-answer", VerticalScroll).display = False
-        self.query_one("#pp-input", Input).focus()
+        inp = self.query_one("#pp-input", Input)
+        inp.placeholder = "спросить или сделать что-то с сессией  ·  /clear — очистить"
+        inp.focus()
 
     # --- ответ ------------------------------------------------------------
 
     def start_answer(self) -> None:
+        """Готовимся к ответу. Сам виджет ответа появится позже — в
+        `first_piece()`, а не здесь, — потому что действия агента (переключил
+        сценарий, посчитал расписание) приходят РАНЬШЕ текста и мысль должна
+        идти ПОД ними, а не над: иначе порядок на экране лжёт про порядок
+        событий — читатель видит вывод раньше причины.
+        """
         log = self.query_one("#pp-answer", VerticalScroll)
         log.display = True
         self._buf = ""
-        self._answer = Static(Text("…", style=palette.role_hex("faint")),
-                              classes="pp-line")
-        log.mount(self._answer)
+        self._answer = None
+        self._wait = Static(Text("…", style=palette.role_hex("faint")),
+                            classes="pp-line")
+        log.mount(self._wait)
         log.scroll_end(animate=False)
 
     def echo(self, question: str) -> None:
@@ -647,10 +695,27 @@ class PanelPrompt(Vertical):
                 animate=False)
 
     def first_piece(self) -> None:
-        if self._answer is not None and not self._buf:
-            self._answer.update(Text("", style=palette.role_hex("dim")))
+        """Текст наконец пошёл — здесь и только здесь появляется его виджет.
+
+        До этого момента на экране могли уже стоять строки действий (см.
+        `action()`) и индикатор ожидания «…»; сам ответ встаёт ПОСЛЕ них,
+        замещая «…», а не выше — порядок на экране обязан быть порядком
+        событий.
+        """
+        if self._answer is not None:
+            return
+        log = self.query_one("#pp-answer", VerticalScroll)
+        if self._wait is not None:
+            self._wait.remove()
+            self._wait = None
+        self._answer = Static(Text("", style=palette.role_hex("dim")),
+                             classes="pp-line")
+        log.mount(self._answer)
 
     def finish(self, seconds: float) -> None:
+        if self._wait is not None:
+            self._wait.remove()
+            self._wait = None
         log = self.query_one("#pp-answer", VerticalScroll)
         t = Text()
         # Сколько фактов ушло в модель и сколько она думала — на виду, а не в
@@ -662,10 +727,49 @@ class PanelPrompt(Vertical):
         log.scroll_end(animate=False)
 
     def note(self, text: str, role: str = "dim") -> None:
+        if self._wait is not None:
+            self._wait.remove()
+            self._wait = None
         log = self.query_one("#pp-answer", VerticalScroll)
         log.display = True
         log.mount(Static(Text(text, style=palette.role_hex(role)),
                          classes="pp-line"))
+
+    def action(self, note: str) -> None:
+        """Действие, которое агент СДЕЛАЛ, а не сказал — своя строка и цвет.
+
+        Иначе «переключился на mulclash» тонет в потоке того же цвета, что и
+        пересказ модели, а это разные вещи: одно — факт (можно перепроверить
+        командой), другое — формулировка (может быть неточной). Монтируется
+        ПЕРЕД индикатором ожидания (`move_before`), который вставили первым в
+        `start_answer()`, — действия старше «…» по времени и обязаны стоять
+        выше него.
+        """
+        log = self.query_one("#pp-answer", VerticalScroll)
+        log.display = True
+        t = Text()
+        t.append("⚙ ", style=palette.role_hex("accent"))
+        t.append(note, style=palette.role_hex("accent_soft"))
+        line = Static(t, classes="pp-line")
+        if self._wait is not None and self._wait.is_mounted:
+            log.mount(line, before=self._wait)
+        else:
+            log.mount(line)
+        log.scroll_end(animate=False)
+
+    def clear(self) -> None:
+        """`/clear` — стереть только накопленный разговор, не факты и не чипы.
+
+        Ответы копятся вниз и за несколько вопросов подряд съедают весь
+        экран под них (max-height у панели — 60%). Закрывать панель ради
+        этого не нужно — вопрос обычно ещё не закончен, нужно просто место.
+        """
+        log = self.query_one("#pp-answer", VerticalScroll)
+        log.remove_children()
+        log.display = False
+        self._answer = None
+        self._wait = None
+        self._buf = ""
 
     # --- ввод -------------------------------------------------------------
 
@@ -673,12 +777,20 @@ class PanelPrompt(Vertical):
         event.stop()
         q = event.value.strip()
         event.input.value = ""
-        if q:
-            self.post_message(self.Asked(q))
+        if not q:
+            return
+        if q.lstrip("/").lower() in ("clear", "cls"):
+            self.clear()
+            return
+        self.post_message(self.Asked(q))
 
     def on_prompt_chip_picked(self, event) -> None:
         event.stop()
         self.post_message(self.Asked(event.question))
+
+    def on_close_btn_picked(self, event) -> None:
+        event.stop()
+        self.post_message(self.Closed())
 
     def on_key(self, event) -> None:
         if event.key == "escape":

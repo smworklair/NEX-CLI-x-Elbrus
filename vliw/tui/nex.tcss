@@ -556,10 +556,27 @@ PanelPrompt {
     max-height: 60%;
     background: $nex-panel;
     border: round $primary;
-    border-title-align: left;
-    border-title-style: bold;
     padding: 0 1;
     margin: 0 1 0 1;
+}
+
+#pp-header { height: 1; width: 100%; margin-bottom: 1; }
+#pp-title { width: 1fr; height: 1; }
+
+/* Крестик — не кнопка с рамкой (это спорило бы с полями ввода вокруг), а
+   строка «✕ Esc», которая выделяется только под курсором: так же ведут себя
+   чипы. Ширина под подпись, а не только символ: клавишу закрытия должно
+   быть видно текстом, а не только всплывающей подсказкой по наведению. */
+#pp-close {
+    width: 7;
+    height: 1;
+    content-align: right middle;
+    color: $nex-faint;
+}
+#pp-close:hover {
+    color: $nex-title;
+    background: $nex-raised;
+    text-style: bold;
 }
 
 #pp-answer {

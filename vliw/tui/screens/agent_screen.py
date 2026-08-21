@@ -125,7 +125,7 @@ class AgentScreen(ModeScreen):
             con.write(row)
 
     def hint_pairs(self):
-        return [("Enter", "спросить"), ("/", "команды"), ("^O", "выбор режима")]
+        return [("Enter", "спросить"), ("/", "команды"), ("Esc", "к выбору режима")]
 
     def context_bits(self) -> str:
         from ...agent import llm
@@ -248,6 +248,7 @@ class AgentScreen(ModeScreen):
         self.chat.scroll_end(animate=False)
 
     def after_command(self) -> None:
+        self._draw_journal()
         self._draw_seen()
 
     def redraw(self) -> None:

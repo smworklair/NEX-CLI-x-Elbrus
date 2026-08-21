@@ -454,3 +454,125 @@ class TestCursorAI(unittest.TestCase):
         self.assertLess(len(prompt), 1500)
 
 
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestDiagGridBridge(unittest.TestCase):
+    """Разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима, связанные переходом.
+
+    ДИАГНОЗ развёрнутый показывает находки целиком (без потолка top-5) и
+    кликом уводит на клетку в РЕШЁТКЕ; РЕШЁТКА развёрнутая мостиком уводит
+    обратно на ту же находку. Ни то ни другое не открывает общий чат сбоку
+    (см. TestCursorAI.test_lab_has_no_side_chat — тот же принцип для панели
+    grid, здесь для diag).
+    """
+
+    def _screen(self, body):
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(app.screen, pilot)
+
+        return asyncio.run(go())
+
+    def test_expanded_diag_lists_every_finding_not_just_top_five(self) -> None:
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot):
+            from vliw.tui.screens.lab_screen import FindingItem
+
+            panel = sc.query_one("#p-diag", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            rows = list(sc.query(FindingItem))
+            return len(rows), len(sc._findings())
+
+        rows, total = self._screen(body)
+        self.assertGreater(total, 0, "у slotclash должны быть находки")
+        self.assertEqual(rows, total)
+
+    def test_no_side_chat_when_diag_maximized(self) -> None:
+        """То же решение, что и для решётки: здесь свой режим, не чат."""
+        from vliw.tui.widgets import Panel, PanelChat
+
+        async def body(sc, pilot):
+            panel = sc.query_one("#p-diag", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            for _ in range(6):
+                await pilot.pause(0.05)
+            return len(list(sc.query(PanelChat)))
+
+        self.assertEqual(self._screen(body), 0)
+
+    def test_click_on_finding_jumps_grid_and_maximizes_it(self) -> None:
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot):
+            from vliw.tui.screens.lab_screen import FindingItem
+
+            diag = sc.query_one("#p-diag", Panel)
+            sc.maximize(diag, container=False)
+            diag.post_message(Panel.Expanded(diag))
+            await pilot.pause()
+            row = sc.query(FindingItem).first()
+            f = sc._filtered_findings()[row.index]
+            row.post_message(FindingItem.Picked(row.index))
+            await pilot.pause()
+            return sc.screen.maximized.id, sc._active_finding(), f
+
+        maxed_id, active, picked = self._screen(body)
+        self.assertEqual(maxed_id, "p-grid")
+        self.assertEqual(active, picked)
+
+    def test_grid_link_jumps_back_to_diag_on_same_finding(self) -> None:
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot):
+            from vliw.tui.screens.lab_screen import GridLink
+
+            grid = sc.query_one("#p-grid", Panel)
+            sc.maximize(grid, container=False)
+            grid.post_message(Panel.Expanded(grid))
+            sc._find_pos = -1
+            sc._cmd_find("next")          # курсор на первую находку
+            await pilot.pause()
+            f_before = sc._active_finding()
+            link = sc.query_one("#grid-link", GridLink)
+            self.assertTrue(link.active, "мостик должен включиться под находкой")
+            link.post_message(GridLink.Picked())
+            await pilot.pause()
+            return sc.screen.maximized.id, sc._active_finding(), f_before
+
+        maxed_id, after, before = self._screen(body)
+        self.assertEqual(maxed_id, "p-diag")
+        self.assertEqual(after, before)
+
+    def test_find_command_cycles_through_distinct_findings(self) -> None:
+        """`/find next` обходит весь список по разу и ставит курсор верно.
+
+        Не у каждой находки есть своя клетка (например «23 т. против нижней
+        границы» — про расписание целиком, без instrs): для таких курсор не
+        трогаем. Но там, где клетка есть (idle-stall или instrs), после
+        перехода курсор обязан стоять ровно на ней.
+        """
+        async def body(sc, pilot):
+            findings = sc._filtered_findings()
+            out = []
+            for _ in range(len(findings)):
+                sc._cmd_find("next")
+                await pilot.pause()
+                out.append((sc._find_pos, sc._active_finding()))
+            return findings, out
+
+        findings, out = self._screen(body)
+        self.assertEqual(sorted(pos for pos, _ in out), list(range(len(findings))))
+        for pos, active in out:
+            f = findings[pos]
+            if f.code == "idle-stall" or f.instrs:
+                self.assertEqual(active, f,
+                    f"находка {f.code} {f.where} не подсветилась после /find")
+
+

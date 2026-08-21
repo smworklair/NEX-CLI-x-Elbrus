@@ -275,9 +275,47 @@ Console {
 
 #grid {
     background: transparent;
-    height: 100%;
+    height: 1fr;
     scrollbar-size-vertical: 1;
     scrollbar-size-horizontal: 1;
+}
+
+/* Мостик под решёткой к развёрнутому ДИАГНОЗУ — пуст и невидим, пока
+   решётка не развёрнута (см. GridLink в lab_screen.py). */
+#grid-link {
+    height: 1;
+    padding: 0 1;
+}
+
+/* --- ДИАГНОЗ: полный список находок при развороте ---------------------- */
+
+#diag-filter {
+    height: auto;
+    width: 100%;
+}
+
+.diag-sev {
+    width: auto;
+}
+
+.finding-row {
+    height: auto;
+    width: 100%;
+    margin-bottom: 1;
+    padding: 0 1;
+}
+
+.finding-row:hover {
+    background: $nex-raised;
+}
+
+.finding-row.here {
+    background: $primary 15%;
+}
+
+#diag-scroll {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
 }
 
 #grid > .datatable--header {

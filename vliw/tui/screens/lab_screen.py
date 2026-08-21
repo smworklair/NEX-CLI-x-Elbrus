@@ -20,6 +20,7 @@ from __future__ import annotations
 from rich.text import Text
 from textual import work
 from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
+from textual.message import Message
 from textual.widgets import DataTable, Static
 
 from ...core import SCENARIOS
@@ -63,6 +64,52 @@ class ScheduleGrid(DataTable):
             bar = self.screen.query_one("#prompt", PromptBar)
             bar.focus_input()
             bar.set_value(bar.input.value + ch)
+
+
+class FindingItem(Static):
+    """Строка находки в развёрнутом ДИАГНОЗЕ.
+
+    Разворот этой панели — не панель покрупнее, а ДРУГОЙ инструмент: полный
+    список находок (без потолка top-5 обычного вида) и клик по любой сразу
+    ставит курсор решётки на нужную клетку и открывает РЕШЁТКУ — переход к
+    месту, а не пересказ того же текста крупным шрифтом.
+    """
+
+    class Picked(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+    def __init__(self, index: int, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.index = index
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.index))
+
+
+class GridLink(Static):
+    """Мостик под решёткой обратно к развёрнутому ДИАГНОЗУ.
+
+    Живёт только когда РЕШЁТКА развёрнута: показывает находку про клетку под
+    курсором и по клику уводит в полный список находок, на неё же. Без этого
+    разворот решётки был бы тупиком — читаешь находку в заголовке, а вернуться
+    к её разбору можно только вручную сворачивая и снова разворачивая другую
+    панель.
+    """
+
+    class Picked(Message):
+        pass
+
+    def __init__(self, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.active = False
+
+    def on_click(self, event) -> None:
+        event.stop()
+        if self.active:
+            self.post_message(self.Picked())
 
 
 class LabScreen(ModeScreen):
@@ -109,6 +156,14 @@ class LabScreen(ModeScreen):
         # Строка решётки больше не равна такту: простои схлопнуты в одну.
         self._rows: list[tuple] = []
         self._expanded_gaps: set[tuple[int, int]] = set()
+        # Разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима одного экрана, не
+        # панель покрупнее (см. docstring FindingItem/GridLink). Флаги здесь,
+        # а не в CSS-классе панели: рисование зависит от режима, а не только
+        # от размера.
+        self._diag_expanded = False
+        self._grid_expanded = False
+        self._diag_filter = "all"      # all | high | medium | low | limit
+        self._find_pos = -1            # позиция в отфильтрованном списке
 
     # --- раскладка --------------------------------------------------------
 
@@ -120,6 +175,7 @@ class LabScreen(ModeScreen):
                             title="УЧАСТОК", id="p-scen")
                 yield Panel(ScheduleGrid(id="grid", cursor_type="cell",
                                          zebra_stripes=False),
+                            GridLink(id="grid-link"),
                             title="РАСПИСАНИЕ", id="p-grid", topic="grid")
                 yield Panel(Static(id="detail"), title="ПОЧЕМУ ЗДЕСЬ",
                             id="p-detail", topic="detail")
@@ -129,7 +185,8 @@ class LabScreen(ModeScreen):
             with Vertical(id="lab-right"):
                 yield Panel(Static(id="numbers"), title="ЧИСЛА",
                             id="p-numbers", topic="numbers")
-                yield Panel(VerticalScroll(Static(id="diag")),
+                yield Panel(Horizontal(id="diag-filter"),
+                            VerticalScroll(id="diag-scroll"),
                             title="ДИАГНОЗ", id="p-diag", topic="diag")
                 yield Panel(Static(id="machine"), title="МАШИНА",
                             id="p-machine", topic="machine")
@@ -204,6 +261,9 @@ class LabScreen(ModeScreen):
             {"name": "repair", "arg": "",
              "help": "переназначить незаконные каналы в ответе модели",
              "local": True},
+            {"name": "find", "arg": "[next|prev|filter <severity>]",
+             "help": "по находкам доктора — курсор к следующей/предыдущей",
+             "local": True},
         ]
 
     def handle_line(self, line: str) -> None:
@@ -214,6 +274,9 @@ class LabScreen(ModeScreen):
             return
         if head.lower() == "repair":
             self._repair_model()
+            return
+        if head.lower() == "find":
+            self._cmd_find(arg.strip().lower())
             return
         self.run_core(line)
 
@@ -453,6 +516,7 @@ class LabScreen(ModeScreen):
         self._draw_diag()
         self._draw_machine()
         self._draw_detail()
+        self._draw_grid_link()
 
     def on_prompt_bar_escaped(self, event) -> None:
         event.stop()
@@ -497,12 +561,14 @@ class LabScreen(ModeScreen):
             and base.schedule.placements[i].cycle != orc.schedule.placements[i].cycle
         }
         self.set_busy(False)
+        self._find_pos = -1
         self._mark_view()
         self._draw_grid()
         self._draw_numbers()
         self._draw_diag()
         self._draw_machine()
         self._draw_detail()
+        self._draw_grid_link()
         self.refresh_context()
 
     # --- решётка ----------------------------------------------------------
@@ -629,6 +695,72 @@ class LabScreen(ModeScreen):
                             self.base.schedule, self.met).findings
         except Exception:
             return []
+
+    SEVERITIES = ("all", "high", "medium", "low", "limit")
+
+    def _filtered_findings(self):
+        """Находки по текущему фильтру — тот же порядок, что отдал доктор."""
+        findings = self._findings()
+        if self._diag_filter == "all":
+            return findings
+        if self._diag_filter == "limit":
+            return [f for f in findings if f.kind == "limit"]
+        return [f for f in findings
+                if f.kind != "limit" and f.severity == self._diag_filter]
+
+    def _cmd_find(self, arg: str) -> None:
+        """`/find` — курсор к следующей находке, `filter` — сузить список.
+
+        Работает независимо от того, развёрнут ли ДИАГНОЗ: находка та же, что
+        подсвечена под курсором в решётке, только двигает её сама команда, а
+        не мышь.
+        """
+        parts = arg.split()
+        con = self.console
+        if parts and parts[0] == "filter":
+            sev = parts[1] if len(parts) > 1 else "all"
+            if sev not in self.SEVERITIES:
+                if con is not None:
+                    con.note(f"  фильтр: {', '.join(self.SEVERITIES)}", "warning")
+                return
+            self._diag_filter = sev
+            self._find_pos = -1
+            self._draw_diag()
+            return
+        findings = self._filtered_findings()
+        if not findings:
+            if con is not None:
+                con.note("  находок нет — /find filter all", "dim")
+            return
+        delta = -1 if parts and parts[0] == "prev" else 1
+        self._find_pos = (self._find_pos + delta) % len(findings)
+        self._jump_to_finding(findings[self._find_pos])
+
+    def _jump_to_finding(self, f) -> None:
+        """Ставит курсор решётки на клетку (или простой), к которой находка.
+
+        Единственное место, которое переводит находку доктора в координаты
+        решётки — им пользуются и `/find`, и клик по строке в развёрнутом
+        ДИАГНОЗЕ, и обратная ссылка из развёрнутой РЕШЁТКИ.
+        """
+        if f.code == "idle-stall":
+            start = int(f.where.replace("такты ", "").split("–")[0])
+            row, col = self._row_of_cycle(start), 0
+        elif f.instrs:
+            pos = next((rc for rc, i in self._cells.items() if i == f.instrs[0]),
+                       None)
+            if pos is None:
+                return
+            row, col = pos
+        else:
+            return
+        width = max(self.app.session.model().width, 1)
+        grid = self.query_one("#grid", ScheduleGrid)
+        grid.move_cursor(row=min(row, max(len(self._rows) - 1, 0)),
+                         column=min(col, width - 1))
+        self._draw_detail()
+        self._draw_diag()
+        self._draw_grid_link()
 
     def _render_grid(self, sched, title: str,
                      illegal: frozenset[int] = frozenset()) -> None:
@@ -797,7 +929,86 @@ class LabScreen(ModeScreen):
         event.stop()
         self._draw_detail()
         self._draw_diag()          # подсветить находку про эту клетку
+        self._draw_grid_link()     # то же для мостика под развёрнутой решёткой
         self._cell_ai_restart()
+
+    # --- разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима, не общий чат -----
+    #
+    # У остальных панелей экрана чата сбоку нет вовсе (см. panel_facts выше).
+    # Эти две панели при развороте получают КАЖДАЯ СВОЁ: ДИАГНОЗ — список
+    # находок целиком с фильтром, РЕШЁТКА — мостик к находке под курсором.
+    # Переход между ними двусторонний: находка → клетка, клетка → находка.
+
+    def on_panel_expanded(self, event) -> None:
+        event.stop()
+        topic = getattr(event.panel, "topic", "")
+        if topic == "diag":
+            self._diag_expanded = True
+            self._find_pos = -1
+            self._draw_diag()
+        elif topic == "grid":
+            self._grid_expanded = True
+            self._draw_grid_link()
+
+    def on_panel_collapsed(self, event) -> None:
+        event.stop()
+        self._diag_expanded = False
+        self._grid_expanded = False
+        self._draw_diag()
+        self._draw_grid_link()
+
+    def _draw_grid_link(self) -> None:
+        try:
+            link = self.query_one("#grid-link", GridLink)
+        except Exception:
+            return
+        if not self._grid_expanded:
+            link.active = False
+            link.update("")
+            return
+        f = self._active_finding()
+        if f is None:
+            link.active = False
+            link.update(Text("курсор — по клеткам   ·   /find — по находкам",
+                             style=palette.role_hex("faint")))
+            return
+        link.active = True
+        t = Text()
+        t.append("▸ ", style=palette.role_hex("accent"))
+        t.append(f.title, style=palette.role_hex("title") + " bold")
+        t.append("   ·   клик — все находки в ДИАГНОЗЕ",
+                 style=palette.role_hex("accent_soft"))
+        link.update(t)
+
+    def on_finding_item_picked(self, event) -> None:
+        event.stop()
+        findings = self._filtered_findings()
+        if not (0 <= event.index < len(findings)):
+            return
+        self._find_pos = event.index
+        self._jump_to_finding(findings[event.index])
+        self._diag_expanded = False
+        self._grid_expanded = True
+        self.screen.minimize()
+        self.screen.maximize(self.query_one("#p-grid", Panel), container=False)
+        self._draw_diag()
+        self._draw_grid_link()
+
+    def on_grid_link_picked(self, event) -> None:
+        event.stop()
+        f = self._active_finding()
+        if f is None:
+            return
+        findings = self._filtered_findings()
+        if f not in findings:
+            self._diag_filter = "all"
+            findings = self._filtered_findings()
+        self._find_pos = findings.index(f) if f in findings else -1
+        self._grid_expanded = False
+        self._diag_expanded = True
+        self.screen.minimize()
+        self.screen.maximize(self.query_one("#p-diag", Panel), container=False)
+        self._draw_diag()
 
     # --- ИИ по курсору -----------------------------------------------------
     #
@@ -1306,27 +1517,37 @@ class LabScreen(ModeScreen):
             style = palette.role_hex("warning")
         row("модель", str(m), style, note)
 
+    _SEV_MARKS = {"high": ("!!", "error"), "medium": ("!", "warning"),
+                  "low": ("·", "dim")}
+
+    def _finding_mark(self, f) -> tuple[str, str]:
+        return ("=", "dim") if f.kind == "limit" \
+            else self._SEV_MARKS.get(f.severity, ("·", "dim"))
+
     def _draw_diag(self) -> None:
-        target = self.query_one("#diag", Static)
+        scroll = self.query_one("#diag-scroll", VerticalScroll)
         if self.base is None:
             return
+        if self._diag_expanded:
+            self._draw_diag_full(scroll)
+            return
+        self.query_one("#diag-filter", Horizontal).remove_children()
         from ...core.doctor import diagnose
 
         s = self.app.session
+        scroll.remove_children()
         try:
             diag = diagnose(s.dag_obj, s.model(), self.base.schedule, self.met)
         except Exception as e:
-            target.update(Text(str(e), style=palette.role_hex("error")))
+            scroll.mount(Static(Text(str(e), style=palette.role_hex("error"))))
             return
         dim = palette.role_hex("dim")
         t = Text()
         if diag.clean:
             t.append("находок нет — baseline уложился в предел",
                      style=palette.role_hex("success"))
-            target.update(t)
+            scroll.mount(Static(t))
             return
-        marks = {"high": ("!!", "error"), "medium": ("!", "warning"),
-                 "low": ("·", "dim")}
         width = max(24, self.query_one("#p-diag", Panel).size.width - 4)
         # Простои НЕ повторяем: они теперь видны в самой решётке отдельными
         # строками, и наведение на них даёт этот же разбор. Две формулировки
@@ -1337,13 +1558,16 @@ class LabScreen(ModeScreen):
         rest = [f for f in diag.top
                 if not (f.code == "idle-stall" and f.where in shown_in_grid)]
         hidden = len(diag.top) - len(rest)
+        # Структурно, не по объекту: находка приходит из СВОЕГО вызова
+        # diagnose() (diag.top выше), а активная — из _active_finding(),
+        # который зовёт diagnose() заново и получает НОВЫЕ объекты Finding с
+        # теми же полями. `is` тут всегда врал бы — сравниваем содержимое.
         active = self._active_finding()
         for i, f in enumerate(rest):
             if i:
                 t.append("\n")
-            here = active is not None and f is active
-            mark, role = ("=", "dim") if f.kind == "limit" \
-                else marks.get(f.severity, ("·", "dim"))
+            here = active is not None and f == active
+            mark, role = self._finding_mark(f)
             # Находка про клетку под курсором помечена стрелкой и подсвечена.
             # Без этого ДИАГНОЗ и решётка говорили об одном и том же, но
             # связать их взглядом было нельзя.
@@ -1363,8 +1587,56 @@ class LabScreen(ModeScreen):
                      "наведите курсор", style=palette.role_hex("faint"))
             t.append("\n")
         t.append("\n")
-        t.append("/doctor — подробно", style=palette.role_hex("accent_soft"))
-        target.update(t)
+        t.append("2×клик — все находки и переход по ним",
+                 style=palette.role_hex("accent_soft"))
+        scroll.mount(Static(t))
+
+    def _fill_diag_filter(self, row: Horizontal) -> None:
+        row.remove_children()
+        counts = {"all": 0, "high": 0, "medium": 0, "low": 0, "limit": 0}
+        for f in self._findings():
+            counts["all"] += 1
+            counts["limit" if f.kind == "limit" else f.severity] += 1
+        labels = {"all": "все", "high": "критично", "medium": "средне",
+                  "low": "мелко", "limit": "предел"}
+        for key in self.SEVERITIES:
+            n = counts.get(key, 0)
+            chip = Chip(f"{labels[key]} {n}", f"/find filter {key}",
+                        classes="chip diag-sev")
+            chip.set_class(key == self._diag_filter, "chip-on")
+            row.mount(chip)
+
+    def _draw_diag_full(self, scroll: VerticalScroll) -> None:
+        """Развёрнутый ДИАГНОЗ: не топ-5, а все находки целиком, с фильтром.
+
+        Каждая строка кликабельна: клик ставит курсор решётки на нужную
+        клетку и сразу открывает РЕШЁТКУ — «посмотреть, где именно» не
+        требует ни другой команды, ни выхода из режима находок.
+        """
+        self._fill_diag_filter(self.query_one("#diag-filter", Horizontal))
+        scroll.remove_children()
+        findings = self._filtered_findings()
+        if not findings:
+            scroll.mount(Static(Text("для этого фильтра находок нет",
+                                     style=palette.role_hex("faint"))))
+            return
+        active = self._active_finding()
+        dim = palette.role_hex("dim")
+        width = max(30, self.size.width // 2 - 6)
+        for i, f in enumerate(findings):
+            here = active is not None and f == active
+            mark, role = self._finding_mark(f)
+            t = Text()
+            head = f"{'▸' if here else mark:<3}−{f.cycles_lost} т. "
+            t.append(head, style=palette.role_hex("accent" if here else role))
+            t.append(_wrapped(f.title, width, len(head)),
+                     style=(palette.role_hex("title") + " bold") if here
+                     else palette.role_hex("text"))
+            t.append("\n     " + _wrapped(f.where, width, 5),
+                     style=palette.role_hex("accent_soft") if here else dim)
+            t.append("\n     " + _wrapped(f.why, width, 5), style=dim)
+            row = FindingItem(i, t, classes="finding-row" + (" here" if here else ""))
+            scroll.mount(row)
 
     def _draw_machine(self) -> None:
         target = self.query_one("#machine", Static)

@@ -500,3 +500,96 @@ ModeScreen.tight #p-console { height: 5; }
    операциями и режимом, и пятый смысл он бы не выдержал. */
 .instr-link { height: 1; width: 100%; }
 .instr-link:hover { background: $nex-raised; }
+
+/* --- журнал запусков (развёрнутый ВЫВОД КОМАНД) ------------------------- */
+
+ConsoleJournal { display: none; height: 1fr; width: 100%; }
+
+#journal-list {
+    width: 40;
+    height: 100%;
+    border-right: solid $nex-line;
+    padding-right: 1;
+}
+
+#journal-out {
+    width: 1fr;
+    height: 100%;
+    background: transparent;
+    padding-left: 2;
+    scrollbar-size-vertical: 1;
+}
+
+.run-item { height: 1; width: 100%; }
+.run-item:hover { background: $nex-raised; }
+.run-item.on { background: $primary 18%; }
+
+/* --- развёрнутые панели ЯДРА -------------------------------------------- */
+
+#names-wide, #mem-wide, #prog-wide { display: none; }
+
+#names-wide, #prog-wide { height: 1fr; scrollbar-size-vertical: 1; }
+
+#mem-wide { height: 1fr; }
+#mem-head { height: auto; }
+#mem-foot { height: auto; }
+
+#mem-map {
+    height: auto;
+    width: 100%;
+    grid-gutter: 0 2;
+    padding: 1 0;
+}
+
+.mem-cell { height: 1; width: 9; }
+.mem-cell.wrote { background: $nex-raised; }
+.mem-cell:hover { background: $nex-raised; }
+
+/* --- всплывающая строка вопроса ----------------------------------------- */
+/* Снизу, а не сбоку: колонка отбирала треть ширины у того, ради чего панель
+   и разворачивают. Строка лежит поверх нижнего края и растёт вверх ответом. */
+
+PanelPrompt {
+    dock: bottom;
+    width: 100%;
+    height: auto;
+    max-height: 60%;
+    background: $nex-panel;
+    border: round $primary;
+    border-title-align: left;
+    border-title-style: bold;
+    padding: 0 1;
+    margin: 0 1 0 1;
+}
+
+#pp-answer {
+    height: auto;
+    max-height: 14;
+    scrollbar-size-vertical: 1;
+}
+
+.pp-line { height: auto; width: 100%; margin-bottom: 1; }
+
+#pp-chips { height: auto; width: 100%; grid-gutter: 0 1; }
+
+.prompt-chip {
+    width: 1fr;
+    height: 1;
+    background: transparent;
+    color: $nex-dim;
+    margin-right: 1;
+}
+
+#pp-field { height: 1; width: 100%; }
+#pp-mark { width: 2; height: 1; }
+
+#pp-input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $nex-title;
+}
+
+#pp-input > .input--placeholder { color: $nex-faint; }

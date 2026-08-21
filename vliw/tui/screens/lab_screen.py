@@ -25,7 +25,7 @@ from textual.widgets import DataTable, Static
 
 from ...core import SCENARIOS
 from .. import palette
-from ..widgets import Chip, Console, Panel, PromptBar
+from ..widgets import Chip, Console, ConsoleJournal, Panel, PromptBar, plural
 from .base import ModeScreen
 
 CONT = "│"
@@ -189,6 +189,7 @@ class LabScreen(ModeScreen):
         self._numbers_expanded = False
         self._machine_expanded = False
         self._detail_expanded = False
+        self._console_expanded = False
         self._matrix_ops: list[str] = []
         self._diag_filter = "all"      # all | high | medium | low | limit
         self._find_pos = -1            # позиция в отфильтрованном списке
@@ -212,7 +213,9 @@ class LabScreen(ModeScreen):
                                 id="detail-graph"),
                             title="ПОЧЕМУ ЗДЕСЬ",
                             id="p-detail", topic="detail")
-                yield Panel(Console(id="console"), title="ВЫВОД КОМАНД",
+                yield Panel(Console(id="console"),
+                            ConsoleJournal(id="journal"),
+                            title="ВЫВОД КОМАНД",
                             id="p-console", topic="console",
                             has_own_input=True)
             with Vertical(id="lab-right"):
@@ -465,19 +468,123 @@ class LabScreen(ModeScreen):
             con.note("  починить каналы, не трогая такты:  /repair", "warning")
 
     def panel_facts(self, topic: str) -> list[str]:
-        """В РАЗБОРЕ чата сбоку НЕТ — и это решение, а не недоделка.
+        """Факты развёрнутой панели — они и уходят в модель.
 
-        Здесь уже есть свой способ спросить: курсор. Он ходит по решётке, а
-        панель «ПОЧЕМУ ЗДЕСЬ» отвечает про клетку под ним — мгновенно и
-        точно. Поле ввода рядом заставляло бы человека ПЕРЕСПРАШИВАТЬ
-        словами то, на что он уже показал курсором, — шаг назад от того, что
-        в экране и так работало.
+        Колонки чата сбоку в РАЗБОРЕ по-прежнему нет: она отбирала треть
+        ширины у решётки. Есть строка снизу, и спрашивают в ней про ту
+        панель, которая сейчас открыта, — поэтому факты собираются по теме,
+        а не «всё про сессию».
 
-        Поэтому ИИ здесь подключён к курсору (см. `_cell_ai_*` ниже), а не к
-        строке ввода. Чат сбоку остаётся крайним средством для поверхностей,
-        где показать не на что.
+        Курсорный разбор при этом никуда не делся: в НЕразвёрнутом РАЗБОРЕ
+        по-прежнему нет поля ввода, там отвечает курсор.
         """
-        return []
+        s = self.app.session
+        base = [f"Участок {s.scenario}, {len(s.dag_obj)} операций, "
+                f"машина {s.model().name}."]
+        if topic == "grid":
+            return base + self._grid_facts()
+        if topic == "diag":
+            return base + self._diag_facts()
+        if topic == "numbers":
+            return base + self._numbers_facts()
+        if topic == "machine":
+            return base + self._machine_facts()
+        if topic == "detail":
+            return base + self._detail_facts()
+        if topic == "console":
+            con = self.query_one("#console", Console)
+            return base + [f"Запусков в журнале: {len(con.runs)}."] + \
+                [f"Была команда {r['cmd']} ({len(r['lines'])} строк вывода)."
+                 for r in con.runs[-6:]]
+        return base
+
+    def panel_chips(self, topic: str) -> list[str]:
+        """Готовые вопросы — свои у каждой панели, про то, что в ней видно."""
+        return {
+            "grid": ["почему тут простой?",
+                     "какая операция держит расписание?",
+                     "что стоит на монопольном порту?"],
+            "diag": ["с какой находки начать?",
+                     "что из этого вообще можно отыграть?",
+                     "почему это не предел машины?"],
+            "numbers": ["почему предел именно такой?",
+                        "что держит критический путь?",
+                        "ресурсы или зависимости?"],
+            "machine": ["чем этот профиль отличается от обычного?",
+                        "что значит монопольный порт?",
+                        "почему div такой дорогой?"],
+            "detail": ["почему её нельзя выдать раньше?",
+                       "кого она задерживает?",
+                       "что будет, если её убрать?"],
+            "console": ["перескажи последний отчёт",
+                        "чем /doctor отличается от /compare?",
+                        "какую команду дать следующей?"],
+        }.get(topic, [])
+
+    def _diag_facts(self) -> list[str]:
+        out = []
+        for f in self._findings()[:6]:
+            out.append(f"Находка: {f.title} ({f.where}), теряется "
+                       f"{f.cycles_lost} т., "
+                       f"{'можно отыграть' if f.recoverable else 'предел машины'}.")
+        return out or ["Находок нет: baseline уложился в предел."]
+
+    def _numbers_facts(self) -> list[str]:
+        if self.base is None or self.met is None:
+            return ["Расписание ещё не посчитано."]
+        m = self.met
+        out = [f"baseline {self.base.schedule.makespan} т., "
+               f"оракул {self.orc.schedule.makespan} т., "
+               f"нижняя граница {m.lower_bound} т. ({m.binding}).",
+               f"Критический путь {m.critical_path_bound} т., "
+               f"ресурсная граница {m.resource_bound} т."]
+        dag = self.app.session.dag_obj
+        chain = self._critical_chain()
+        if chain:
+            out.append("Критический путь проходит через: "
+                       + ", ".join(dag[i].name for i in chain[:8]) + ".")
+        return out
+
+    def _machine_facts(self) -> list[str]:
+        model = self.app.session.model()
+        out = [f"Профиль {model.name}: {model.width} портов. "
+               f"Источник матрицы: {model.matrix_source}."]
+        for port, ops in sorted(model.sole_host_ops().items()):
+            out.append(f"Порт {model.port_label(port)} — единственный "
+                       f"исполнитель для {', '.join(ops)}.")
+        for name in sorted(model.ops):
+            op = model.ops[name]
+            out.append(f"{name}: латентность {op.latency} т."
+                       + (f", держит порт {op.occupancy} т." if
+                          op.blocks_channel() else "")
+                       + f" (источник: {op.latency_source}).")
+        return out[:10]
+
+    def _detail_facts(self) -> list[str]:
+        target = self._cursor_target()
+        if target is None or target[0] != "такт" or target[3] is None:
+            return ["Курсор не стоит на операции."]
+        instr = target[3]
+        dag, model = self.app.session.dag_obj, self.app.session.model()
+        ins = dag[instr]
+        out = [f"Операция {ins.name}: {ins.text}, класс {ins.op}, "
+               f"латентность {model.latency(ins.op)} т."]
+        if self.met is not None:
+            alap = self.met.critical_path_bound - self.met.height[instr]
+            out.append(f"Раньше такта {self.met.asap[instr]} не могла "
+                       f"(зависимости), позже такта {alap} нельзя без "
+                       f"удлинения расписания.")
+        if self.base is not None:
+            pl = self.base.schedule.placements.get(instr)
+            if pl:
+                out.append(f"Стоит в такте {pl.cycle} на порту "
+                           f"{model.port_label(pl.channel)}.")
+        out.append("Ждала: " + (", ".join(dag[i].name for i in ins.preds)
+                                or "никого"))
+        out.append("Держит: " + (", ".join(dag[i].name
+                                           for i in dag.succs[instr])
+                                 or "никого"))
+        return out
 
     def _grid_facts(self) -> list[str]:
         s = self.app.session
@@ -1001,6 +1108,9 @@ class LabScreen(ModeScreen):
         elif topic == "detail":
             self._detail_expanded = True
             self._draw_detail()
+        elif topic == "console":
+            self._console_expanded = True
+            self._draw_journal()
 
     def on_panel_collapsed(self, event) -> None:
         event.stop()
@@ -1009,11 +1119,28 @@ class LabScreen(ModeScreen):
         self._numbers_expanded = False
         self._machine_expanded = False
         self._detail_expanded = False
+        self._console_expanded = False
+        self._draw_journal()
         self._draw_diag()
         self._draw_grid_link()
         self._draw_numbers()
         self._draw_machine()
         self._draw_detail()
+
+    def _draw_journal(self) -> None:
+        """Развёрнутый ВЫВОД КОМАНД — журнал запусков, а не лента подлиннее."""
+        journal = self.query_one("#journal", ConsoleJournal)
+        con = self.query_one("#console", Console)
+        panel = self.query_one("#p-console", Panel)
+        journal.display = self._console_expanded
+        con.display = not self._console_expanded
+        if not self._console_expanded:
+            panel.set_title("ВЫВОД КОМАНД")
+            return
+        n = len(con.runs)
+        panel.set_title(f"ВЫВОД КОМАНД   ·   журнал   ·   "
+                        f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
+        journal.load(con.runs, self.mode)
 
     def _jump_to_instr(self, instr: int) -> bool:
         """Курсор решётки — на клетку этой операции. False, если её там нет.
@@ -1774,6 +1901,25 @@ class LabScreen(ModeScreen):
     SCALE_LEFT = 22
     """Ширина подписи слева от шкалы: имя, операция, такт выдачи."""
 
+    def _section(self, label: str, note: str = "") -> Text:
+        """Заголовок раздела: строчными, и тонкая линейка до правого края.
+
+        Так подписаны разделы в построчном выводе инструмента (`render_model_view`
+        и соседи): жирным и строчными, без цвета. Цвет в этом интерфейсе уже
+        занят операциями и режимом — заголовок, выкрашенный в акцент, начинает
+        спорить с ними и кричать. Линейка делает то же, что делала бы пустая
+        строка, только не тратит её.
+        """
+        width = max(40, self.app.size.width - 8)
+        t = Text()
+        t.append("  " + label + "  ", style=palette.role_hex("title") + " bold")
+        used = len(label) + 4
+        if note:
+            t.append(note + "  ", style=palette.role_hex("faint"))
+            used += len(note) + 2
+        t.append("─" * max(0, width - used), style=palette.role_hex("line"))
+        return t
+
     def _scale(self) -> tuple[int, int]:
         """Сколько символов на такт. Один такт — одна ширина везде.
 
@@ -1804,7 +1950,8 @@ class LabScreen(ModeScreen):
             if pad < 0:
                 continue
             line += " " * pad + mark
-        return Text(" " * self.SCALE_LEFT + line, style=faint)
+        return Text("    такт".ljust(self.SCALE_LEFT) + line,
+                    style=palette.role_hex("faint"))
 
     def _draw_numbers_why(self) -> None:
         head = self.query_one("#numbers-head", Static)
@@ -1833,42 +1980,43 @@ class LabScreen(ModeScreen):
         # ширины, поэтому «на 1 т. длиннее предела» — видимый хвост, а не
         # цифра, которую надо вычитать в уме.
         t = Text()
+        t.append_text(self._section("сколько получилось"))
+        t.append("\n\n")
+        top_w = max(b, o, lb) * cpc     # общая колонка под числа справа
         for name, val, style in (
                 ("baseline", b, title),
                 ("оракул", o, palette.role_hex("success")),
-                ("предел", lb, accent),
+                ("предел", lb, dim),
         ):
-            t.append(("  " + name).ljust(left), style=dim)
-            t.append("█" * (min(val, lb) * cpc), style=style)
-            if val > lb:
-                # Хвост сверх предела — ровно то, что вообще можно отыграть.
-                t.append("▒" * ((val - lb) * cpc),
-                         style=palette.role_hex("error"))
-            t.append(f"  {val}", style=style)
-            if val > lb:
+            t.append(("    " + name).ljust(left), style=dim)
+            # Тонкая линия, а не блок: `█` в этом инструменте встречается
+            # только в логотипе, всё остальное нарисовано `─` и `·`. Полоса
+            # из блоков читается как чужая деталь и перетягивает взгляд с
+            # чисел, ради которых панель и открыли.
+            body = min(val, lb) * cpc
+            tail = max(0, val - lb) * cpc
+            t.append("─" * body, style=style)
+            if tail:
+                # Хвост сверх предела — пунктиром: он не такой же, как тело
+                # полосы, он и есть то единственное, что можно отыграть.
+                t.append("┄" * tail, style=palette.role_hex("error"))
+            t.append(" " * (top_w - body - tail), style=faint)
+            t.append(f"{val:>4}", style=style)
+            if tail:
                 t.append(f"   +{val - lb} т. сверх предела",
                          style=palette.role_hex("error"))
+            elif name == "предел":
+                t.append(f"   {met.binding}", style=faint)
             t.append("\n")
-        t.append("\n")
-        t.append("  предел ", style=dim)
-        t.append(str(lb), style=f"{accent} bold")
-        t.append("  =  max(  критический путь ", style=dim)
-        t.append(str(cp), style=title if cp >= rb else faint)
-        t.append(" ,  ресурсы ", style=dim)
-        t.append(str(rb), style=title if rb >= cp else faint)
-        t.append(" )", style=dim)
         head.update(t)
 
         chain = self._critical_chain()
         placed = self.base.schedule.placements
-        hdr = Text()
-        hdr.append("\n  КРИТИЧЕСКИЙ ПУТЬ  ", style=accent)
-        hdr.append(f"{cp} т.", style=f"{title} bold")
+        note = f"{cp} т."
         if cp >= rb:
-            hdr.append("   ← он и держит предел",
-                       style=palette.role_hex("accent_soft"))
-        hdr.append("   ·   цепочка сцеплена без просветов — двигать нечего",
-                   style=faint)
+            note += "  ·  он и держит предел"
+        hdr = Text("\n")
+        hdr.append_text(self._section("критический путь", note))
         chain_box.mount(Static(hdr))
         chain_box.mount(Static(self._ruler(cpc)))
         if not chain:
@@ -1883,8 +2031,8 @@ class LabScreen(ModeScreen):
                 # Префикс ровно SCALE_LEFT символов: 2+6+4+6+4. Линейка тактов
                 # отбивается тем же числом, и стоит разойтись на символ — вся
                 # диаграмма начинает врать про такты.
-                row.append("  ")
-                row.append(ins.name[:5].ljust(6), style=title)
+                row.append("    ")
+                row.append(ins.name[:5].ljust(4), style=title)
                 row.append(ins.op.lower()[:3].ljust(4),
                            style=palette.op_style(ins.op))
                 row.append((f"т.{pl.cycle}" if pl else "—").rjust(6) + "    ",
@@ -1892,30 +2040,30 @@ class LabScreen(ModeScreen):
                 # Отрезок стоит на самом раннем возможном такте и длиной ровно
                 # в латентность: видно, из чего сложились эти такты.
                 row.append(" " * (met.asap[i] * cpc))
-                row.append("█" * max(1, lat * cpc),
+                row.append("─" * max(1, lat * cpc),
                            style=palette.op_style(ins.op))
                 row.append(f" {lat}", style=faint)
                 chain_box.mount(InstrLink(i, row, classes="instr-link"))
 
-        r = Text()
-        r.append("\n  РЕСУРСЫ  ", style=accent)
-        r.append(f"{rb} т.", style=f"{title} bold")
+        note = f"{rb} т."
         if rb > cp:
-            r.append("   ← он и держит предел",
-                     style=palette.role_hex("accent_soft"))
-        r.append("   ·   операций больше, чем портов, которые их исполняют\n",
-                 style=faint)
+            note += "  ·  он и держит предел"
+        r = Text("\n")
+        r.append_text(self._section("ресурсы", note))
+        r.append("\n\n")
         for chans, ops, slots, need in self._resource_groups():
             label = " ".join(model.port_label(c) for c in chans)
-            r.append("  " + label.ljust(24)[:24], style=dim)
-            r.append(f"{slots:>3} слот.", style=title)
-            r.append(f"  ÷ {len(chans)} порт. =", style=dim)
-            r.append(f"{need:>3} т.", style=title)
+            r.append("    " + label.ljust(22)[:22], style=dim)
+            r.append(f"{slots:>3}", style=title)
+            r.append(" слот.  ÷ ", style=faint)
+            r.append(f"{len(chans)}", style=title)
+            r.append(" порт.  = ", style=faint)
+            r.append(f"{need:>2} т.", style=title)
             r.append("   " + "/".join(o.lower() for o in ops)[:26],
                      style=palette.op_style(ops[0]) if ops else dim)
             r.append("\n")
-        r.append("\n  строка пути — ссылка: клик ведёт к этой операции "
-                 "в решётке.", style=palette.role_hex("accent_soft"))
+        r.append("\n    строка пути — ссылка: ведёт к этой операции "
+                 "в решётке", style=faint)
         res.update(r)
 
     def _draw_numbers(self) -> None:
@@ -2199,34 +2347,42 @@ class LabScreen(ModeScreen):
             for (_c, port) in busy:
                 per[port] = per.get(port, 0) + 1
             worst = max(per.values(), default=0)
-            t.append("\n  ЗАНЯТОСТЬ ПОРТОВ", style=accent)
-            t.append(f"   ·   участок укладывается в {span} т.\n", style=faint)
+            t.append("\n")
+            t.append_text(self._section("занятость портов",
+                                        f"участок укладывается в {span} т."))
+            t.append("\n\n")
             for port in model.ports:
                 held = per.get(port.index, 0)
-                t.append("  " + port.label.ljust(5), style=dim)
-                bar_w = max(0, min(48, round(48 * held / span)))
-                t.append("█" * bar_w, style=accent if held == worst and held
+                t.append("    " + port.label.ljust(5), style=dim)
+                bar_w = max(0, min(44, round(44 * held / span)))
+                # Тем же `─`, что и остальные шкалы инструмента. Акцент —
+                # только у самого загруженного порта: он один здесь что-то
+                # значит, остальные пять покрашенных полос значили бы лишь
+                # «тут тоже есть цвет».
+                t.append("─" * bar_w, style=accent if held == worst and held
                          else palette.role_hex("success"))
-                t.append("·" * (48 - bar_w), style=faint)
+                t.append("·" * (44 - bar_w), style=faint)
                 t.append(f"  {held:>3} т.", style=title if held else faint)
                 t.append(f"{held * 100 // span:>5}%", style=dim if held
                          else faint)
                 if held == worst and held:
-                    t.append("   ← держит участок", style=accent)
+                    t.append("   держит участок", style=accent)
                 elif not held:
                     t.append("   не занят ни разу", style=faint)
                 t.append("\n")
             t.append("\n")
-        t.append("◆ ", style=accent)
+        t.append("    ◆ ", style=accent)
         t.append("единственный исполнитель", style=dim)
         t.append("      ● исполним      · нет\n", style=faint)
         # Откуда цифры. Проект держится на том, что измеренное отделено от
         # предположенного, и в матрице это должно быть видно, а не в отчёте.
         srcs = {model.matrix_source}
         srcs |= {o.latency_source for o in model.ops.values()}
-        t.append("источник: " + ", ".join(sorted(srcs)), style=faint)
-        t.append("        строка → первая такая операция в решётке",
-                 style=palette.role_hex("accent_soft"))
+        t.append("    источник: " + ", ".join(sorted(srcs)) + "\n", style=faint)
+        # Одной строкой и коротко: подсказка, уехавшая на второй ряд, читается
+        # как ещё один раздел, хотя это сноска.
+        t.append("    строка таблицы — ссылка: ведёт к этой операции в решётке",
+                 style=faint)
         foot.update(t)
 
     def _draw_machine(self) -> None:

@@ -17,7 +17,7 @@ from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.widgets import Static
 
 from .. import palette
-from ..widgets import Chip, Console, Panel
+from ..widgets import Chip, Console, ConsoleJournal, Panel, plural
 from .base import ModeScreen
 
 QUESTIONS = [
@@ -52,6 +52,7 @@ class AgentScreen(ModeScreen):
         self._buf = ""
         self._actions: list[str] = []
         self._model: tuple[bool | None, str] = (None, "проверяю…")
+        self._console_expanded = False
 
     # --- раскладка --------------------------------------------------------
 
@@ -65,8 +66,11 @@ class AgentScreen(ModeScreen):
                 yield Panel(Static(id="seen"), title="ЧТО ВИДИТ АГЕНТ", id="p-seen")
                 yield Panel(VerticalScroll(Static(id="trace")),
                             title="ТРАССА", id="p-trace")
-                yield Panel(Console(id="console"), title="ВЫВОД КОМАНД",
-                            id="p-mind-console")
+                yield Panel(Console(id="console"),
+                            ConsoleJournal(id="journal"),
+                            title="ВЫВОД КОМАНД",
+                            id="p-mind-console", topic="console",
+                            has_own_input=True)
 
     def on_ready(self) -> None:
         grid = self.query_one("#question-chips", ItemGrid)
@@ -244,6 +248,33 @@ class AgentScreen(ModeScreen):
         self._draw_trace()
 
     # --- правая колонка ---------------------------------------------------
+
+    # --- развороты панелей --------------------------------------------------
+
+    def on_panel_expanded(self, event) -> None:
+        event.stop()
+        if getattr(event.panel, "topic", "") == "console":
+            self._console_expanded = True
+            self._draw_journal()
+
+    def on_panel_collapsed(self, event) -> None:
+        event.stop()
+        self._console_expanded = False
+        self._draw_journal()
+
+    def _draw_journal(self) -> None:
+        journal = self.query_one("#journal", ConsoleJournal)
+        con = self.query_one("#console", Console)
+        panel = self.query_one("#p-mind-console", Panel)
+        journal.display = self._console_expanded
+        con.display = not self._console_expanded
+        if not self._console_expanded:
+            panel.set_title("ВЫВОД КОМАНД")
+            return
+        n = len(con.runs)
+        panel.set_title(f"ВЫВОД КОМАНД   ·   журнал   ·   "
+                        f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
+        journal.load(con.runs, self.mode)
 
     def _draw_seen(self) -> None:
         target = self.query_one("#seen", Static)

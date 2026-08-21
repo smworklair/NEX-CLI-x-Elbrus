@@ -17,7 +17,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 
 from .. import palette
-from ..widgets import Console, HintBar, Panel, PanelChat, PromptBar, TopBar
+from ..widgets import (Console, HintBar, Panel, PanelChat, PanelPrompt,
+                       PromptBar, TopBar)
 
 
 class ModeScreen(Screen):
@@ -71,11 +72,12 @@ class ModeScreen(Screen):
     #: исчезал вместе с ними. Строка ввода и подсказки остаются нарочно: без
     #: них развёрнутая панель становится тупиком, из которого не видно, как
     #: выйти и что вообще можно.
-    ALLOW_IN_MAXIMIZED_VIEW = "PanelChat, PromptBar, HintBar, Footer"
+    ALLOW_IN_MAXIMIZED_VIEW = "PanelChat, PanelPrompt, PromptBar, HintBar, Footer"
 
     _chat_panel = None
     _chat_facts: list[str] = []
     _chat_offer = None
+    _prompt_panel = None
 
     def on_mount(self) -> None:
         self.app.set_mode_theme(self.mode)
@@ -258,7 +260,16 @@ class ModeScreen(Screen):
     def panel_facts(self, topic: str) -> list[str]:
         """Факты открытой панели для ИИ. Переопределяется экраном.
 
-        Пустой список — панель нечего обсуждать, чат не открываем.
+        Пустой список — панели нечего рассказывать, спрашивать не о чем.
+        """
+        return []
+
+    def panel_chips(self, topic: str) -> list[str]:
+        """Готовые вопросы для всплывающей строки этой панели.
+
+        Свои у каждой панели: спрашивают всегда про то, на что смотрят, и
+        общий список «о чём спросить» на все панели был бы тем же боковым
+        чатом, только без колонки.
         """
         return []
 
@@ -267,18 +278,91 @@ class ModeScreen(Screen):
         panel = event.panel
         if not getattr(panel, "topic", ""):
             return
-        # У панели со своим вводом чат сам не лезет: её разворачивают, чтобы
-        # читать и вводить, и отобрать треть ширины значило бы помешать ровно
-        # тому, ради чего разворот и сделан. Такую открывают клавишей.
-        if getattr(panel, "has_own_input", False):
-            self._chat_offer = panel
-            self.refresh_hints()
-            return
-        self.open_panel_chat(panel)
+        self.open_panel_prompt(panel)
 
     def on_panel_collapsed(self, event) -> None:
         event.stop()
+        self.close_panel_prompt()
         self.close_panel_chat()
+
+    # --- всплывающая строка вопроса ---------------------------------------
+
+    def open_panel_prompt(self, panel) -> None:
+        """Строка вопроса внизу развёрнутой панели.
+
+        Раньше это была колонка сбоку (PanelChat) и открывалась она у двух
+        панелей из шестнадцати: у остальных фактов не было, а у панелей со
+        своим вводом колонка отбирала треть ширины ровно у того, ради чего
+        панель и разворачивают. Строка снизу не отбирает ширину ни у кого,
+        поэтому её можно дать каждой панели.
+        """
+        topic = getattr(panel, "topic", "")
+        facts = self.panel_facts(topic)
+        chips = self.panel_chips(topic)
+        if not facts and not chips:
+            return
+        self.close_panel_prompt()
+        full = getattr(panel, "_title", "") or topic
+        title = full.split("   ")[0].strip() or topic
+        prompt = PanelPrompt(title=title, chips=chips, facts=facts,
+                             mode=self.mode, id="panel-prompt")
+        self.mount(prompt)
+        self._prompt_panel = panel
+
+    def close_panel_prompt(self) -> None:
+        for p in self.query(PanelPrompt):
+            p.remove()
+        self._prompt_panel = None
+
+    def on_panel_prompt_closed(self, event) -> None:
+        event.stop()
+        self.close_panel_prompt()
+
+    def on_panel_prompt_asked(self, event) -> None:
+        event.stop()
+        prompts = list(self.query(PanelPrompt))
+        if not prompts:
+            return
+        pp = prompts[0]
+        pp.echo(event.question)
+        pp.start_answer()
+        self._panel_prompt_worker(event.question)
+
+    @work(thread=True, exclusive=True, group="panel-prompt")
+    def _panel_prompt_worker(self, question: str) -> None:
+        import time
+
+        from ...agent import context, llm
+
+        panel = getattr(self, "_prompt_panel", None)
+        full = getattr(panel, "_title", "") if panel is not None else ""
+        title = full.split("   ")[0].strip() or "панель"
+        prompts = list(self.query(PanelPrompt))
+        facts = list(prompts[0].facts) if prompts else []
+        system = context.panel_prompt(title, facts)
+        t0 = time.monotonic()
+        try:
+            for piece in llm.stream(system, question, None):
+                self.app.call_from_thread(self._pp_piece, piece)
+        except Exception as e:
+            self.app.call_from_thread(self._pp_fail, str(e))
+        self.app.call_from_thread(self._pp_done, time.monotonic() - t0)
+
+    def _pp_piece(self, piece: str) -> None:
+        for p in self.query(PanelPrompt):
+            p.first_piece()
+            p.append(piece)
+            return
+
+    def _pp_done(self, seconds: float) -> None:
+        for p in self.query(PanelPrompt):
+            p.finish(seconds)
+            return
+
+    def _pp_fail(self, message: str) -> None:
+        for p in self.query(PanelPrompt):
+            p.note("не получилось: " + message[:160], "error")
+            return
 
     def open_panel_chat(self, panel) -> None:
         facts = self.panel_facts(getattr(panel, "topic", ""))

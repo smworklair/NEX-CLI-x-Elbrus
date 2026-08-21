@@ -387,22 +387,40 @@ class TestCursorAI(unittest.TestCase):
 
         return asyncio.run(go())
 
-    def test_lab_has_no_side_chat(self) -> None:
-        """Чат сбоку в РАЗБОРЕ не открывается — это решение, не недоделка."""
+    def test_lab_asks_from_below_not_from_the_side(self) -> None:
+        """Спрашивают снизу, а не колонкой сбоку.
+
+        Колонка (PanelChat) отбирала треть ширины у решётки — ровно у того,
+        ради чего панель и разворачивают. Всплывающая строка снизу ширины не
+        отбирает, поэтому её получает каждая панель, а колонки нет ни у
+        одной. Факты при этом собираются по ТЕМЕ открытой панели, а не «всё
+        про сессию»: спрашивают всегда про то, на что смотрят.
+        """
 
         async def body(sc, pilot):
-            from vliw.tui.widgets import Panel, PanelChat
+            from vliw.tui.widgets import Panel, PanelChat, PanelPrompt
 
             panel = sc.query_one("#p-grid", Panel)
             sc.maximize(panel, container=False)
             panel.post_message(Panel.Expanded(panel))
             for _ in range(6):
                 await pilot.pause(0.05)
-            return len(list(sc.query(PanelChat))), sc.panel_facts("grid")
+            return (len(list(sc.query(PanelChat))),
+                    len(list(sc.query(PanelPrompt))),
+                    sc.panel_facts("grid"),
+                    sc.panel_chips("grid"),
+                    sc.panel_chips("machine"))
 
-        chats, facts = self._screen(body)
-        self.assertEqual(chats, 0)
-        self.assertEqual(facts, [])
+        chats, prompts, facts, grid_chips, machine_chips = self._screen(body)
+        self.assertEqual(chats, 0, "колонка сбоку не должна появляться")
+        self.assertEqual(prompts, 1, "строка снизу должна появиться")
+        self.assertTrue(facts, "панели есть что рассказать про себя")
+        self.assertTrue(any("решётк" in f.lower() for f in facts),
+                        "факты должны быть про решётку, а не вообще")
+        # Готовые вопросы у панелей разные: общий список на все панели был бы
+        # тем же боковым чатом, только без колонки.
+        self.assertTrue(grid_chips and machine_chips)
+        self.assertNotEqual(grid_chips, machine_chips)
 
     def test_cursor_move_invalidates_previous_answer(self) -> None:
         """Ушёл с клетки — прежний ответ снят, а не дописывается к чужой."""

@@ -11,7 +11,7 @@ import time
 
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Input, OptionList, RichLog, Static
@@ -146,7 +146,14 @@ class Panel(Vertical):
 
 
 class Console(RichLog):
-    """Отчёты команд. Принимает ANSI-строки ядра без изменений."""
+    """Отчёты команд. Принимает ANSI-строки ядра без изменений.
+
+    Помимо ленты держит `runs` — вывод, разложенный по запускам. Лента
+    отвечает на вопрос «что сейчас произошло», но не на «что показал
+    /doctor три команды назад»: длинный отчёт уезжает вверх, и его
+    перезапускают заново. Журнал (см. ConsoleJournal) строится из этого
+    списка, поэтому запись идёт всегда, а не только когда журнал открыт.
+    """
 
     def __init__(self, **kw) -> None:
         kw.setdefault("highlight", False)
@@ -154,21 +161,133 @@ class Console(RichLog):
         kw.setdefault("wrap", False)
         kw.setdefault("auto_scroll", True)
         super().__init__(**kw)
+        self.runs: list[dict] = []
+
+    def _record(self, line) -> None:
+        """Строку — в текущий запуск. Перехватывать `write` нельзя: RichLog
+        переигрывает отложенный вывод на каждом ресайзе, и журнал двоился бы.
+        Строки до первой команды (заставка панели) ничьи и не пишутся."""
+        if self.runs:
+            self.runs[-1]["lines"].append(line)
 
     def echo(self, line: str, mode: str = "lab") -> None:
         """Отметка о поданной команде — чтобы лог не был безадресным."""
         accent = palette.role_hex(palette.MODE_ROLE.get(mode, "accent"))
+        self.runs.append({"cmd": line, "lines": []})
         t = Text()
         t.append(f"{ARROW} ", style=accent)
         t.append(line, style=palette.role_hex("title"))
         self.write(t)
+        self._record(t)
 
     def ansi(self, text: str) -> None:
         for line in text.split("\n"):
-            self.write(Text.from_ansi(line))
+            t = Text.from_ansi(line)
+            self._record(t)
+            self.write(t)
 
     def note(self, text: str, role: str = "dim") -> None:
-        self.write(Text(text, style=palette.role_hex(role)))
+        t = Text(text, style=palette.role_hex(role))
+        self._record(t)
+        self.write(t)
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """Русское склонение по числу. «3 запусков» мозолит глаза в заголовке."""
+    if 11 <= n % 100 <= 14:
+        return many
+    return {1: one, 2: few, 3: few, 4: few}.get(n % 10, many)
+
+
+class RunItem(Static):
+    """Один запуск в журнале. Клик — показать его вывод справа."""
+
+    class Picked(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+    def __init__(self, index: int, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.index = index
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.index))
+
+
+class ConsoleJournal(Horizontal):
+    """Развёрнутый ВЫВОД КОМАНД: слева запуски, справа вывод выбранного.
+
+    Свёрнутая панель — лента: видно последнее, остальное уехало вверх.
+    Развернуть её в ту же ленту подлиннее значило бы не решить ровно ту
+    проблему, из-за которой её и разворачивают: /doctor на тринадцати
+    строках и /compare на тридцати одной идут подряд, и чтобы вернуться к
+    первому, его перезапускают. Журнал даёт вернуться, не запуская.
+
+    Не универсальный виджет: у ЛЕНТЫ в ЯДРЕ развёрнутый вид свой, потому
+    что там не запуски команд, а вычисления с значениями.
+    """
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.runs: list[dict] = []
+        self.pos = -1
+
+    def compose(self):
+        yield Vertical(id="journal-list")
+        yield RichLog(id="journal-out", highlight=False, markup=False,
+                      wrap=False, auto_scroll=False)
+
+    def load(self, runs: list[dict], mode: str = "lab") -> None:
+        self.runs = runs
+        self.mode = mode
+        box = self.query_one("#journal-list", Vertical)
+        box.remove_children()
+        dim = palette.role_hex("dim")
+        if not runs:
+            box.mount(Static(Text("  команд ещё не было", style=dim)))
+            self.query_one("#journal-out", RichLog).clear()
+            return
+        # Последний запуск открыт сразу: чаще всего вернуться хотят к нему,
+        # а пустая правая половина на входе выглядела бы поломкой.
+        if not 0 <= self.pos < len(runs):
+            self.pos = len(runs) - 1
+        for i, run in enumerate(runs):
+            box.mount(RunItem(i, self._row(i, run),
+                              classes="run-item" + (" on" if i == self.pos
+                                                    else "")))
+        self.show(self.pos)
+
+    def _row(self, i: int, run: dict) -> Text:
+        accent = palette.role_hex(palette.MODE_ROLE.get(
+            getattr(self, "mode", "lab"), "accent"))
+        here = i == self.pos
+        t = Text()
+        t.append("▸ " if here else "  ",
+                 style=accent if here else palette.role_hex("faint"))
+        t.append(run["cmd"][:26].ljust(27),
+                 style=palette.role_hex("title") if here
+                 else palette.role_hex("dim"))
+        n = len(run["lines"])
+        t.append(f"{n:>4} стр.", style=palette.role_hex("faint"))
+        return t
+
+    def show(self, index: int) -> None:
+        if not (0 <= index < len(self.runs)):
+            return
+        self.pos = index
+        out = self.query_one("#journal-out", RichLog)
+        out.clear()
+        for line in self.runs[index]["lines"]:
+            out.write(line)
+        for item in self.query(RunItem):
+            item.set_class(item.index == index, "on")
+            item.update(self._row(item.index, self.runs[item.index]))
+
+    def on_run_item_picked(self, event) -> None:
+        event.stop()
+        self.show(event.index)
 
 
 # --------------------------------------------------------------------------
@@ -429,6 +548,142 @@ class HintBar(Static):
         self.update(t)
 
 
+
+
+class PromptChip(Static):
+    """Готовый вопрос во всплывающей строке. Клик — задать его."""
+
+    class Picked(Message):
+        def __init__(self, question: str) -> None:
+            super().__init__()
+            self.question = question
+
+    def __init__(self, question: str, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.question = question
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.question))
+
+
+class PanelPrompt(Vertical):
+    """Строка вопроса, всплывающая внизу развёрнутой панели.
+
+    Заменяет колонку чата сбоку. Боковая панель отбирала треть ширины у того
+    самого содержимого, ради которого панель и разворачивают, — а спросить
+    хочется почти в любой из них. Всплывающая строка не отбирает ничего: она
+    лежит поверх нижнего края, поднимается ответом вверх и уходит по Esc.
+
+    Один виджет на все панели здесь уместен ровно потому, что это НЕ
+    инструмент панели, а способ спросить: рамка одна, а начинка своя —
+    готовые вопросы и факты каждая панель даёт сама.
+    """
+
+    class Asked(Message):
+        def __init__(self, question: str) -> None:
+            super().__init__()
+            self.question = question
+
+    class Closed(Message):
+        pass
+
+    def __init__(self, title: str = "", chips: list[str] | None = None,
+                 facts: list[str] | None = None, mode: str = "lab",
+                 **kw) -> None:
+        super().__init__(**kw)
+        self._title = title
+        self._chips = chips or []
+        self.facts = facts or []
+        self.mode = mode
+        self._answer: Static | None = None
+        self._buf = ""
+
+    def compose(self):
+        yield VerticalScroll(id="pp-answer")
+        yield ItemGrid(id="pp-chips", min_column_width=30)
+        with Horizontal(id="pp-field"):
+            yield Static("", id="pp-mark")
+            yield Input(placeholder="спросить про эту панель…", id="pp-input")
+
+    def on_mount(self) -> None:
+        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        self.border_title = f"NEX  ·  {self._title}"
+        self.styles.border_title_color = accent
+        mark = Text()
+        mark.append("? ", style=f"{accent} bold")
+        self.query_one("#pp-mark", Static).update(mark)
+        chips = self.query_one("#pp-chips", ItemGrid)
+        for q in self._chips:
+            chips.mount(PromptChip(q, "‹ " + q, classes="chip prompt-chip"))
+        self.query_one("#pp-answer", VerticalScroll).display = False
+        self.query_one("#pp-input", Input).focus()
+
+    # --- ответ ------------------------------------------------------------
+
+    def start_answer(self) -> None:
+        log = self.query_one("#pp-answer", VerticalScroll)
+        log.display = True
+        self._buf = ""
+        self._answer = Static(Text("…", style=palette.role_hex("faint")),
+                              classes="pp-line")
+        log.mount(self._answer)
+        log.scroll_end(animate=False)
+
+    def echo(self, question: str) -> None:
+        log = self.query_one("#pp-answer", VerticalScroll)
+        log.display = True
+        t = Text()
+        t.append("вы  ", style=palette.role_hex("faint"))
+        t.append(question, style=palette.role_hex("title"))
+        log.mount(Static(t, classes="pp-line"))
+
+    def append(self, piece: str) -> None:
+        self._buf += piece
+        if self._answer is not None:
+            self._answer.update(Text(self._buf.strip(),
+                                     style=palette.role_hex("dim")))
+            self.query_one("#pp-answer", VerticalScroll).scroll_end(
+                animate=False)
+
+    def first_piece(self) -> None:
+        if self._answer is not None and not self._buf:
+            self._answer.update(Text("", style=palette.role_hex("dim")))
+
+    def finish(self, seconds: float) -> None:
+        log = self.query_one("#pp-answer", VerticalScroll)
+        t = Text()
+        # Сколько фактов ушло в модель и сколько она думала — на виду, а не в
+        # отчёте: ответ локальной модели проверяют, а не принимают на веру.
+        t.append(f"{seconds:.0f} с  ·  фактов {len(self.facts)}  ·  "
+                 "посчитано ядром, пересказано моделью",
+                 style=palette.role_hex("faint"))
+        log.mount(Static(t, classes="pp-line"))
+        log.scroll_end(animate=False)
+
+    def note(self, text: str, role: str = "dim") -> None:
+        log = self.query_one("#pp-answer", VerticalScroll)
+        log.display = True
+        log.mount(Static(Text(text, style=palette.role_hex(role)),
+                         classes="pp-line"))
+
+    # --- ввод -------------------------------------------------------------
+
+    def on_input_submitted(self, event) -> None:
+        event.stop()
+        q = event.value.strip()
+        event.input.value = ""
+        if q:
+            self.post_message(self.Asked(q))
+
+    def on_prompt_chip_picked(self, event) -> None:
+        event.stop()
+        self.post_message(self.Asked(event.question))
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.post_message(self.Closed())
 
 
 # --------------------------------------------------------------------------

@@ -48,6 +48,35 @@ class InterpError(ValueError):
     pass
 
 
+def _did_you_mean(name: str, known) -> str:
+    """Хвост сообщения об ошибке: что человек, скорее всего, имел в виду.
+
+    Появилось по живому промаху: на `mul m0 a0 b0` — совершенно разумную для
+    e2k строку — интерпретатор отвечал «нет имени mul» и замолкал. Человек
+    не знает, что можно писать, а инструмент знает и молчит. Тупик на ровном
+    месте, причём в первой же строке, которую набирает новый пользователь.
+
+    Похожие имена ищем всегда, а список доступного показываем, только если
+    похожих нет: иначе подсказка тонет в перечислении.
+    """
+    import difflib
+
+    pool = sorted(set(known) | set(KERNELS) | set(VERBS))
+    close = difflib.get_close_matches(name, pool, n=3, cutoff=0.6)
+    if close:
+        return "  может быть: " + ", ".join(close)
+    # Похожего нет — значит человек, скорее всего, пишет не на том языке.
+    # Самый частый случай: набирают мнемонику e2k (`mul m0 a0 b0`), потому
+    # что весь остальной инструмент про них и говорит. Показываем не список
+    # слов, а ФОРМУ строки: одного примера хватает, чтобы понять правило.
+    real = [n for n in sorted(known) if not n.startswith("_")]
+    tail = ("  имена: " + ", ".join(real[:8])) if real else \
+           ("  ядра: " + ", ".join(sorted(KERNELS)))
+    return ("  здесь считают выражениями, а не мнемониками e2k:\n"
+            "    a0 = load [0]      b0 = load [1]      s = a0 * b0\n"
+            + tail)
+
+
 def looks_like_work(text: str, known: dict | None = None) -> bool:
     s = text.strip()
     if not s:
@@ -367,7 +396,8 @@ class Workspace:
         if kind == "id":
             name = val
             if name not in self.regs:
-                raise InterpError(f"нет имени {name}")
+                raise InterpError(f"нет имени {name}\n"
+                                  + _did_you_mean(name, self.regs))
             return self.regs[name], self._ids.get(name), i + 1
         if kind == "op" and val == "(":
             v, node, i = self._expr(tok, i + 1)

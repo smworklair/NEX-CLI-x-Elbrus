@@ -405,6 +405,9 @@ class TestCursorAI(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             for _ in range(6):
                 await pilot.pause(0.05)
+            await pilot.press("tab")          # справочник — только по Tab
+            for _ in range(4):
+                await pilot.pause(0.05)
             return (len(list(sc.query(PanelChat))),
                     len(list(sc.query(PanelPrompt))),
                     sc.panel_facts("grid"),
@@ -644,6 +647,10 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             await pilot.pause()
             await pilot.pause()
+            # Справочник приходит только по Tab — сам он не выскакивает.
+            await pilot.press("tab")
+            await pilot.pause()
+            await pilot.pause()
             pp = sc.query_one(PanelPrompt)
             inp = pp.query_one("#pp-input")
             with mock.patch.object(llm, "stream", fake_stream):
@@ -670,6 +677,10 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
             panel = sc.query_one("#p-numbers", Panel)
             sc.maximize(panel, container=False)
             panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            await pilot.pause()
+            # Справочник приходит только по Tab — сам он не выскакивает.
+            await pilot.press("tab")
             await pilot.pause()
             await pilot.pause()
             pp = sc.query_one(PanelPrompt)
@@ -703,6 +714,10 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
             panel = sc.query_one("#p-machine", Panel)
             sc.maximize(panel, container=False)
             panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            await pilot.pause()
+            # Справочник приходит только по Tab — сам он не выскакивает.
+            await pilot.press("tab")
             await pilot.pause()
             await pilot.pause()
             pp = sc.query_one(PanelPrompt)
@@ -896,11 +911,13 @@ class TestDialogIsAWorkspace(unittest.TestCase):
         self.assertEqual(items, 1)
         self.assertTrue(title, "клавиша очистки напечатана в заголовке")
 
-    def test_ctrl_g_returns_closed_prompt(self) -> None:
-        """Esc закрыл строку вопроса — ^G возвращает её без пересворачивания.
+    def test_tab_opens_ai_reference_and_it_does_not_come_uninvited(self) -> None:
+        """Справочник ИИ приходит ТОЛЬКО по Tab и по нему же уходит.
 
-        До этого скрытие было необратимым: панель развёрнута, факты те же,
-        а спросить снова — только сворачивать и разворачивать заново.
+        Раньше он выскакивал сам при развороте: панель разворачивают, чтобы
+        работать в ней, и чужая строка снизу в этот момент только мешает.
+        Проверяем обе половины: сразу после разворота его нет, Tab поднимает,
+        Tab убирает.
         """
         from vliw.tui.widgets import Panel, PanelPrompt
 
@@ -910,13 +927,76 @@ class TestDialogIsAWorkspace(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             for _ in range(4):
                 await pilot.pause(0.05)
-            had = len(list(sc.query(PanelPrompt)))
-            sc.action_toggle_panel_prompt()      # скрыть
-            await pilot.pause()
-            hidden = len(list(sc.query(PanelPrompt)))
-            sc.action_toggle_panel_prompt()      # вернуть
-            await pilot.pause()
-            return had, hidden, len(list(sc.query(PanelPrompt)))
+            uninvited = len(list(sc.query(PanelPrompt)))
+            await pilot.press("tab")
+            for _ in range(3):
+                await pilot.pause(0.05)
+            opened = len(list(sc.query(PanelPrompt)))
+            await pilot.press("tab")
+            for _ in range(3):
+                await pilot.pause(0.05)
+            return uninvited, opened, len(list(sc.query(PanelPrompt)))
 
-        had, hidden, back = self._screen(body)
-        self.assertEqual((had, hidden, back), (1, 0, 1))
+        uninvited, opened, closed = self._screen(body)
+        self.assertEqual(uninvited, 0, "справочник не должен приходить сам")
+        self.assertEqual(opened, 1, "Tab должен его поднять")
+        self.assertEqual(closed, 0, "Tab должен его убрать")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestEscapeIsOneStepBack(unittest.TestCase):
+    """Esc везде значит одно: шаг наружу, вплоть до начального экрана.
+
+    Раньше он значил три разных вещи в зависимости от фокуса (закрыть
+    справочник / переключить решётка⇄ввод / уйти к выбору режима), причём
+    поверх всего этого Textual перехватывал Esc ЕЩЁ РАНЬШЕ любых биндингов,
+    когда панель развёрнута (`App.ESCAPE_TO_MINIMIZE`), и схлопывал её сам —
+    минуя наш обработчик и не посылая `Panel.Collapsed`.
+    """
+
+    def test_escape_unwinds_level_by_level(self) -> None:
+        from vliw.tui.screens.picker import PickerScreen
+        from vliw.tui.widgets import Panel, PanelPrompt
+
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    sc = app.screen
+                    panel = sc.query_one("#p-machine", Panel)
+                    sc.maximize(panel, container=False)
+                    panel.post_message(Panel.Expanded(panel))
+                    await pilot.pause()
+                    await pilot.pause()
+                    await pilot.press("tab")
+                    await pilot.pause()
+                    await pilot.pause()
+                    steps = [len(list(sc.query(PanelPrompt)))]
+
+                    await pilot.press("escape")     # 1: убрать справочник
+                    await pilot.pause()
+                    await pilot.pause()
+                    steps.append((len(list(sc.query(PanelPrompt))),
+                                  sc.maximized is not None))
+
+                    await pilot.press("escape")     # 2: свернуть панель
+                    await pilot.pause()
+                    await pilot.pause()
+                    steps.append((app.screen.maximized is None,
+                                  app.screen.__class__.__name__))
+
+                    await pilot.press("escape")     # 3: к выбору режима
+                    await pilot.pause()
+                    await pilot.pause()
+                    steps.append(isinstance(app.screen, PickerScreen))
+                    return steps
+
+        opened, after_first, after_second, after_third = asyncio.run(go())
+        self.assertEqual(opened, 1, "Tab должен был поднять справочник")
+        # Первый Esc снимает ТОЛЬКО справочник — панель обязана остаться
+        # развёрнутой, иначе один Esc проскакивает через два уровня.
+        self.assertEqual(after_first, (0, True))
+        self.assertEqual(after_second, (True, "LabScreen"))
+        self.assertTrue(after_third, "третий Esc — на начальный экран")

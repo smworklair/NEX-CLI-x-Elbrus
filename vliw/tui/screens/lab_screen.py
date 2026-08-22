@@ -11,8 +11,9 @@
     справа  числа, диагноз, машина
 
 Клавиатура делится честно: пока курсор в строке ввода, все клавиши — текст.
-Esc отдаёт клавиатуру решётке, Esc из решётки возвращает обратно, а любая
-печатная клавиша в решётке сама возвращает вас в ввод и начинает набор.
+F2 отдаёт клавиатуру решётке и возвращает обратно, а любая печатная
+клавиша в решётке сама возвращает вас в ввод и начинает набор. Esc в этот
+обмен не вмешивается: он везде значит «шаг назад».
 """
 
 from __future__ import annotations
@@ -145,7 +146,10 @@ class LabScreen(ModeScreen):
     TIPS_ID = "#p-scen"
 
     BINDINGS = ModeScreen.BINDINGS + [
-        ("escape", "swap_focus", "решётка ⇄ ввод"),
+        # Не Esc: Esc теперь везде значит «шаг назад» и ничего больше.
+        # Переключение фокуса — это шаг ВНУТРЬ, противоположное действие, и
+        # вешать его на ту же клавишу значило делать её непредсказуемой.
+        ("f2", "swap_focus", "решётка ⇄ ввод"),
     ]
 
     def __init__(self, **kw) -> None:
@@ -292,8 +296,8 @@ class LabScreen(ModeScreen):
             con.write(row)
 
     def hint_pairs(self):
-        return [("Esc", "решётка ⇄ ввод"), ("↑↓←→", "по тактам"),
-                ("Enter", "разбор такта"), ("/", "команды")]
+        return [("F2", "решётка ⇄ ввод"), ("↑↓←→", "по тактам"),
+                ("Enter", "разбор такта"), ("Esc", "назад")]
 
     # --- чипы -------------------------------------------------------------
 
@@ -711,17 +715,6 @@ class LabScreen(ModeScreen):
         self._draw_machine()
         self._draw_detail()
         self._draw_grid_link()
-
-    def on_prompt_bar_escaped(self, event) -> None:
-        # prevent_default(), а не только stop(): Textual зовёт обработчик с
-        # таким именем у КАЖДОГО класса в MRO (см. `_get_dispatch_methods`),
-        # а не только у самого специфичного. Без prevent_default() базовый
-        # ModeScreen.on_prompt_bar_escaped срабатывал следом за этим же
-        # событием и уводил на пикер ОДНОВРЕМЕННО с переключением фокуса на
-        # решётку — Esc в РАЗБОРЕ делал два взаимоисключающих действия разом.
-        event.stop()
-        event.prevent_default()
-        self.query_one("#grid", ScheduleGrid).focus()
 
     def action_swap_focus(self) -> None:
         grid = self.query_one("#grid", ScheduleGrid)

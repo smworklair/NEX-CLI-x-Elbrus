@@ -520,6 +520,21 @@ class PromptBar(Vertical):
         self.history.append(raw)
         self.post_message(self.Submitted(raw))
 
+    def tab(self) -> None:
+        """Дополнение по Tab. Публичный метод, потому что Tab теперь ловит
+        экран (у него priority-биндинг ради справочника ИИ), а привычное
+        дополнение вне разворота должно продолжать работать — экран зовёт
+        этот метод сам."""
+        from ..ui import slash
+
+        pal = self.palette_widget
+        if pal.display:
+            sel = pal.selected
+            if sel:
+                self.set_value(slash.apply_tab(self.input.value, sel))
+            return
+        self.set_value("/")
+
     def on_nex_input_nav(self, event: NexInput.Nav) -> None:
         event.stop()
         from ..ui import slash
@@ -829,10 +844,7 @@ class PanelPrompt(Vertical):
         event.stop()
         self.post_message(self.Closed())
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            event.stop()
-            self.post_message(self.Closed())
+
 
 
 # --------------------------------------------------------------------------

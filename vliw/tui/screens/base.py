@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from textual import work
+from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
 
@@ -36,12 +37,18 @@ class ModeScreen(Screen):
     TIPS_ID = ""
 
     BINDINGS = [
+        # Esc — ОДИН шаг назад, всегда и везде. priority=True обязателен:
+        # без него Esc сначала достаётся сфокусированному виджету (полю
+        # ввода, строке вопроса, решётке), и каждый трактовал его по-своему —
+        # получалось три разных Esc в одном приложении. Теперь он один и
+        # разбирает уровни по порядку, см. action_back.
+        Binding("escape", "back", "назад", priority=True),
+        # Tab — открыть/закрыть справочник ИИ у развёрнутой панели. Тоже
+        # priority: иначе Tab уходит в поле ввода на дополнение команды.
+        # Вне разворота дополнение и остаётся — см. action_ai_or_complete.
+        Binding("tab", "ai_or_complete", "справочник ИИ", priority=True),
         ("ctrl+b", "toggle_side", "боковая панель"),
         ("ctrl+t", "toggle_tips", "полоса подсказок"),
-        # Строка вопроса по развёрнутой панели: закрыл по Esc — и вернуть её
-        # было нельзя, только сворачивать панель и разворачивать заново.
-        # ^G возвращает её на место; клавиша видна в полосе подсказок.
-        ("ctrl+g", "toggle_panel_prompt", "вопрос по панели"),
         ("ctrl+o", "to_picker", "к выбору режима"),
         ("ctrl+q", "quit_app", "выход"),
     ]
@@ -77,6 +84,16 @@ class ModeScreen(Screen):
     #: них развёрнутая панель становится тупиком, из которого не видно, как
     #: выйти и что вообще можно.
     ALLOW_IN_MAXIMIZED_VIEW = "PanelChat, PanelPrompt, PromptBar, HintBar, Footer"
+
+    #: Textual сам перехватывает Esc ДО всех биндингов, когда что-то
+    #: развёрнуто (`App._process_messages`: `escape_to_minimize` → сразу
+    #: `screen.minimize()`), и наш каскад до дела не доходил: один Esc
+    #: проскакивал уровень справочника и схлопывал панель. Хуже того,
+    #: встроенный путь зовёт `minimize()` напрямую и НЕ шлёт
+    #: `Panel.Collapsed` — экран не узнавал, что панель свернули, и держал
+    #: развёрнутый режим отрисовки. Выключаем; сворачивание делает
+    #: `action_back` сам, четвёртым шагом, и с уведомлением панели.
+    ESCAPE_TO_MINIMIZE = False
 
     _chat_panel = None
     _chat_facts: list[str] = []
@@ -132,7 +149,7 @@ class ModeScreen(Screen):
             pass
 
     def hint_pairs(self) -> list[tuple[str, str]]:
-        return [("/", "команды"), ("Esc", "к выбору режима"), ("/exit", "выход")]
+        return [("/", "команды"), ("Esc", "назад"), ("/exit", "выход")]
 
     def toggle_hints(self) -> list[tuple[str, str]]:
         """Подсказки про скрываемые панели — одинаковые во всех режимах."""
@@ -143,17 +160,16 @@ class ModeScreen(Screen):
             out.append(("Esc", "свернуть панель"))
         else:
             out.append(("2×клик", "панель на весь экран"))
+        # Tab виден только там, где он что-то делает: справочник живёт
+        # исключительно у развёрнутой панели.
+        if (self.screen is self and self.maximized is not None
+                and self._expanded_panel is not None):
+            out.append(("Tab", "справочник ИИ"
+                        if not list(self.query(PanelPrompt)) else "закрыть"))
         if self.SIDE_ID:
             out.append(("^B", "панель" if self.side_shown else "панель ↩"))
         if self.TIPS_ID:
             out.append(("^T", "подсказки" if self.tips_shown else "подсказки ↩"))
-        # Строка вопроса скрывается по Esc (написано на ней), а возвращается
-        # по ^G — и это тоже должно быть видно, иначе скрытие выглядит
-        # необратимым и Esc нажимать не хочется.
-        if (self.screen is self and self.maximized is not None
-                and self._expanded_panel is not None):
-            out.append(("^G", "вопрос ↩" if not list(self.query(PanelPrompt))
-                        else "вопрос"))
         return out
 
     def refresh_hints(self) -> None:
@@ -210,18 +226,60 @@ class ModeScreen(Screen):
         bar.history.append(event.value)
         self.handle_line(event.value)
 
-    def on_prompt_bar_escaped(self, event) -> None:
-        """Esc при закрытой палитре и пустом вводе — назад к выбору режима.
+    # --- Esc: один шаг назад ----------------------------------------------
 
-        В ЯДРЕ и АГЕНТЕ Esc из поля ввода ничем больше не занят: развёрнутая
-        панель и всплывающая строка вопроса перехватывают его раньше (у них
-        свой `on_key`/`Binding`, и они получают событие первыми), так что сюда
-        он доходит только «сверху», когда экран в обычном виде. РАЗБОР этот
-        обработчик переопределяет своим — там Esc уже занят переключением
-        решётка ⇄ ввод, и это не трогаем.
+    def action_back(self) -> None:
+        """Esc — выйти на один уровень наружу, вплоть до начального экрана.
+
+        Раньше Esc значил три разных вещи в зависимости от того, что в
+        фокусе: закрыть справочник, переключить решётка⇄ввод, уйти к выбору
+        режима. Каждый обработчик стоял в своём классе и не знал про
+        остальные — отсюда и ощущение костыля. Теперь уровень ровно один и
+        разбирается сверху вниз: что открыто последним, то и закрывается.
         """
-        event.stop()
+        bar = None
+        try:
+            bar = self.query_one("#prompt", PromptBar)
+        except Exception:
+            pass
+        # 1. Палитра команд поверх всего — закрыть её, ввод не трогать.
+        if bar is not None and bar.palette_widget.display:
+            bar.set_value("")
+            return
+        # 2. Справочник ИИ у развёрнутой панели.
+        if list(self.query(PanelPrompt)):
+            self.close_panel_prompt()
+            self.refresh_hints()
+            return
+        # 3. Развёрнутая панель — свернуть обратно в раскладку экрана.
+        if self.maximized is not None:
+            panel = self.maximized
+            self.minimize()
+            panel.post_message(Panel.Collapsed())
+            return
+        # 4. Дальше выходить некуда, кроме как из самого режима.
         self.app.to_picker()
+
+    def action_ai_or_complete(self) -> None:
+        """Tab: у развёрнутой панели — справочник ИИ, иначе — дополнение.
+
+        Справочник больше не выскакивает сам при развороте: панель
+        разворачивают, чтобы работать в ней, и чужая строка снизу в этот
+        момент только мешает. Открывается ровно по Tab и по нему же
+        закрывается.
+
+        Вне разворота Tab оставлен дополнению команды в общем доке — это
+        его привычное место, и отбирать его ради функции, которой там всё
+        равно нет (справочник живёт только у развёрнутой панели), значило бы
+        сломать рабочую клавишу ради пустого действия.
+        """
+        if self.maximized is not None and self._expanded_panel is not None:
+            self.action_toggle_panel_prompt()
+            return
+        try:
+            self.query_one("#prompt", PromptBar).tab()
+        except Exception:
+            pass
 
     # --- выполнение команд ядра -------------------------------------------
 
@@ -311,10 +369,10 @@ class ModeScreen(Screen):
         panel = event.panel
         # Помним, какая панель развёрнута: ^G возвращает строку вопроса без
         # того, чтобы сворачивать и разворачивать панель заново.
+        # Справочник ИИ сам НЕ открывается: панель разворачивают, чтобы
+        # работать в ней, и чужая строка снизу в этот момент мешает. Только
+        # запоминаем панель — Tab поднимет справочник, когда он понадобится.
         self._expanded_panel = panel if getattr(panel, "topic", "") else None
-        if not getattr(panel, "topic", ""):
-            return
-        self.open_panel_prompt(panel)
         self.refresh_hints()
 
     def on_panel_collapsed(self, event) -> None:
@@ -327,13 +385,7 @@ class ModeScreen(Screen):
     # --- всплывающая строка вопроса ---------------------------------------
 
     def action_toggle_panel_prompt(self) -> None:
-        """^G — скрыть/вернуть строку вопроса у развёрнутой панели.
-
-        Esc её закрывает (и это написано на ней самой), но вернуть было
-        нельзя: панель развёрнута, факты те же, а спросить — заново
-        разворачивать. Теперь скрытие обратимо, и обе клавиши видны: Esc на
-        самой строке, ^G — в полосе подсказок.
-        """
+        """Открыть/закрыть справочник ИИ у развёрнутой панели (Tab)."""
         if list(self.query(PanelPrompt)):
             self.close_panel_prompt()
             self.refresh_hints()

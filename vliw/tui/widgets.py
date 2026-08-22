@@ -173,7 +173,7 @@ class Console(RichLog):
     def echo(self, line: str, mode: str = "lab") -> None:
         """Отметка о поданной команде — чтобы лог не был безадресным."""
         accent = palette.role_hex(palette.MODE_ROLE.get(mode, "accent"))
-        self.runs.append({"cmd": line, "lines": []})
+        self.runs.append({"cmd": line, "lines": [], "error": False})
         t = Text()
         t.append(f"{ARROW} ", style=accent)
         t.append(line, style=palette.role_hex("title"))
@@ -188,6 +188,11 @@ class Console(RichLog):
 
     def note(self, text: str, role: str = "dim") -> None:
         t = Text(text, style=palette.role_hex(role))
+        # Запомнить, что запуск провалился: в журнале десяток команд подряд,
+        # и без пометки неудачная выглядит ровно как удачная. Ошибки ядра
+        # приходят сюда же (`_core_done` зовёт note(..., "error")).
+        if role == "error" and self.runs:
+            self.runs[-1]["error"] = True
         self._record(t)
         self.write(t)
 
@@ -216,18 +221,77 @@ class RunItem(Static):
         self.post_message(self.Picked(self.index))
 
 
+class CommandItem(Static):
+    """Команда в каталоге терминала. Клик — подставить её в строку ввода."""
+
+    class Picked(Message):
+        def __init__(self, line: str) -> None:
+            super().__init__()
+            self.line = line
+
+    def __init__(self, line: str, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.line = line
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.line))
+
+
+class JournalInput(Input):
+    """Ввод терминала: ↑/↓ ходят по истории, а не по строкам.
+
+    Отдельный класс, а не обработчик в родителе: у `Input` свои биндинги на
+    стрелки, и перехватить их можно только своими — иначе история молча не
+    работает, что для терминала неприемлемо.
+    """
+
+    BINDINGS = [
+        Binding("up", "hist(-1)", "", show=False),
+        Binding("down", "hist(1)", "", show=False),
+    ]
+
+    class Hist(Message):
+        def __init__(self, delta: int) -> None:
+            super().__init__()
+            self.delta = delta
+
+    def action_hist(self, delta: int) -> None:
+        self.post_message(self.Hist(delta))
+
+
 class ConsoleJournal(Horizontal):
-    """Развёрнутый ВЫВОД КОМАНД: слева запуски, справа вывод выбранного.
+    """Развёрнутый ВЫВОД КОМАНД — рабочий терминал, а не список для чтения.
 
     Свёрнутая панель — лента: видно последнее, остальное уехало вверх.
     Развернуть её в ту же ленту подлиннее значило бы не решить ровно ту
-    проблему, из-за которой её и разворачивают: /doctor на тринадцати
-    строках и /compare на тридцати одной идут подряд, и чтобы вернуться к
-    первому, его перезапускают. Журнал даёт вернуться, не запуская.
+    проблему, из-за которой её и разворачивают.
+
+    Что здесь есть сверх ленты:
+      — каталог ВСЕХ команд слева, с аргументами: набирать вслепую больше не
+        надо, и не надо помнить, что вообще бывает;
+      — каталог фильтруется живьём тем, что набираешь в строке ввода, а клик
+        по команде подставляет её вместе с аргументом;
+      — история команд по ↑/↓ и повтор выбранного запуска по ^R;
+      — запуски с ошибкой помечены, а не выглядят как удачные;
+      — своя строка ввода прямо здесь, а не «где-то внизу экрана».
+
+    Колонка слева нарочно узкая: главное здесь — вывод справа, а каталог и
+    список запусков — вспомогательные. Раньше она занимала 40 колонок из
+    150 при том, что длиннее «/load examples/probe.s» там ничего не бывает.
 
     Не универсальный виджет: у ЛЕНТЫ в ЯДРЕ развёрнутый вид свой, потому
-    что там не запуски команд, а вычисления с значениями.
+    что там не запуски команд, а вычисления со значениями.
     """
+
+    BINDINGS = [
+        Binding("ctrl+r", "repeat", "повторить запуск", show=False),
+        Binding("ctrl+l", "wipe", "очистить журнал", show=False),
+    ]
+
+    #: Ширина левой колонки. 26 — по самой длинной команде с аргументом
+    #: («/load <файл.s>»), а не «на глаз побольше».
+    SIDE_W = 26
 
     class RunRequested(Message):
         """Команда, набранная прямо в развёрнутом журнале — не в общем доке."""
@@ -239,12 +303,19 @@ class ConsoleJournal(Horizontal):
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
         self.runs: list[dict] = []
+        self.commands: list[dict] = []
         self.pos = -1
         self._seen = 0     # сколько запусков уже показывали (для терминала)
         self.mode = "lab"
+        self._filter = ""
+        self._hist_pos: int | None = None
 
     def compose(self):
-        yield Vertical(id="journal-list")
+        with Vertical(id="journal-side"):
+            yield Static("", id="journal-cmds-head")
+            yield VerticalScroll(id="journal-cmds")
+            yield Static("", id="journal-runs-head")
+            yield VerticalScroll(id="journal-list")
         # Вывод и строка ввода — в одной колонке: журнал должен работать как
         # терминал сам по себе, а не подразумевать, что где-то далеко внизу
         # экрана есть общий док ввода, про который ещё нужно догадаться.
@@ -253,9 +324,10 @@ class ConsoleJournal(Horizontal):
                           wrap=False, auto_scroll=False)
             with Horizontal(id="journal-field"):
                 yield Static("", id="journal-mark")
-                yield Input(placeholder="команда прямо здесь — тот же ввод, "
-                                        "что и внизу экрана",
-                           id="journal-input")
+                yield JournalInput(
+                    placeholder="команда — слева каталог, ↑↓ история, "
+                                "^R повтор, ^L очистить",
+                    id="journal-input")
 
     def on_mount(self) -> None:
         self._repaint_mark()
@@ -268,38 +340,143 @@ class ConsoleJournal(Horizontal):
         mark.append(" ", style="")
         self.query_one("#journal-mark", Static).update(mark)
 
+    # --- ввод -------------------------------------------------------------
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
         line = event.value.strip()
         event.input.value = ""
+        self._filter = ""
+        self._hist_pos = None
+        self._draw_commands()
         if line:
             self.post_message(self.RunRequested(line))
 
-    def load(self, runs: list[dict], mode: str = "lab") -> None:
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Набранное фильтрует каталог слева — дополнение без отдельной клавиши.
+
+        Tab тут занят справочником ИИ (общая клавиша всего интерфейса), да и
+        дополнение по клавише надо ещё догадаться нажать. Живой фильтр видно
+        без подсказки: набрал «do» — слева осталось /doctor.
+        """
+        event.stop()
+        # Только ПЕРВОЕ слово: дальше идут аргументы, и по «run slotclash»
+        # каталог не находил бы ничего ровно в тот момент, когда команда уже
+        # набрана правильно.
+        self._filter = event.value.strip().lstrip("/").split(" ")[0].lower()
+        self._draw_commands()
+
+    def on_journal_input_hist(self, event) -> None:
+        event.stop()
+        cmds = [r["cmd"] for r in self.runs]
+        if not cmds:
+            return
+        if self._hist_pos is None:
+            self._hist_pos = len(cmds)
+        self._hist_pos = max(0, min(len(cmds), self._hist_pos + event.delta))
+        inp = self.query_one("#journal-input", JournalInput)
+        value = "" if self._hist_pos >= len(cmds) else cmds[self._hist_pos]
+        inp.value = value
+        inp.cursor_position = len(value)
+
+    def on_command_item_picked(self, event) -> None:
+        """Клик по команде: подставить, но НЕ запускать.
+
+        У половины команд есть аргумент, и запуск по клику отправлял бы их
+        без него. Подставляем и оставляем курсор в конце — дописать и Enter.
+        """
+        event.stop()
+        inp = self.query_one("#journal-input", JournalInput)
+        inp.value = event.line
+        inp.cursor_position = len(event.line)
+        inp.focus()
+
+    def action_repeat(self) -> None:
+        """^R — повторить выбранный запуск.
+
+        Отдельно от «показать вывод»: перечитать старый отчёт и прогнать его
+        заново — разные намерения, и склеивать их в один клик значит терять
+        первое.
+        """
+        if 0 <= self.pos < len(self.runs):
+            self.post_message(self.RunRequested(self.runs[self.pos]["cmd"]))
+
+    def action_wipe(self) -> None:
+        """^L — очистить журнал. Список запусков растёт всю сессию."""
+        self.runs.clear()
+        self.pos = -1
+        self._seen = 0
+        self.load(self.runs, self.mode, self.commands)
+
+    # --- отрисовка --------------------------------------------------------
+
+    def load(self, runs: list[dict], mode: str = "lab",
+             commands: list[dict] | None = None) -> None:
         self.runs = runs
+        if commands is not None:
+            self.commands = commands
         if mode != self.mode:
             self.mode = mode
             self._repaint_mark()
-        box = self.query_one("#journal-list", Vertical)
+        self._draw_commands()
+        self._draw_runs()
+
+    def _draw_commands(self) -> None:
+        box = self.query_one("#journal-cmds", VerticalScroll)
+        head = self.query_one("#journal-cmds-head", Static)
         box.remove_children()
-        dim = palette.role_hex("dim")
-        if not runs:
-            box.mount(Static(Text("  команд ещё не было", style=dim)))
+        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        shown = [c for c in self.commands
+                 if not self._filter or self._filter in c["name"].lower()]
+        # Совпадения с НАЧАЛА имени — выше: набирая «do», ищут /doctor, а не
+        # /random, где «do» просто попалось в середине (ran-do-m).
+        if self._filter:
+            shown.sort(key=lambda c: not c["name"].lower()
+                       .startswith(self._filter))
+        h = Text()
+        h.append("КОМАНДЫ ", style=f"{accent} bold")
+        h.append(f" {len(shown)}", style=faint)
+        if self._filter:
+            h.append(f"  из {len(self.commands)}", style=faint)
+        head.update(h)
+        if not shown:
+            box.mount(Static(Text("  ничего не совпало", style=faint)))
+            return
+        for c in shown:
+            line = "/" + c["name"] + (" " + c["arg"] if c.get("arg") else "")
+            t = Text()
+            t.append("/" + c["name"], style=dim)
+            if c.get("arg"):
+                t.append(" " + c["arg"], style=faint)
+            item = CommandItem(line, t, classes="cmd-item")
+            item.tooltip = c.get("help") or ""
+            box.mount(item)
+
+    def _draw_runs(self) -> None:
+        box = self.query_one("#journal-list", VerticalScroll)
+        head = self.query_one("#journal-runs-head", Static)
+        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        faint = palette.role_hex("faint")
+        box.remove_children()
+        h = Text()
+        h.append("ЗАПУСКИ ", style=f"{accent} bold")
+        h.append(f" {len(self.runs)}", style=faint)
+        head.update(h)
+        if not self.runs:
+            box.mount(Static(Text("  команд ещё не было", style=faint)))
             self.query_one("#journal-out", RichLog).clear()
             self._seen = 0
             return
         # Последний запуск открыт сразу на входе — а если появился НОВЫЙ
         # запуск с прошлой отрисовки, прыгаем на него всегда, даже если до
-        # этого читали старый: журнал развёрнут поверх терминала (глобальный
-        # ввод остаётся доступным при разворачивании панели), и набранная
-        # команда должна показать СВОЙ вывод, а не оставить читателя на
-        # чужом. Без этого разворот был терминалом только на словах: набрал
-        # команду — а видишь по-прежнему то, что открыл до неё.
-        grew = len(runs) > self._seen
-        self._seen = len(runs)
-        if grew or not 0 <= self.pos < len(runs):
-            self.pos = len(runs) - 1
-        for i, run in enumerate(runs):
+        # этого читали старый: набранная команда должна показать СВОЙ вывод,
+        # а не оставить читателя на чужом.
+        grew = len(self.runs) > self._seen
+        self._seen = len(self.runs)
+        if grew or not 0 <= self.pos < len(self.runs):
+            self.pos = len(self.runs) - 1
+        for i, run in enumerate(self.runs):
             box.mount(RunItem(i, self._row(i, run),
                               classes="run-item" + (" on" if i == self.pos
                                                     else "")))
@@ -309,14 +486,20 @@ class ConsoleJournal(Horizontal):
         accent = palette.role_hex(palette.MODE_ROLE.get(
             getattr(self, "mode", "lab"), "accent"))
         here = i == self.pos
+        failed = run.get("error")
         t = Text()
         t.append("▸ " if here else "  ",
                  style=accent if here else palette.role_hex("faint"))
-        t.append(run["cmd"][:26].ljust(27),
-                 style=palette.role_hex("title") if here
-                 else palette.role_hex("dim"))
+        # Запуск с ошибкой не должен выглядеть как удачный: в списке из
+        # десятка команд иначе не видно, какая из них не отработала.
+        name_style = (palette.role_hex("error") if failed
+                      else (palette.role_hex("title") if here
+                            else palette.role_hex("dim")))
+        t.append(run["cmd"][:16].ljust(17), style=name_style)
         n = len(run["lines"])
-        t.append(f"{n:>4} стр.", style=palette.role_hex("faint"))
+        t.append(f"{n:>3}", style=palette.role_hex("faint"))
+        t.append(" ✗" if failed else "  ",
+                 style=palette.role_hex("error"))
         return t
 
     def show(self, index: int) -> None:

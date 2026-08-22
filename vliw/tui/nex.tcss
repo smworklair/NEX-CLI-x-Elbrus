@@ -545,12 +545,28 @@ ModeScreen.tight #p-console { height: 5; }
 
 ConsoleJournal { display: none; height: 1fr; width: 100%; }
 
-#journal-list {
-    width: 40;
+/* Левая колонка узкая нарочно: главное здесь — вывод справа. Раньше она
+   занимала 40 колонок из 150 при том, что длиннее «/load <файл.s>» там
+   ничего не бывает. 26 — по самой длинной команде с аргументом. */
+#journal-side {
+    width: 26;
     height: 100%;
     border-right: solid $nex-line;
     padding-right: 1;
 }
+
+#journal-cmds-head, #journal-runs-head { height: 1; width: 100%; }
+#journal-runs-head { margin-top: 1; }
+
+/* Каталог занимает столько, сколько в нём есть (но не больше половины
+   колонки), а запуски забирают остаток. С фиксированным 1fr каталог держал
+   половину даже когда в нём после фильтра три строки, и ЗАПУСКИ висели
+   посреди пустоты. */
+#journal-cmds { height: auto; max-height: 55%; scrollbar-size-vertical: 1; }
+#journal-list { height: 1fr; scrollbar-size-vertical: 1; }
+
+.cmd-item { height: 1; width: 100%; }
+.cmd-item:hover { background: $nex-raised; }
 
 #journal-right { width: 1fr; height: 100%; }
 

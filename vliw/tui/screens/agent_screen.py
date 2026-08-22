@@ -551,7 +551,7 @@ class AgentScreen(ModeScreen):
         n = len(con.runs)
         panel.set_title(f"ВЫВОД КОМАНД   ·   журнал   ·   "
                         f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
-        journal.load(con.runs, self.mode)
+        journal.load(con.runs, self.mode, list(self.app.commands))
 
     def _draw_seen(self) -> None:
         wide = self._wide == "seen"

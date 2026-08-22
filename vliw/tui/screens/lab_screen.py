@@ -1341,7 +1341,7 @@ class LabScreen(ModeScreen):
         n = len(con.runs)
         panel.set_title(f"ВЫВОД КОМАНД   ·   журнал   ·   "
                         f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
-        journal.load(con.runs, self.mode)
+        journal.load(con.runs, self.mode, list(self.app.commands))
 
     def _jump_to_instr(self, instr: int) -> bool:
         """Курсор решётки — на клетку этой операции. False, если её там нет.

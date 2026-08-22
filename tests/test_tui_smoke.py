@@ -1000,3 +1000,117 @@ class TestEscapeIsOneStepBack(unittest.TestCase):
         self.assertEqual(after_first, (0, True))
         self.assertEqual(after_second, (True, "LabScreen"))
         self.assertTrue(after_third, "третий Esc — на начальный экран")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestTerminalHasCommandCatalog(unittest.TestCase):
+    """Развёрнутый ВЫВОД КОМАНД — терминал с каталогом, а не поле для слепого набора.
+
+    Команд три десятка, и держать их в голове (или лезть за ними в /docs,
+    теряя развёрнутый экран) — ровно та работа, которую инструмент должен
+    делать за человека.
+    """
+
+    def _term(self, body, seed=("/doctor",)):
+        async def go():
+            app, session = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    sc = app.screen
+                    for line in seed:
+                        sc.handle_line(line)
+                        for _ in range(14):
+                            await pilot.pause()
+
+                    from vliw.tui.widgets import ConsoleJournal, Panel
+
+                    panel = sc.query_one("#p-console", Panel)
+                    sc.maximize(panel, container=False)
+                    panel.post_message(Panel.Expanded(panel))
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(sc, pilot,
+                                      sc.query_one(ConsoleJournal), session)
+
+        return asyncio.run(go())
+
+    def test_catalog_lists_every_command(self) -> None:
+        from vliw.tui.widgets import CommandItem
+
+        async def body(sc, pilot, j, session):
+            return len(list(j.query(CommandItem))), len(cli.COMMANDS)
+
+        shown, total = self._term(body)
+        self.assertEqual(shown, total, "в каталоге должны быть все команды")
+
+    def test_typing_filters_catalog_by_first_word_only(self) -> None:
+        """Фильтр берёт только имя команды: «run slotclash» — это всё ещё /run.
+
+        Если фильтровать по всей строке, каталог пустеет ровно в тот момент,
+        когда команда набрана правильно и с аргументом.
+        """
+        from vliw.tui.widgets import CommandItem
+
+        async def body(sc, pilot, j, session):
+            inp = j.query_one("#journal-input")
+            inp.focus()
+            inp.value = "do"
+            await pilot.pause()
+            await pilot.pause()
+            narrowed = [c.line.split()[0] for c in j.query(CommandItem)]
+            inp.value = "/run slotclash"
+            await pilot.pause()
+            await pilot.pause()
+            with_arg = [c.line.split()[0] for c in j.query(CommandItem)]
+            return narrowed, with_arg
+
+        narrowed, with_arg = self._term(body)
+        self.assertIn("/doctor", narrowed)
+        self.assertLess(len(narrowed), len(cli.COMMANDS))
+        # Совпадения с начала имени — первыми: «do» ищут ради /doctor, а не
+        # ради /random, где «do» просто попалось в середине (ran-do-m).
+        self.assertEqual(narrowed[0], "/doctor")
+        self.assertIn("/run", with_arg)
+
+    def test_failed_run_is_marked(self) -> None:
+        """Провалившийся запуск не должен выглядеть как удачный."""
+
+        async def body(sc, pilot, j, session):
+            return [(r["cmd"], bool(r.get("error"))) for r in j.runs]
+
+        runs = self._term(body, seed=("/doctor", "/run nosuchscenario"))
+        self.assertEqual(len(runs), 2)
+        self.assertFalse(runs[0][1], "/doctor отработал — пометки быть не должно")
+        self.assertTrue(runs[1][1], "неизвестный сценарий обязан быть помечен")
+
+    def test_history_walks_previous_commands(self) -> None:
+        from vliw.tui.widgets import JournalInput
+
+        async def body(sc, pilot, j, session):
+            inp = j.query_one("#journal-input", JournalInput)
+            inp.focus()
+            await pilot.press("up")
+            await pilot.pause()
+            return inp.value
+
+        self.assertEqual(self._term(body, seed=("/doctor", "/bounds")),
+                         "/bounds")
+
+    def test_clicking_a_command_inserts_it_without_running(self) -> None:
+        """Клик подставляет, но не запускает: у половины команд есть аргумент."""
+        from vliw.tui.widgets import CommandItem
+
+        async def body(sc, pilot, j, session):
+            before = len(j.runs)
+            item = next(c for c in j.query(CommandItem)
+                        if c.line.startswith("/run "))
+            item.post_message(CommandItem.Picked(item.line))
+            await pilot.pause()
+            await pilot.pause()
+            return j.query_one("#journal-input").value, before, len(j.runs)
+
+        value, before, after = self._term(body)
+        self.assertTrue(value.startswith("/run "))
+        self.assertEqual(before, after, "клик не должен запускать команду")

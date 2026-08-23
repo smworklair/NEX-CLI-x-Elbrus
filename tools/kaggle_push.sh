@@ -3,7 +3,11 @@
 #
 #   tools/kaggle_push.sh            # датасет + ядро шага 0 (baseline, без обучения)
 #   tools/kaggle_push.sh run1       # датасет + ТОЛЬКО прогон 1 (обучение с EOS)
-#   tools/kaggle_push.sh all        # датасет + оба ядра разом
+#   tools/kaggle_push.sh run2       # датасет + ТОЛЬКО прогон 2 (с нуля, train_merged)
+#   tools/kaggle_push.sh resume     # ТОЛЬКО доводка прогона 2: чекпоинт из
+#                                   #   вывода vliw-run2-merged -> --resume + замеры
+#   tools/kaggle_push.sh diag       # диагностика: 20 примеров, сырой текст ответа
+#   tools/kaggle_push.sh all        # датасет + step0 и run1 разом (БЕЗ run2/resume/diag)
 #   tools/kaggle_push.sh pull       # забрать дампы обратно в training/checkpoints
 #   tools/kaggle_push.sh status     # статус датасета и ядер на Kaggle, без заливки
 #
@@ -13,8 +17,10 @@
 # повтор — do_sample=False, тот же адаптер, тот же результат). Обнаружено
 # 17.08.2026: `run1` перезапустил step0 версией 5 без всякой пользы.
 #
-# Прогон 2 (с нуля на train_merged) отсюда НЕ запускается намеренно: он дорогой
-# по квоте, решение о нём принимается отдельно. См. docs/RUNBOOK_EOS.md.
+# Прогон 2 (с нуля на train_merged) заливается ТОЛЬКО явным режимом `run2`:
+# он дорогой по квоте (~2 эпохи по 39 700 примеров), и в `all` он тоже НЕ
+# входит — чтобы разовый прогон всех дешёвых ядер не запускал дорогой по
+# ошибке. Решение о нём принимается отдельно. См. docs/RUNBOOK_EOS.md.
 #
 # Ключ: поддержаны ОБА формата, потому что Kaggle сменил их в процессе работы
 # над этим проектом (17.08.2026 выдавали уже только новый).
@@ -133,14 +139,15 @@ case "$MODE" in
     done
     exit 0
     ;;
-  step0|run1|all) ;;
-  *) echo "неизвестный режим: $MODE (step0 | run1 | all | pull | status)" >&2; exit 2 ;;
+  step0|run1|run2|resume|diag|all) ;;
+  *) echo "неизвестный режим: $MODE (step0 | run1 | run2 | resume | diag | all | pull | status)" >&2; exit 2 ;;
 esac
 
 # --- датасет ---------------------------------------------------------------
 # create падает, если датасет уже есть; version — если ещё нет. Пробуем
 # version, при неудаче создаём. Так скрипт можно гонять повторно.
 echo "заливаю датасет ($(du -sh "$BUILD/dataset" | cut -f1))"
+T0=$(date -u +%s)
 if ! "${KG[@]}" datasets version -p "$BUILD/dataset" -m "обновление $(date +%F_%H%M)" -q -r zip 2>/dev/null; then
   "${KG[@]}" datasets create -p "$BUILD/dataset" -q -r zip
 fi
@@ -173,6 +180,29 @@ if [[ "$ready" != 1 ]]; then
   exit 1
 fi
 
+# «ready» относится и к ПРЕДЫДУЩЕЙ версии: пока новая распаковывается,
+# статус уже зелёный, и однажды (23.08) ядро стартовало на старых файлах —
+# упало через минуту на неизвестном аргументе, сжегши запуск впустую.
+# Поэтому ждём ЕЩЁ и свежести: дата train_qlora.py в датасете должна быть
+# не старее момента начала заливки. Дата приходит в UTC, как и T0.
+fresh=0
+ts=""
+for _ in $(seq 1 30); do
+  ts="$("${KG[@]}" datasets files "$DATASET_ID" 2>/dev/null \
+        | awk '$1=="train_qlora.py" {print $3" "$4}' | cut -d. -f1)"
+  if [[ -n "$ts" ]] && (( $(date -ud "$ts" +%s) >= T0 )); then
+    fresh=1
+    break
+  fi
+  sleep 20
+done
+if [[ "$fresh" != 1 ]]; then
+  echo "!! датасет не обновился за 10 минут (файлы всё ещё старше заливки:" \
+       "$ts) — ядро НЕ запускаю." >&2
+  exit 1
+fi
+echo "датасет свежий: train_qlora.py от ${ts} UTC"
+
 # --- ядро ------------------------------------------------------------------
 push_kernel () {
   local slug="$1"
@@ -193,7 +223,18 @@ pick_kernel () {   # находит слаг, содержащий имя реж
 case "$MODE" in
   step0) push_kernel "$(pick_kernel step0)" ;;
   run1)  push_kernel "$(pick_kernel run1)" ;;
-  all)   for k in "${KERNEL_SLUGS[@]}"; do push_kernel "$k"; done ;;
+  run2)  push_kernel "$(pick_kernel run2)" ;;
+  # resume — ядро-доводка: монтирует вывод vliw-run2-merged и продолжает
+  # с последнего чекпоинта (или сразу замеры, если обучение дало train_meta).
+  resume) push_kernel "$(pick_kernel resume)" ;;
+  # diag — только инференс на 20 примерах с сырым текстом ответа в дампе:
+  # разводит «модель молчит» / «адаптер не тот» / «обрыв». Минуты GPU.
+  diag)  push_kernel "$(pick_kernel diag)" ;;
+  # `all` — только дешёвые ядра; дорогой run2 и его доводка запускаются
+  # явно (см. шапку).
+  all)   for k in "${KERNEL_SLUGS[@]}"; do
+           [[ "$k" == *run2* || "$k" == *diag* ]] || push_kernel "$k"
+         done ;;
 esac
 
 cat <<EOF

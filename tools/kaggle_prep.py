@@ -1,8 +1,9 @@
 """Подготовка всего, что нужно залить в Kaggle, — без ключа и без сети.
 
-Собирает в `build/kaggle/` один датасет (данные + адаптер + два скрипта) и два
-ядра-скрипта: шаг 0 (baseline, только инференс) и прогон 1 (изолированный EOS).
-После этого залив сводится к одной команде `tools/kaggle_push.sh`.
+Собирает в `build/kaggle/` один датасет (данные + адаптер + два скрипта) и три
+ядра-скрипта: шаг 0 (baseline, только инференс), прогон 1 (изолированный EOS)
+и прогон 2 (полное обучение с нуля на слитых данных). После этого залив
+сводится к одной команде `tools/kaggle_push.sh`.
 
 Почему всё в ОДИН датасет, а не в три
 -------------------------------------
@@ -12,8 +13,9 @@
 получается один `dataset_sources`, и в путях `/kaggle/input/...` нечего
 перепутать.
 
-Прогон 2 (с нуля на train_merged) намеренно НЕ готовится: он дорогой по квоте
-и запускается отдельным решением. См. docs/RUNBOOK_EOS.md.
+Прогон 2 здесь ГОТОВИТСЯ, но заливается только явным `kaggle_push.sh run2` —
+в режимы step0/run1/all он не входит: дорогой по квоте (≈2 эпохи по 39 700
+примеров), решение о запуске принимается отдельно. См. docs/RUNBOOK_EOS.md.
 
     python tools/kaggle_prep.py
 
@@ -224,6 +226,90 @@ for data, dump in (("eval.jsonl", "eos_eval.jsonl"),
                     f"{BASE}/{data}"], check=True)
 '''
 
+RUN2 = '''\
+"""Прогон 2: полное обучение с нуля на слитых данных (train_merged).
+
+Отличия от прогона 1 — ДВЕ, и обе осознанные (docs/RUNBOOK_EOS.md, шаг 2):
+  * без --adapter: в старом адаптере запечена привычка не останавливаться,
+    переучиваться ей дороже, чем учиться с чистого листа;
+  * train_merged.jsonl вместо dataset.jsonl: вдвое больше примеров, включая
+    размеры графов, которых модель раньше не видела (eval_wide 16..24).
+Прогон 1 уже доказал ценность EOS (26.7% -> 97.7%); здесь EOS есть по
+умолчанию, поэтому стоп-условие на самопроверку оставлено как страховка.
+
+Память: слитые данные длиннее старых (графы до 24 операций), и первый запуск
+упал CUDA OOM на шаге 303 при batch 4. Теперь batch 2 × accum 8 — тот же
+эффективный батч 16 и те же ~4964 шагов, вдвое меньше пиковой активации,
+плюс expandable_segments против фрагментации за часы обучения.
+
+≈4960 шагов; чекпоинты каждые 100 шагов — сессия Kaggle уже обрывалась
+на 93% эпохи.
+"""
+import os, subprocess, sys
+
+''' + FIND_DATASET + CHECK_GPU + '''
+BASE = _find_dataset("train_qlora.py")
+OUT = "/kaggle/working/lora-merged"
+_check_gpu()
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
+                "transformers", "peft", "bitsandbytes", "accelerate", "datasets"],
+               check=True)
+
+# --- обучение с живой проверкой EOS в логе ------------------------------
+# expandable_segments: совет самого сообщения об OOM — аллокатор перестаёт
+# терять гигабайты в дыры от фрагментации на многочасовом прогоне.
+env = dict(os.environ,
+           PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+proc = subprocess.Popen(
+    [sys.executable, "-u", f"{BASE}/train_qlora.py",
+     "--base", "Qwen/Qwen2.5-3B-Instruct",
+     "--data", f"{BASE}/train_merged.jsonl",
+     "--out", OUT, "--epochs", "2",
+     "--batch-size", "2", "--accum", "8"],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+    env=env)
+
+eos_ok = None
+for line in proc.stdout:
+    print(line, end="", flush=True)
+    if "EOS_SELFCHECK: OK" in line:
+        eos_ok = True
+    elif "EOS_SELFCHECK: FAIL" in line:
+        eos_ok = False
+        print("\\n!! Самопроверка EOS не прошла — глушу обучение, квоту не жжём.",
+              flush=True)
+        proc.kill()
+        break
+proc.wait()
+
+if eos_ok is False:
+    raise SystemExit("EOS не доходит до loss — см. лог выше")
+if proc.returncode != 0:
+    raise SystemExit(f"обучение упало: код {proc.returncode}")
+if eos_ok is None:
+    # Маркера нет, а обучение ЗАВЕРШИЛОСЬ успешно. Раньше это был SystemExit —
+    # и однажды так погиб бы целый прогон из-за одной строчки, потерянной по
+    # дороге от процесса в лог Kaggle (случилось с его соседкой через строку:
+    # «EOS попадает в loss» дошла, «EOS_SELFCHECK: OK» сразу за ней — нет).
+    # Глушить обучение имеет смысл только при ЯВНОМ FAIL: он ловится выше,
+    # в потоке, пока процесс ещё жив. Здесь же всё уже посчитано — честно
+    # предупредить и продолжить замеры.
+    print("\\n!! маркер EOS_SELFCHECK не увиден при успешном обучении — "
+          "потерялся в пайпе лога; проверьте строки самопроверки выше "
+          "вручную", flush=True)
+
+# --- замеры по обоим эвалам ---------------------------------------------
+for data, dump in (("eval.jsonl", "merged_eval.jsonl"),
+                   ("eval_wide.jsonl", "merged_eval_wide.jsonl")):
+    print("\\n" + "=" * 70, flush=True)
+    print("ЗАМЕР:", data, flush=True)
+    print("=" * 70, flush=True)
+    subprocess.run([sys.executable, f"{BASE}/validate_kaggle.py",
+                    "--model", OUT, "--dump", f"/kaggle/working/{dump}",
+                    f"{BASE}/{data}"], check=True)
+'''
+
 # Заголовок ядра ОБЯЗАН слагифицироваться ровно в тот же slug, что и id, иначе
 # Kaggle молча создаёт ядро по адресу, вычисленному из заголовка, а не по
 # заданному id — ровно так и вышло на первом заливе: заголовок был кириллицей
@@ -233,9 +319,198 @@ for data, dump in (("eval.jsonl", "eos_eval.jsonl"),
 # создаёт по-своему. Поэтому заголовок здесь = слова из slug через пробел,
 # без пунктуации: человекочитаемое описание — в докстринге самого скрипта
 # ядра и в RUNBOOK_EOS.md, а не в title.
+RESUME2 = '''\
+"""Доводка прогона 2: продолжить после обрыва и/или доделать замеры.
+
+ЗАЧЕМ ОТДЕЛЬНОЕ ЯДРО. Полное обучение занимает ~8ч45м и почти исчерпывает
+окно GPU-сессии Kaggle, а оба замера поверх обучения в ту же сессию уже
+не помещаются (прогон 2 дошёл до wide-замера и был убит лимитом на 220/300).
+Здесь вывод прошлого ядра подключён источником — датасетом vliw-run2-lora,
+потому что kernel_sources от упавшего/отменённого ядра Kaggle не принимает, —
+и ядро делает ровно то, что осталось:
+
+  * train_meta.json в его выводе ЕСТЬ — обучение успело завершиться,
+    не успели только замеры; тренировку не повторяем;
+  * иначе берём СТАРШИЙ checkpoint-N (save_total_limit=2 хранит два)
+    и зовём train_qlora.py c --resume: Trainer продолжает с сохранённого
+    шага — шаги, планировщик и оптимизатор восстанавливаются из
+    trainer_state.json, а не с нуля.
+
+Параметры (--batch-size 2 --accum 8 --epochs 2) обязаны совпадать с
+прошлым запуском: resume разворачивает сохранённое расписание шагов.
+"""
+import glob, os, shutil, subprocess, sys
+
+''' + FIND_DATASET + CHECK_GPU + '''
+BASE = _find_dataset("train_qlora.py")
+OUT = "/kaggle/working/lora-merged"
+_check_gpu()
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
+                "transformers", "peft", "bitsandbytes", "accelerate", "datasets"],
+               check=True)
+
+# --- вывод прошлого ядра ---------------------------------------------------
+# Структура монтирования у Kaggle уже менялась дважды (см. FIND_DATASET),
+# а zip-датасет при распаковке может потерять верхнюю папку архива. Поэтому
+# корень вывода ищем по содержимому, ДВУМЯ путями: завершённое обучение
+# опознаётся по train_meta.json, оборванное — по checkpoint-N/trainer_state.json
+# (в vliw-eos-run лежит лишь старый qwen-vliw-lora без того и другого).
+meta_hits = glob.glob("/kaggle/input/**/train_meta.json", recursive=True)
+ckpt_hits = glob.glob("/kaggle/input/**/checkpoint-*/trainer_state.json",
+                      recursive=True)
+
+def _tree_hint():
+    tree = []
+    for root, dirs, files in os.walk("/kaggle/input"):
+        depth = root.count(os.sep) - "/kaggle/input".count(os.sep)
+        tree.append(root + (" [" + ", ".join(files) + "]" if files else ""))
+        if depth >= 3:
+            dirs[:] = []
+    return "\\n  ".join(tree)
+
+if meta_hits:
+    parents = sorted({os.path.dirname(p) for p in meta_hits})
+    if len(parents) != 1:
+        raise SystemExit("найдено несколько завершённых адаптеров:"
+                         "\\n  " + "\\n  ".join(parents))
+    PREV = parents[0]
+elif ckpt_hits:
+    roots = sorted({os.path.dirname(os.path.dirname(p)) for p in ckpt_hits})
+    if len(roots) != 1:
+        raise SystemExit("найдены чекпоинты в нескольких выводах:"
+                         "\\n  " + "\\n  ".join(roots))
+    PREV = roots[0]
+else:
+    raise SystemExit("в подключённых источниках нет ни train_meta.json, "
+                     "ни checkpoint-*/trainer_state.json. Дерево:\\n  "
+                     + _tree_hint())
+
+if os.path.exists(f"{PREV}/train_meta.json"):
+    # Обучение ДОШЛО до конца: адаптер сохранён, не успели только замеры.
+    print("адаптер из прошлого прогона полный (train_meta.json) — "
+          "обучение пропускаю, сразу замеры", flush=True)
+    MODEL = PREV          # вход смонтирован read-only — инференсу хватит
+else:
+    cks = glob.glob(f"{PREV}/checkpoint-*")
+    if not cks:
+        raise SystemExit("в прошлом прогоне нет ни чекпоинтов, ни "
+                         "train_meta.json — продолжать не с чего")
+    latest = max(cks, key=lambda p: int(p.rsplit("-", 1)[1]))
+    n = os.path.basename(latest).rsplit("-", 1)[1]
+    dst = f"{OUT}/checkpoint-{n}"
+    print(f"продолжаю с {os.path.basename(latest)}", flush=True)
+    # Старый dst сносим целиком: dirs_exist_ok=True смешал бы файлы двух
+    # неидентичных попыток, если ядро перезапускали поверх другого обрыва.
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(latest, dst)
+
+    env = dict(os.environ,
+               PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+    proc = subprocess.Popen(
+        [sys.executable, "-u", f"{BASE}/train_qlora.py",
+         "--base", "Qwen/Qwen2.5-3B-Instruct",
+         "--data", f"{BASE}/train_merged.jsonl",
+         "--out", OUT, "--epochs", "2",
+         "--batch-size", "2", "--accum", "8",
+         "--resume", dst],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        bufsize=1, env=env)
+    eos_ok = None
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        if "EOS_SELFCHECK: OK" in line:
+            eos_ok = True
+        elif "EOS_SELFCHECK: FAIL" in line:
+            eos_ok = False
+            print("\\n!! Самопроверка EOS не прошла — глушу дообучение.",
+                  flush=True)
+            proc.kill()
+            break
+    proc.wait()
+    if eos_ok is False:
+        raise SystemExit("EOS не доходит до loss — см. лог выше")
+    if proc.returncode != 0:
+        raise SystemExit(f"дообучение упало: код {proc.returncode}")
+    if eos_ok is None:
+        print("\\n!! маркер EOS_SELFCHECK не увиден при успешном дообучении "
+              "— потерялся в пайпе лога (уже бывало)", flush=True)
+    MODEL = OUT
+
+# --- замеры по обоим эвалам ---------------------------------------------
+for data, dump in (("eval.jsonl", "merged_eval.jsonl"),
+                   ("eval_wide.jsonl", "merged_eval_wide.jsonl")):
+    print("\\n" + "=" * 70, flush=True)
+    print("ЗАМЕР:", data, flush=True)
+    print("=" * 70, flush=True)
+    subprocess.run([sys.executable, f"{BASE}/validate_kaggle.py",
+                    "--model", MODEL, "--dump", f"/kaggle/working/{dump}",
+                    f"{BASE}/{data}"], check=True)
+'''
+
+
+# Диагностика прогона 2: посмотреть, ЧТО модель реально выдаёт.
+#
+# Дампы говорят «строк не разобралось» (26% «мусор», 41% обрыв), но не
+# показывают сам ответ — validate_kaggle.py разбирал text и выбрасывал.
+# Теперь он кладёт сырой ответ в поле "text", и 20 примеров хватает,
+# чтобы развести три диагноза, которые снаружи выглядят одинаково:
+#   пусто            -> модель переучилась на EOS (лечится схемой обучения)
+#   проза не в формате -> адаптер не применился (лечится плумбингом)
+#   верный формат, обрыв -> недоучена / упёрлась в max_new_tokens
+# Обучения здесь нет: инференс на 20 примерах, минуты GPU, не часы.
+DIAG2 = '''\
+"""Диагностика адаптера прогона 2: 20 примеров с сырым текстом ответа."""
+import glob, os, subprocess, sys
+
+''' + FIND_DATASET + CHECK_GPU + '''
+BASE = _find_dataset("validate_kaggle.py")
+_check_gpu()
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
+                "transformers", "peft", "bitsandbytes", "accelerate"], check=True)
+
+# Адаптер прогона 2 — по train_meta.json, как в run2_resume: имя папки
+# после распаковки zip негарантированно, содержимое — гарантировано.
+hits = glob.glob("/kaggle/input/**/train_meta.json", recursive=True)
+if not hits:
+    raise SystemExit("адаптер прогона 2 не найден (искал train_meta.json)")
+MODEL = os.path.dirname(hits[0])
+print("адаптер:", MODEL, flush=True)
+
+# Два замера на ОДНОМ адаптере и одних примерах: разница между ними и есть
+# вклад ограничения, без примеси «другой чекпоинт / другие данные».
+for extra, dump in (([], "diag2_free.jsonl"),
+                    (["--constrained"], "diag2_constrained.jsonl")):
+    print("\\n" + "=" * 70, flush=True)
+    print("ЗАМЕР:", "ограниченная" if extra else "обычная", "генерация", flush=True)
+    print("=" * 70, flush=True)
+    subprocess.run([sys.executable, f"{BASE}/validate_kaggle.py",
+                    "--model", MODEL, "--limit", "20",
+                    "--dump", f"/kaggle/working/{dump}",
+                    f"{BASE}/eval.jsonl"] + extra, check=True)
+'''
+
 KERNELS = [
     ("vliw-step0-baseline", "step0.py", STEP0, "vliw step0 baseline"),
     ("vliw-run1-eos", "run1_eos.py", RUN1, "vliw run1 eos"),
+    ("vliw-run2-merged", "run2_merged.py", RUN2, "vliw run2 merged"),
+    # Доводка прогона 2. Подключить вывод vliw-run2-merged как kernel_sources
+    # НЕЛЬЗЯ: Kaggle отказывает в источниках от ядра, чья версия упала или
+    # отменена (проверено 23.08: "not valid kernel sources"). Поэтому финальный
+    # адаптер вынесен отдельным датасетом vliw-run2-lora — собирается вручную
+    # из вывода прогона (lora-merged без checkpoint-*). Заливается ТОЛЬКО
+    # явным `kaggle_push.sh resume`, в `all` не входит.
+    ("vliw-run2-resume", "run2_resume.py", RESUME2, "vliw run2 resume",
+     {"dataset_sources": [f"USERNAME/{DATASET_SLUG}",
+                          f"USERNAME/vliw-run2-lora"]}),
+    # Диагностика: только инференс на 20 примерах. Как и resume, берёт
+    # адаптер из отдельного датасета vliw-run2-lora и в `all` не входит —
+    # запускается явным `kaggle_push.sh diag`.
+    ("vliw-diag2", "diag2.py", DIAG2, "vliw diag2",
+     {"dataset_sources": [f"USERNAME/{DATASET_SLUG}",
+                          f"USERNAME/vliw-run2-lora"]}),
 ]
 
 
@@ -285,11 +560,13 @@ def main() -> None:
         "licenses": [{"name": "CC0-1.0"}],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    for slug, code_file, code, title in KERNELS:
+    for entry in KERNELS:
+        slug, code_file, code, title = entry[:4]
+        extras = entry[4] if len(entry) > 4 else {}
         kdir = BUILD / slug
         kdir.mkdir(parents=True, exist_ok=True)
         (kdir / code_file).write_text(code, encoding="utf-8")
-        (kdir / "kernel-metadata.json").write_text(json.dumps({
+        meta = {
             "id": f"USERNAME/{slug}",
             "title": title,
             "code_file": code_file,
@@ -310,12 +587,16 @@ def main() -> None:
             "dataset_sources": [f"USERNAME/{DATASET_SLUG}"],
             "competition_sources": [],
             "kernel_sources": [],
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        }
+        # Ядро-доводка добавляет источник — вывод прошлого прогона.
+        meta.update(extras)
+        (kdir / "kernel-metadata.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"собрано в {BUILD.relative_to(ROOT)}")
     print(f"  датасет: {len(PAYLOAD)} файлов + адаптер, {total / 2**20:.0f} МБ")
-    for slug, code_file, _, _ in KERNELS:
-        print(f"  ядро:    {slug}/{code_file}")
+    for entry in KERNELS:
+        print(f"  ядро:    {entry[0]}/{entry[1]}")
     print("\nдальше: tools/kaggle_push.sh (подставит username и зальёт)")
 
 

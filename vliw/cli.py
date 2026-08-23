@@ -2,7 +2,7 @@
 
   python -m vliw                 интерактив: выбор приложения, затем цикл
   python -m vliw run slotclash   одна команда и выход
-  python -m vliw --plain         тот же цикл построчно, без curses
+  python -m vliw --plain         тот же цикл построчно, без полноэкранного
 
 Три панели одного workstation:
   ядро   — интерпретатор (sum 8, своя запись)
@@ -89,10 +89,22 @@ class Session:
     width: int | None = None
     delay: float | None = None  # пауза воспроизведения; None = по Enter
     mode: str = "explore"      # совместимость: explore ≈ lab, chat ≈ mind
-    focus: str = "lab"         # work | lab | mind — какая панель в фокусе
+    focus: str = "lab"         # work | lab | mind | code — какая панель в фокусе
     last_work: str = ""
+    code_text: str = ""
+    """Буфер исходника (ассемблер e2k) режима КОД.
+
+    Живёт в сессии, а не в виджете: редактор его показывает, `/code run`
+    прогоняет, умная вставка из любого режима кладёт сюда многострочный
+    текст. Перезапуск инструмента буфер не переживает — как и черновик
+    в любом редакторе без сохранения.
+    """
+    code_path: str = ""
+    """Последний файл, куда буфер сохраняли / откуда загрузили: Ctrl+S в
+    редакторе пишет туда без повторного вопроса."""
     _workspace: object = None
     _agent: object = None
+    compiler_sched: object = None
     _cache: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -110,6 +122,11 @@ class Session:
         self.scenario = key
 
     def set_dag(self, dag: DAG, label: str) -> None:
+        # Кэш результатов ключуется именем участка, а буфер КОДА всегда
+        # зовётся `asm:буфер`: без сброса ВТОРОЙ F5 после правки отдавал
+        # числа ПЕРВОГО прогона — правь сколько хочешь, «оракул 8 тактов»
+        # не двигался. Новый граф под тем же именем — старому кэшу не родня.
+        self._cache = {k: v for k, v in self._cache.items() if k[0] != label}
         self.dag_obj = dag
         self.scenario = label
 
@@ -544,19 +561,69 @@ def cmd_agent(session: Session, arg: str) -> None:
     _out(panel(body, title="ТОЧКА ПОДСТАНОВКИ МОДЕЛИ", color="accent2"))
 
 
+def _group_title(cmd: dict) -> str:
+    gid = cmd.get("group", "session")
+    return next((t for g, t in GROUPS if g == gid), gid)
+
+
 def cmd_help(session: Session, arg: str) -> None:
+    """Справка: без аргумента — все команды по группам, с аргументом — одна."""
+    q = arg.strip().lstrip("/").lower()
+    if q and q != "help":
+        return _help_one(q)
     print(rule("клиент"))
     _hint()
-    print()
-    print(rule("команды"))
-    rows = []
-    for c in COMMANDS:
-        rows.append([paint("accent", "/" + c["name"]), c["arg"], c["help"]])
-    for l in render.table(["команда", "аргументы", "что делает"], rows, aligns="<<<"):
-        print("  " + l)
+    for gid, title in GROUPS:
+        members = [c for c in COMMANDS if c.get("group") == gid]
+        if not members:
+            continue
+        print()
+        print(rule(title))
+        rows = [[paint("accent", "/" + c["name"]), c["arg"], c["help"]]
+                for c in members]
+        for l in render.table(["команда", "аргументы", "что делает"], rows,
+                              aligns="<<<"):
+            print("  " + l)
+        print(Style.dim(
+            "  подробно: /help " + members[0]["name"]
+            + (" … /help " + members[-1]["name"] if len(members) > 1 else "")))
     print()
     print(Style.dim("  в цикле со «/», снаружи без: python -m vliw run slotclash"))
-    print(Style.dim("  ядро: sum 8  ·  агент: вопрос  ·  выход: /exit"))
+    print(Style.dim("  ядро: sum 8  ·  агент: вопрос  ·  /exit"))
+
+
+def _help_one(name: str) -> None:
+    """Подробно об одной команде: сигнатура, докстринт, соседи по группе."""
+    import inspect
+
+    cmd = resolve(name)
+    if cmd is None:
+        msg = paint("error", f"нет команды /{name}.")
+        hints = suggest(name)
+        if hints:
+            msg += Style.dim("  Похоже на: ") + ", ".join(
+                paint("accent", "/" + h) for h in hints) + Style.dim("?")
+        else:
+            msg += Style.dim("  /help — список всех.")
+        print(msg)
+        return False
+    sig = ("/" + cmd["name"] + " " + cmd["arg"]).strip()
+    print(rule(f"{sig}  ·  {_group_title(cmd)}"))
+    doc = inspect.getdoc(cmd["fn"])
+    if doc:
+        print()
+        for line in doc.splitlines():
+            print("  " + line)
+    else:
+        print()
+        print("  " + cmd["help"])
+    peers = [c for c in COMMANDS
+             if c.get("group") == cmd.get("group") and c is not cmd]
+    if peers:
+        print()
+        print(Style.dim("  рядом:  ") + Style.dim("   ".join(
+            paint("accent", "/" + p["name"]) for p in peers)))
+    return True
 
 
 def cmd_doctor(session: Session, arg: str) -> None:
@@ -591,6 +658,33 @@ def cmd_doctor(session: Session, arg: str) -> None:
     _out(diagnostics.render_diagnosis(d, label))
 
 
+def _load_parsed(session: Session, parsed, label: str) -> bool:
+    """Разобранный исходник → граф, расписание компилятора, отчёт.
+
+    Общий путь `/load` (файл) и `/code run` (буфер редактора): разница
+    только в том, откуда взялся текст.
+    """
+    if not parsed.ops:
+        print(paint("error", "операций не нашлось — это точно .s-вывод lcc?"))
+        return False
+
+    model = session.model()
+    dag = asm_parser.build_dag(parsed, key=f"asm:{label}", title=label)
+    session.set_dag(dag, f"asm:{label}")
+
+    cs = asm_parser.compiler_schedule(parsed, dag, model)
+    comp_cycles = cs.makespan if cs else None
+    if cs and cs.validate():
+        comp_cycles = None      # раскладка не сходится с моделью — не врём
+    base, orc, met = session.results()
+
+    print(rule("загружен · " + label))
+    _out(diagnostics.render_parsed(parsed, dag, comp_cycles,
+                                   orc.schedule.makespan, met.lower_bound))
+    session.compiler_sched = cs if comp_cycles is not None else None
+    return True
+
+
 def cmd_load(session: Session, arg: str) -> None:
     """Загрузить настоящий .s от lcc, разобрать и сравнить с точным поиском."""
     path = arg.strip()
@@ -602,25 +696,101 @@ def cmd_load(session: Session, arg: str) -> None:
     except OSError as e:
         print(paint("error", f"не открыть файл: {e}"))
         return False
-    if not parsed.ops:
-        print(paint("error", "в файле не нашлось ни одной операции — "
-                             "это точно .s-вывод lcc?"))
-        return False
+    return _load_parsed(session, parsed, Path(path).name)
 
-    model = session.model()
-    dag = asm_parser.build_dag(parsed, key=f"asm:{path}", title=f"{path}")
-    session.set_dag(dag, f"asm:{Path(path).name}")
 
-    cs = asm_parser.compiler_schedule(parsed, dag, model)
-    comp_cycles = cs.makespan if cs else None
-    if cs and cs.validate():
-        comp_cycles = None      # раскладка не сходится с моделью — не врём
-    base, orc, met = session.results()
+def cmd_code(session: Session, arg: str) -> None:
+    """Буфер исходника: писать код прямо в инструменте и сразу его прогонять.
 
-    print(rule("загружен · " + path))
-    _out(diagnostics.render_parsed(parsed, dag, comp_cycles,
-                                   orc.schedule.makespan, met.lower_bound))
-    session.compiler_sched = cs if comp_cycles is not None else None
+    `/code` — состояние буфера (в полноэкранном режиме ещё и подсказка, что
+    редактор открывается выбором КОД или командой /code из строки),
+    `/code run` — прогнать буфер как .s,
+    `/code show` — буфер с номерами строк, `/code clear` — стереть,
+    `/code load <файл.s>` — прочитать файл в буфер,
+    `/code save <файл.s>` — записать буфер в файл.
+    """
+    sub, _, rest = arg.strip().partition(" ")
+    sub = sub.lower()
+    rest = rest.strip()
+
+    if sub in ("run", "go"):
+        if not session.code_text.strip():
+            print(paint("error", "буфер КОДА пуст: открой редактор (режим КОД) "
+                                 "или /code load <файл.s>"))
+            return False
+        try:
+            parsed = asm_parser.parse_asm(session.code_text, source="<буфер>")
+        except Exception as e:
+            print(paint("error", f"не разобрать: {e}"))
+            return False
+        return _load_parsed(session, parsed, "буфер")
+
+    if sub == "show":
+        if not session.code_text.strip():
+            print(Style.dim("  буфер КОДА пуст"))
+            return True
+        print(rule(f"буфер · {len(session.code_text.splitlines())} строк"))
+        for i, line in enumerate(session.code_text.splitlines(), 1):
+            print(f"  {i:>3}  {line}")
+        return True
+
+    if sub == "clear":
+        session.code_text = ""
+        print(paint("success", "буфер КОДА очищен"))
+        return True
+
+    if sub == "load":
+        if not rest:
+            print(paint("error", "укажите файл: /code load examples/probe.s"))
+            return False
+        try:
+            session.code_text = Path(rest).read_text(encoding="utf-8",
+                                                      errors="replace")
+        except OSError as e:
+            print(paint("error", f"не открыть файл: {e}"))
+            return False
+        session.code_path = rest
+        n = len(session.code_text.splitlines())
+        print(paint("success", f"в буфер КОДА: {rest} · {n} строк"
+                    + Style.dim("   прогнать: /code run")))
+        return True
+
+    if sub == "save":
+        if not session.code_text.strip():
+            print(paint("error", "буфер пуст — сохранять нечего"))
+            return False
+        if not rest:
+            print(paint("error", "укажите файл: /code save my.s"))
+            return False
+        try:
+            Path(rest).write_text(session.code_text, encoding="utf-8")
+        except OSError as e:
+            print(paint("error", f"не записать файл: {e}"))
+            return False
+        session.code_path = rest
+        print(paint("success", f"буфер КОДА → {rest}"
+                    + Style.dim("   Ctrl+S сохранит туда же")))
+        return True
+
+    # голое /code и неизвестный подкомандный глагол — состояние буфера
+    n = len(session.code_text.splitlines()) if session.code_text.strip() else 0
+    print(rule("код"))
+    if n:
+        print(f"  буфер: {n} "
+              + plural_ru(n, "строка", "строки", "строк")
+              + Style.dim("   прогнать: /code run   показать: /code show"))
+    else:
+        print(Style.dim("  буфер пуст.  В полноэкранном режиме открой режим "
+                        "КОД (клавиша 4) — там редактор."))
+        print(Style.dim("  Или: /code load <файл.s> — прочитать готовый .s "
+                        "в буфер."))
+    return True
+
+
+def plural_ru(n: int, one: str, few: str, many: str) -> str:
+    if 11 <= n % 100 <= 14:
+        return many
+    return {1: one, 2: few, 3: few, 4: few}.get(n % 10, many)
 
 
 def cmd_analyze(session: Session, arg: str) -> None:
@@ -982,53 +1152,76 @@ def cmd_kaggle(session: Session, arg: str) -> None:
     mode = (arg.split() or ["step0"])[0]
     script = Path(__file__).resolve().parent.parent / "tools" / "kaggle_push.sh"
     print(rule(f"kaggle · {mode}"))
-    # Без flush() написанное выше при непустом stdout-буфере (когда вывод не
-    # в терминал, а в файл/pipe) печатается ПОСЛЕ вывода подпроцесса —
-    # подпроцесс пишет в тот же fd напрямую, порог сброса у него свой.
-    sys.stdout.flush()
-    r = subprocess.run([str(script), mode])
-    if r.returncode != 0:
+    # Вывод подпроцесса ПЕРЕПЕЧАТЫВАЕТСЯ через print(), а не наследует stdout.
+    # В betaNEX панель показывает то, что bridge.run_command перехватил через
+    # contextlib.redirect_stdout — это подмена на уровне Python. Подпроцесс с
+    # наследованным дескриптором пишет мимо неё, прямо в терминал ПОД
+    # интерфейсом: вывод пропадает из панели и портит отрисовку. Построчное
+    # чтение заодно сохраняет живой поток — заливка идёт минутами, и ждать
+    # её молчащим окном нельзя.
+    proc = subprocess.Popen([str(script), mode], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in proc.stdout:
+        print(line, end="")
+    proc.wait()
+    if proc.returncode != 0:
         return False
 
 
 # --------------------------------------------------------------------------
 # Реестр команд
+#
+# Команды сгруппированы по занятию («расписание», «машина», …): так читается
+# и /help, и палитра «/». Порядок в списке = порядок внутри группы, порядок
+# GROUPS = порядок групп в справке.
 # --------------------------------------------------------------------------
 
 COMMANDS = [
-    {"name": "run", "arg": "<сценарий>", "help": "прогнать сценарий: расписание оракула + вердикт", "fn": cmd_run},
-    {"name": "compare", "arg": "[сценарий] [--model]", "help": "baseline и oracle бок о бок", "fn": cmd_compare},
-    {"name": "play", "arg": "[base|oracle]", "help": "воспроизвести расписание такт за тактом", "fn": cmd_play},
-    {"name": "asm", "arg": "[base|oracle]", "help": "расписание как широкие команды e2k { … }", "fn": cmd_asm},
-    {"name": "explain", "arg": "<такт>", "help": "почему в этом такте выбрали именно это", "fn": cmd_explain},
-    {"name": "path", "arg": "", "help": "граф с подсветкой критического пути", "fn": cmd_path},
-    {"name": "bounds", "arg": "", "help": "две нижние границы makespan", "fn": cmd_bounds},
-    {"name": "model", "arg": "[профиль]", "help": "матрица возможностей портов; смена профиля", "fn": cmd_model},
-    {"name": "probe", "arg": "", "help": "как probe.c измерил модель машины e2k", "fn": cmd_probe},
-    {"name": "scenarios", "arg": "", "help": "список доступных сценариев", "fn": cmd_scenarios},
-    {"name": "random", "arg": "[N] [seed]", "help": "случайный граф на N инструкций и прогон", "fn": cmd_random},
-    {"name": "all", "arg": "", "help": "сводная таблица по всем сценариям", "fn": cmd_all},
-    {"name": "sweep", "arg": "[--seeds N]", "help": "массовый прогон по случайным графам", "fn": cmd_sweep},
-    {"name": "selfcheck", "arg": "[--seeds N]", "help": "сверить оракул независимым перебором", "fn": cmd_selfcheck},
-    {"name": "analyze", "arg": "", "help": "типизированный разбор: вердикт, причина, план", "fn": cmd_analyze},
-    {"name": "mode", "arg": "[work|lab|mind]", "help": "фокус панели: ядро / разбор / агент", "fn": cmd_mode},
-    {"name": "ask", "arg": "<вопрос>", "help": "спросить агента", "fn": cmd_ask},
-    {"name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
-    {"name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
-    {"name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
-    {"name": "learned", "arg": "[--bench N] [--pure] [--raw]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
-    {"name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
-    {"name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
-    {"name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},
-    {"name": "kaggle", "arg": "[step0|run1|all|pull|status]", "help": "залить/забрать/проверить Kaggle", "fn": cmd_kaggle},
-    {"name": "status", "arg": "", "help": "контекст сессии: сценарий, машина, результат", "fn": cmd_status},
-    {"name": "theme", "arg": "[имя]", "help": "темы оформления; переключить тему", "fn": cmd_theme},
-    {"name": "work", "arg": "", "help": "ядра интерпретатора и синтаксис записи", "fn": cmd_work},
-    {"name": "docs", "arg": "", "help": "что это за прототип и зачем", "fn": cmd_docs},
-    {"name": "agent", "arg": "", "help": "куда встраивается обученная модель", "fn": cmd_agent},
-    {"name": "clear", "arg": "", "help": "очистить экран и вернуться к выбору режима", "fn": cmd_clear},
-    {"name": "help", "arg": "", "help": "список команд", "fn": cmd_help},
+    # --- расписание -------------------------------------------------------
+    {"group": "sched", "name": "run", "arg": "<сценарий>", "help": "прогнать сценарий: расписание оракула + вердикт", "fn": cmd_run},
+    {"group": "sched", "name": "compare", "arg": "[сценарий] [--model]", "help": "baseline и oracle бок о бок", "fn": cmd_compare},
+    {"group": "sched", "name": "play", "arg": "[base|oracle]", "help": "воспроизвести расписание такт за тактом", "fn": cmd_play},
+    {"group": "sched", "name": "asm", "arg": "[base|oracle]", "help": "расписание как широкие команды e2k { … }", "fn": cmd_asm},
+    {"group": "sched", "name": "explain", "arg": "<такт>", "help": "почему в этом такте выбрали именно это", "fn": cmd_explain},
+    # --- граф · диагноз -----------------------------------------------------
+    {"group": "graph", "name": "path", "arg": "", "help": "граф с подсветкой критического пути", "fn": cmd_path},
+    {"group": "graph", "name": "bounds", "arg": "", "help": "две нижние границы makespan", "fn": cmd_bounds},
+    {"group": "graph", "name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
+    {"group": "graph", "name": "analyze", "arg": "", "help": "типизированный разбор: вердикт, причина, план", "fn": cmd_analyze},
+    # --- модель машины ------------------------------------------------------
+    {"group": "machine", "name": "model", "arg": "[профиль]", "help": "матрица возможностей портов; смена профиля", "fn": cmd_model},
+    {"group": "machine", "name": "probe", "arg": "", "help": "как probe.c измерил модель машины e2k", "fn": cmd_probe},
+    {"group": "machine", "name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
+    # --- прогоны ------------------------------------------------------------
+    {"group": "runs", "name": "scenarios", "arg": "", "help": "список доступных сценариев", "fn": cmd_scenarios},
+    {"group": "runs", "name": "random", "arg": "[N] [seed]", "help": "случайный граф на N инструкций и прогон", "fn": cmd_random},
+    {"group": "runs", "name": "all", "arg": "", "help": "сводная таблица по всем сценариям", "fn": cmd_all},
+    {"group": "runs", "name": "sweep", "arg": "[--seeds N]", "help": "массовый прогон по случайным графам", "fn": cmd_sweep},
+    {"group": "runs", "name": "selfcheck", "arg": "[--seeds N]", "help": "сверить оракул независимым перебором", "fn": cmd_selfcheck},
+    # --- агент · обучение ---------------------------------------------------
+    {"group": "agent", "name": "ask", "arg": "<вопрос>", "help": "спросить агента", "fn": cmd_ask},
+    {"group": "agent", "name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
+    {"group": "agent", "name": "learned", "arg": "[--bench N] [--pure] [--raw]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
+    {"group": "agent", "name": "agent", "arg": "", "help": "куда встраивается обученная модель", "fn": cmd_agent},
+    # --- данные ---------------------------------------------------------------
+    {"group": "data", "name": "code", "arg": "[run|show|save|load|clear]", "help": "буфер исходника e2k: редактор КОД (клавиша 4), прогон, файлы", "fn": cmd_code},
+    {"group": "data", "name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
+    {"group": "data", "name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
+    {"group": "data", "name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},
+    {"group": "data", "name": "kaggle", "arg": "[step0|run1|all|pull|status]", "help": "залить/забрать/проверить Kaggle", "fn": cmd_kaggle},
+    # --- сессия ----------------------------------------------------------------
+    {"group": "session", "name": "status", "arg": "", "help": "контекст сессии: сценарий, машина, результат", "fn": cmd_status},
+    {"group": "session", "name": "theme", "arg": "[имя]", "help": "темы оформления; переключить тему", "fn": cmd_theme},
+    {"group": "session", "name": "work", "arg": "", "help": "ядра интерпретатора и синтаксис записи", "fn": cmd_work},
+    {"group": "session", "name": "docs", "arg": "", "help": "что это за прототип и зачем", "fn": cmd_docs},
+    {"group": "session", "name": "mode", "arg": "[work|lab|mind]", "help": "фокус панели: ядро / разбор / агент", "fn": cmd_mode},
+    {"group": "session", "name": "clear", "arg": "", "help": "очистить экран и вернуться к выбору режима", "fn": cmd_clear},
+    {"group": "session", "name": "help", "arg": "", "help": "список команд; «help <команда>» — подробнее", "fn": cmd_help},
 ]
+
+#: Порядок групп в справке и палитре — единый, из ui.slash (см. комментарий там).
+GROUPS = slash.GROUPS
+
 _ALIASES = {"ls": "scenarios", "cmp": "compare", "r": "run", "cls": "clear"}
 _BY_NAME = {c["name"]: c for c in COMMANDS}
 
@@ -1145,7 +1338,7 @@ def _parse_opts(arg: str, defaults: dict) -> dict:
     return out
 
 
-# В полноэкранном режиме клавиатурой владеет curses, поэтому пошаговая пауза
+# В полноэкранном режиме экраном владеет Textual, поэтому пошаговая пауза
 # через input() там невозможна: /play печатает расписание целиком, а листает
 # его пользователь прокруткой (PgUp/PgDn).
 IN_TUI = False
@@ -1191,19 +1384,6 @@ def _apply_mode(session: Session, name: str | None) -> None:
     dest = panes.resolve_focus(name or "lab") or "lab"
     session.focus = dest
     session.mode = "chat" if dest == "mind" else "explore"
-
-
-def classify_pane(session: Session, raw: str) -> str:
-    """Куда класть вывод: интерпретатор, разбор или агент."""
-    from .ui import panes
-
-    s = raw.strip()
-    head = s.lstrip("/").split()[0].lower() if s else ""
-    cmd = resolve(head)
-    name = cmd["name"] if cmd else None
-    known = session.workspace().regs if session._workspace else None
-    return panes.classify(s, name, looks_like_work(s, known),
-                          getattr(session, "focus", "lab"))
 
 
 def _exec_work(session: Session, s: str) -> bool:
@@ -1301,32 +1481,22 @@ def _prompt(session: Session) -> str:
 _PASTE_MARK = re.compile("\x1b\\[20[01]~")
 
 
-def _tui_complete(buf: str) -> list[str]:
-    if not buf.startswith("/"):
-        buf = "/" + buf
-    return slash.complete_plain(buf, COMMANDS)
-
-
 def _fullscreen_ok() -> bool:
-    """Есть ли хоть один полноэкранный интерфейс: новый или прежний."""
-    from .ui import tui as curses_tui
-
+    """Поднимается ли полноэкранный интерфейс (Textual)."""
     try:
         from . import tui as nextui
 
-        if nextui.available():
-            return True
+        return nextui.available()
     except Exception:
-        pass
-    return curses_tui.available()
+        return False
 
 
 def run_tui(session: Session, pick_app: bool | None = None) -> int:
     """Полноэкранный интерфейс. При любой проблеме — обычный цикл.
 
-    Порядок отката: Textual (три полноценных экрана) → прежний curses-экран →
-    построчный режим. Отдельный интерфейс на curses оставлен намеренно: Textual
-    ставится отдельно, а инструмент должен запускаться и без него.
+    Порядок отката: Textual (три полноценных экрана) → построчный режим.
+    Прежний однооконный экран на curses удалён: Textual покрывает всё, что он
+    умел, а держать третий интерфейс означало трижды править каждую правку.
     """
     global IN_TUI
 
@@ -1344,25 +1514,13 @@ def run_tui(session: Session, pick_app: bool | None = None) -> int:
         if nextui.available():
             return nextui.run(session, execute, COMMANDS, start_mode=start_mode)
     except Exception as e:
-        print(paint("warning", f"новый интерфейс не поднялся ({e}); "
-                               "пробую прежний"))
-    finally:
-        IN_TUI = False
-
-    IN_TUI = True
-    try:
-        from .ui import tui
-
-        return tui.run(session, execute, COMMANDS, _tui_complete,
-                       pick_app=pick_app, classify=classify_pane)
-    except Exception as e:
-        IN_TUI = False
         print(paint("warning", f"полноэкранный режим недоступен ({e}); "
                                "продолжаю в обычном режиме"))
-        print_logo()
-        return repl(session)
     finally:
         IN_TUI = False
+
+    print_logo()
+    return repl(session)
 
 
 def repl(session: Session) -> int:
@@ -1420,12 +1578,19 @@ def _repl_loop(session: Session) -> int:
 
 
 def _commands_epilog() -> str:
-    lines = ["команды (одинаковые что снаружи, что внутри цикла с «/»):", ""]
+    lines = ["команды (одинаковые что снаружи, что внутри цикла с «/»):"]
     width = max(len(c["name"]) + len(c["arg"]) for c in COMMANDS) + 3
-    for c in COMMANDS:
-        sig = (c["name"] + " " + c["arg"]).strip()
-        lines.append(f"  {sig:<{width}} {c['help']}")
+    for gid, title in GROUPS:
+        members = [c for c in COMMANDS if c.get("group") == gid]
+        if not members:
+            continue
+        lines += ["", f"  {title}:"]
+        for c in members:
+            sig = (c["name"] + " " + c["arg"]).strip()
+            lines.append(f"    {sig:<{width}} {c['help']}")
     lines += [
+        "",
+        "подробнее о команде:  python -m vliw help <команда>",
         "",
         "примеры:",
         "  python -m vliw run slotclash",
@@ -1458,9 +1623,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-color", dest="color", action="store_false", help="выключить цвет")
     p.add_argument("--theme", default=None, help="тема оформления (см. /theme)")
     p.add_argument("--mode",
-                   choices=["work", "lab", "mind", "explore", "chat"],
+                   choices=["work", "lab", "mind", "code", "explore", "chat"],
                    default=None,
-                   help="пропустить экран выбора: work / lab / mind")
+                   help="пропустить экран выбора: work / lab / mind / code")
     p.add_argument(
         "--plain", action="store_true",
         help="без полноэкранного режима: обычный построчный интерактив",
@@ -1499,8 +1664,9 @@ def main(argv: list[str] | None = None) -> int:
         # скриптов/CI: 0 = успех, 1 = ошибка (неизвестная команда,
         # неизвестный сценарий/профиль, внутренняя проверка расписания и
         # т.п.), 130 = прервано Ctrl+C (ниже).
-        # `python -m vliw lab` / `mind` — войти в workstation с фокусом панели.
-        if extras[0].lower() in ("chat", "agent", "explore", "lab", "mind") \
+        # `python -m vliw lab` / `mind` / `code` — войти в workstation с фокусом панели.
+        if extras[0].lower() in ("chat", "agent", "explore", "lab", "mind",
+                                 "code") \
                 and len(extras) == 1:
             _apply_mode(session, extras[0])
             if not args.plain and args.color is not False and _fullscreen_ok():

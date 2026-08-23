@@ -217,6 +217,138 @@ def _print_composition(counts: dict[str, int], total: int) -> None:
 # --------------------------------------------------------------------------
 # Оценка модели
 # --------------------------------------------------------------------------
+# ОГРАНИЧЕННАЯ ГЕНЕРАЦИЯ
+#
+# Формат ответа жёсткий: `N: такт=X канал=Y`, строки по возрастанию id, ровно
+# по числу инструкций в графе. Свободная генерация об этом не знает и может
+# выдать что угодно — прогон 2 показал предел: 26% ответов вообще пусты, 41%
+# обрываются на полуслове, хотя обучение прошло чисто (loss 0.69->0.273).
+#
+# Здесь скелет ответа НЕ генерируется, а подставляется: номера строк, слова
+# «такт=»/«канал=» и переводы строк заданы заранее. Модель выбирает только
+# числа. Из этого следует, что структурно невозможны:
+#   * «мусор» (ни одной разобранной строки) — строки ставит скелет;
+#   * «галлюцинация» (дыры в id / лишние id) — id перечисляет скелет;
+#   * «ресурс» в части канала — канал выбирается ТОЛЬКО из CHANNELS[op],
+#     то есть из портов, на которых операция физически исполнима.
+#
+# Остаётся ровно то, что и должно решаться моделью: КАКОЙ такт выбрать (и
+# какой из допустимых каналов). Ошибки зависимостей и конфликты каналов
+# по-прежнему возможны — это следующий уровень ограничений, здесь его нет
+# намеренно: сначала измерить, что даёт структурный уровень.
+#
+# Разделение на две части сделано ради проверяемости: `plan_segments()` —
+# чистый Python без torch, его гоняют локальные тесты; `constrained_generate()`
+# — только цикл инференса, он требует GPU и проверяется на Kaggle.
+# --------------------------------------------------------------------------
+
+
+def plan_segments(instrs: list[Instr]) -> list[tuple]:
+    """Скелет ответа: что подставлено жёстко, а что выбирает модель.
+
+    Возвращает список сегментов:
+      ("force",  текст)        — подставляется как есть, модель не спрашивается
+      ("digits", "такт")       — свободные цифры (номер такта)
+      ("choice", (0, 1, 3, 4)) — одна цифра из перечисленных (канал)
+
+    Формат совпадает с обучающим: текст примера = prompt + "\\n" + completion,
+    строки ответа разделены "\\n", завершающего перевода строки нет.
+    """
+    segs: list[tuple] = []
+    for ins in instrs:
+        segs.append(("force", f"\n{ins.id}: такт="))
+        segs.append(("digits", "такт"))
+        segs.append(("force", " канал="))
+        segs.append(("choice", tuple(CHANNELS[ins.op])))
+    return segs
+
+
+def digit_token_ids(tok) -> dict:
+    """Цифра «0».. «9» → id токена. Требует, чтобы цифра была ОДНИМ токеном.
+
+    У Qwen2 цифры разбиваются по одной, но база меняется ключом `--base`,
+    поэтому проверяем, а не полагаемся: на токенизаторе, склеивающем «12» в
+    один токен, посимвольные ограничения молча поехали бы.
+    """
+    out = {}
+    for d in "0123456789":
+        ids = tok(d, add_special_tokens=False)["input_ids"]
+        if len(ids) != 1:
+            raise SystemExit(
+                f"токенизатор разбивает цифру {d!r} на {len(ids)} токенов — "
+                f"ограниченная генерация рассчитана на одну цифру = один "
+                f"токен; для этой базы её нужно доработать")
+        out[d] = ids[0]
+    return out
+
+
+def constrained_generate(model, tok, prompt: str, instrs: list[Instr],
+                         digits: dict, max_cycle_digits: int = 4) -> str:
+    """Сгенерировать ответ по скелету. Возвращает текст в обычном формате.
+
+    Работает пошагово с кэшем внимания: жёсткие куски скармливаются модели
+    целиком (она их не выбирает, но должна их «видеть»), а в свободных
+    позициях берётся argmax по РАЗРЕШЁННЫМ токенам. do_sample не нужен —
+    сравнение с обычным замером идёт при жадном декодировании.
+    """
+    import torch
+
+    dev = model.device
+    digit_ids = set(digits.values())
+    by_id = {i: d for d, i in digits.items()}   # id токена → сама цифра
+
+    def feed(ids, past):
+        with torch.no_grad():
+            out = model(input_ids=ids, past_key_values=past, use_cache=True)
+        return out.logits[0, -1, :], out.past_key_values
+
+    def pick(logits, allowed: set) -> int:
+        masked = torch.full_like(logits, float("-inf"))
+        idx = torch.tensor(sorted(allowed), device=logits.device)
+        masked[idx] = logits[idx]
+        return int(masked.argmax())
+
+    def push(tid, past):
+        return feed(torch.tensor([[tid]], device=dev), past)
+
+    ids = tok(prompt, return_tensors="pt")["input_ids"].to(dev)
+    logits, past = feed(ids, None)
+
+    parts: list[str] = []
+    for seg in plan_segments(instrs):
+        kind = seg[0]
+        if kind == "force":
+            text = seg[1]
+            parts.append(text)
+            forced = tok(text, add_special_tokens=False,
+                         return_tensors="pt")["input_ids"].to(dev)
+            logits, past = feed(forced, past)
+
+        elif kind == "digits":
+            # Первая цифра обязательна — иначе число оказалось бы пустым.
+            # Дальше решает модель: берём следующую цифру, только если она
+            # и есть её свободный выбор. Так длина числа остаётся за моделью,
+            # а «не-число» на этом месте невозможно.
+            tid = pick(logits, digit_ids)
+            parts.append(by_id[tid])
+            logits, past = push(tid, past)
+            for _ in range(max_cycle_digits - 1):
+                if int(logits.argmax()) not in digit_ids:
+                    break
+                tid = pick(logits, digit_ids)
+                parts.append(by_id[tid])
+                logits, past = push(tid, past)
+
+        elif kind == "choice":
+            allowed = {digits[str(c)] for c in seg[1]}
+            tid = pick(logits, allowed)
+            parts.append(by_id[tid])
+            logits, past = push(tid, past)
+
+    return "".join(parts)
+
+
+# --------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -225,6 +357,13 @@ def main() -> None:
     ap.add_argument("dataset", type=Path)
     ap.add_argument("--model", required=True, help="путь к LoRA-адаптеру")
     ap.add_argument("--max-new-tokens", type=int, default=400)
+    ap.add_argument("--constrained", action="store_true",
+                    help="ограниченная генерация: скелет ответа подставляется, "
+                         "модель выбирает только числа, канал — лишь из "
+                         "физически исполнимых портов. Делает структурно "
+                         "невозможными «мусор», «галлюцинацию» и неверный "
+                         "канал; сравнивать с обычным замером на том же "
+                         "адаптере")
     ap.add_argument("--limit", type=int, default=None,
                     help="сколько первых примеров взять (для состава ошибок хватит 50)")
     ap.add_argument("--dump", type=Path, default=None,
@@ -259,6 +398,12 @@ def main() -> None:
         trust_remote_code=True)
     model = PeftModel.from_pretrained(base, args.model)
 
+    digits = digit_token_ids(tok) if args.constrained else None
+    if args.constrained:
+        print("ограниченная генерация: скелет ответа подставляется, "
+              "модель выбирает такт и канал (канал — только из исполнимых)",
+              flush=True)
+
     rows = args.dataset.read_text(encoding="utf-8").splitlines()
     if args.limit is not None:
         rows = rows[: max(0, args.limit)]
@@ -281,10 +426,14 @@ def main() -> None:
             row = json.loads(line)
             instrs = parse_prompt(row["prompt"])
             n_graph = len(instrs)
-            inputs = tok(row["prompt"], return_tensors="pt").to(model.device)
-            out = model.generate(**inputs, **gen_kw)
-            text = tok.decode(out[0][inputs["input_ids"].shape[1]:],
-                              skip_special_tokens=True)
+            if args.constrained:
+                text = constrained_generate(model, tok, row["prompt"],
+                                            instrs, digits)
+            else:
+                inputs = tok(row["prompt"], return_tensors="pt").to(model.device)
+                out = model.generate(**inputs, **gen_kw)
+                text = tok.decode(out[0][inputs["input_ids"].shape[1]:],
+                                  skip_special_tokens=True)
 
             decoded = decode_completion(text)
             keep, extra = clip_placements(decoded, n_graph)
@@ -304,9 +453,19 @@ def main() -> None:
                 print(f"[{total}] хвост: лишние id {extra}", flush=True)
 
             if dump is not None:
+                # `text` — СЫРОЙ ответ модели, до разбора. Без него дамп
+                # говорит только «строк не разобралось», но не показывает,
+                # что модель вообще выдала: пусто, прозу не в том формате
+                # или обрезанное расписание. Это три разных диагноза с
+                # тремя разными лечениями, и различить их иначе нельзя —
+                # ровно на этом застрял разбор прогона 2 (26% «мусора»).
+                # Режем до 400 символов: полный ответ — до 400 токенов,
+                # для опознания хватает начала, а дамп остаётся лёгким.
                 rec = {"i": total, "kind": kind, "errs": errs, "extra": extra,
                        "n_decoded": len(decoded), "n_graph": n_graph,
-                       "gold": row["meta"]["makespan"]}
+                       "gold": row["meta"]["makespan"],
+                       "text": text[:400],
+                       "constrained": bool(args.constrained)}
                 if gap is not None:
                     rec["gap"] = gap
                 dump.write(json.dumps(rec, ensure_ascii=False) + "\n")

@@ -167,12 +167,24 @@ def main() -> None:
     ap.add_argument("--out", default="./qwen-vliw-lora")
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--accum", type=int, default=4,
+                    help="шагов накопления градиента; эффективный батч = "
+                         "batch-size × accum (по умолчанию 4×4 = 16). На "
+                         "данных с длинными примерами батч уменьшают, а "
+                         "accum увеличивают — число шагов и математика "
+                         "обучения не меняются")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--max-len", type=int, default=1024,
                     help="графы 4-24 инстр., самая длинная пара ~415 токенов — "
                          "запас двукратный")
     ap.add_argument("--no-eos", action="store_true",
                     help="не дописывать EOS (старое поведение, модель не учится стопать)")
+    ap.add_argument("--resume", default=None,
+                    help="путь к checkpoint-N внутри --out: продолжить "
+                         "обучение после обрыва сессии. Чекпоинт копируют "
+                         "внутрь свежего --out и передают его путь — "
+                         "Trainer восстановит шаги, планировщик и "
+                         "оптимизатор из trainer_state.json")
     args = ap.parse_args()
 
     # 4-бита: P100/T4 не умеют bf16 нативно, поэтому compute_dtype=fp16.
@@ -235,7 +247,7 @@ def main() -> None:
         output_dir=args.out,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=args.accum,
         learning_rate=args.lr,
         logging_steps=20,
         # save_strategy="epoch" уже стоило часа обучения на живом Kaggle:
@@ -258,7 +270,11 @@ def main() -> None:
     else:
         kwargs["tokenizer"] = tok
     trainer = Trainer(**kwargs)
-    trainer.train()
+    # resume_from_checkpoint обязан быть ПЕРЕДАН, иначе --resume — мёртвый
+    # флаг: argparse его принимает, пользователь уверен, что продолжает с
+    # шага N, а Trainer молча начинает с нуля. При обучении, которое почти
+    # упирается в 9-часовую стену сессии Kaggle, это стоит целого прогона.
+    trainer.train(resume_from_checkpoint=args.resume)
 
     model.save_pretrained(args.out)      # только адаптер, не базовые веса
     tok.save_pretrained(args.out)

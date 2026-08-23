@@ -1,15 +1,12 @@
 """Темы оформления: загрузка палитры из JSON.
 
 Тема — это чёрный фон плюс набор именованных ролей («акцент», «рамка»,
-«приглашение», …) и цветов операций. Один и тот же файл темы обслуживает оба
-режима вывода:
+«приглашение», …) и цветов операций. Роль превращается в ANSI-код
+(`38;5;N`) для построчного вывода; полноэкранный интерфейс (`vliw.tui`)
+берёт те же индексы в свою палитру.
 
-  * обычный построчный режим — роль превращается в ANSI-код (`38;5;N`);
-  * полноэкранный TUI на curses — роль превращается в пару (номер цвета,
-    атрибуты curses).
-
-Поэтому цвета в JSON заданы индексами 256-цветной палитры терминала: это
-единственное представление, которое одинаково понимают и ANSI, и curses.
+Поэтому цвета в JSON заданы индексами 256-цветной палитры терминала: одно
+представление обслуживает оба режима вывода.
 
 Цвета операций (DIV/MUL/ADD/…) вынесены в отдельный раздел `ops` намеренно:
 это не декор, а ДАННЫЕ. По ним в расписании видно, куда попало деление —
@@ -27,12 +24,12 @@ from pathlib import Path
 THEMES_DIR = Path(__file__).parent / "themes"
 DEFAULT_THEME = "nex-dark"
 
-# Имя атрибута -> (код ANSI SGR, имя атрибута curses)
+# Имя атрибута -> код ANSI SGR
 _ATTRS = {
-    "bold": ("1", "A_BOLD"),
-    "dim": ("2", "A_DIM"),
-    "underline": ("4", "A_UNDERLINE"),
-    "reverse": ("7", "A_REVERSE"),
+    "bold": "1",
+    "dim": "2",
+    "underline": "4",
+    "reverse": "7",
 }
 
 
@@ -46,18 +43,9 @@ class Style:
     @property
     def ansi(self) -> str:
         """Тело ANSI-кода SGR, например `1;38;5;75`."""
-        parts = [_ATTRS[a][0] for a in self.attrs if a in _ATTRS]
+        parts = [_ATTRS[a] for a in self.attrs if a in _ATTRS]
         parts.append(f"38;5;{self.color}")
         return ";".join(parts)
-
-    def curses_attr(self, curses_mod) -> int:
-        """Битовая маска атрибутов curses (без цвета — цвет задаётся парой)."""
-        flag = 0
-        for a in self.attrs:
-            name = _ATTRS.get(a, (None, None))[1]
-            if name:
-                flag |= getattr(curses_mod, name, 0)
-        return flag
 
 
 def _parse_style(raw) -> Style:

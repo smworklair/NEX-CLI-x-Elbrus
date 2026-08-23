@@ -26,7 +26,8 @@ from textual.widgets import DataTable, Input, Static
 
 from ...core import SCENARIOS
 from .. import palette
-from ..widgets import Chip, Console, ConsoleJournal, Panel, PromptBar, plural
+from ..widgets import (Chip, Console, ConsoleJournal, Panel, PanelToolbar,
+                       PromptBar, plural)
 from .base import ModeScreen
 
 CONT = "│"
@@ -55,10 +56,36 @@ def _wrapped(text: str, width: int, indent: int) -> str:
 
 
 class ScheduleGrid(DataTable):
-    """Решётка расписания. Печатная клавиша здесь возвращает фокус вводу."""
+    """Решётка расписания.
+
+    Пока решётка в фокусе, ОДНА буква = инструмент (n/N находки, [/]
+    операции, c цепочка, v вид, z/x/p/w слои, o журнал) — полный список
+    в правой колонке разворота. Остальные печатные клавиши, как и раньше,
+    возвращают фокус строке ввода и начинают набор: команды никуда не делись.
+    """
+
+    #: Клавиша → действие панели инструментов экрана. Те же идентификаторы,
+    #: что были у кнопок: один путь исполнения, две точки входа.
+    TOOL_KEYS = {
+        "n": "find-next", "N": "find-prev",
+        "]": "op-next", "[": "op-prev",
+        "c": "chain-step",
+        "v": "/view",
+        "z": "deps-toggle", "x": "gaps-toggle",
+        "p": "crit-toggle", "w": "cells-toggle",
+        "o": "open-console",
+        "d": "open-diag",
+    }
 
     def on_key(self, event) -> None:
         ch = event.character
+        if ch in self.TOOL_KEYS:
+            event.stop()
+            event.prevent_default()
+            screen = self.screen
+            if hasattr(screen, "panel_tool"):
+                screen.panel_tool(self.TOOL_KEYS[ch])
+            return
         if ch and ch.isprintable() and event.key not in ("space",):
             event.stop()
             event.prevent_default()
@@ -210,20 +237,28 @@ class LabScreen(ModeScreen):
         self._scen_keys: list[str] = []
         self._diag_filter = "all"      # all | high | medium | low | limit
         self._find_pos = -1            # позиция в отфильтрованном списке
+        # Тумблеры развёрнутой решётки. «Все такты» отменяет схлопывание
+        # простоев (такт в строку), «крит. путь» гасит подсветку цепочки,
+        # «широкие» раздвигает клетки, «зависимости» тушит всё, кроме
+        # соседей курсорной операции по графу — все меняют ОТРИСОВКУ,
+        # поэтому живут рядом с ней.
+        self._all_cycles = False
+        self._crit_on = True
+        self._wide_cells = False
+        self._deps_on = False
 
     # --- раскладка --------------------------------------------------------
 
     def compose_body(self):
         with Horizontal(id="lab-body"):
             with Vertical(id="lab-left"):
-                yield Panel(Horizontal(id="view-chips"),
-                            ItemGrid(id="scenario-chips", min_column_width=15),
+                yield Panel(ItemGrid(id="scenario-chips", min_column_width=13),
                             Vertical(
                                 Static(id="scen-head"),
                                 Horizontal(
                                     Static("фильтр", id="scen-filter-label"),
                                     Input(placeholder="имя, семья или "
-                                                      "описание",
+                                                       "описание",
                                           id="scen-filter"),
                                     id="scen-filter-row"),
                                 DataTable(id="scen-table", cursor_type="row",
@@ -231,45 +266,113 @@ class LabScreen(ModeScreen):
                                 Static(id="scen-foot"),
                                 id="scen-wide"),
                             title="УЧАСТОК", id="p-scen", topic="scen")
-                yield Panel(ScheduleGrid(id="grid", cursor_type="cell",
-                                         zebra_stripes=False),
-                            GridLink(id="grid-link"),
-                            title="РАСПИСАНИЕ", id="p-grid", topic="grid")
-                yield Panel(Static(id="detail"),
-                            Horizontal(
-                                Vertical(id="detail-preds"),
-                                Vertical(id="detail-succs"),
-                                id="detail-graph"),
-                            title="ПОЧЕМУ ЗДЕСЬ",
-                            id="p-detail", topic="detail")
-                yield Panel(Console(id="console"),
-                            ConsoleJournal(id="journal"),
-                            title="ВЫВОД КОМАНД",
-                            id="p-console", topic="console",
-                            has_own_input=True)
+                yield Panel(
+                    # Развёрнутая решётка управляется КЛАВИАТУРОЙ, а не
+                    # кнопками: строка «тегов» над расписанием — это шум,
+                    # который дублирует подсказки и режется по краям.
+                    # Клавиши перечислены в правой колонке (КЛАВИШИ) и в
+                    # нижней полосе подсказок. Мышью по-прежнему работают
+                    # чипы вида и клики по клеткам/находкам.
+                    Horizontal(
+                        Horizontal(id="view-chips"),
+                        Static("", id="grid-hud"),
+                        id="grid-head"),
+                    # Master-detail разворота: решётка слева, инспектор
+                    # справа. Колонка видна только в развороте (CSS), и это
+                    # не «та же решётка крупнее», а ответ на главный вопрос
+                    # полноэкранного режима — «на что я смотрю?» — рядом с
+                    # самим объектом, а не в панели за три экрана отсюда.
+                    Horizontal(
+                        ScheduleGrid(id="grid", cursor_type="cell",
+                                     zebra_stripes=False),
+                        VerticalScroll(
+                            Static(id="side-cursor"),
+                            Static(id="side-finding"),
+                            Static(id="side-ports"),
+                            Static(id="side-legend"),
+                            id="grid-side"),
+                        id="grid-main"),
+                    GridLink(id="grid-link"),
+                    title="РАСПИСАНИЕ", id="p-grid", topic="grid")
+                yield Panel(
+                    PanelToolbar(
+                        ("↻ повторить", "journal-repeat",
+                         "прогнать выбранный запуск заново (^R)"),
+                        ("очистить", "journal-wipe",
+                         "стереть журнал запусков (^L)"),
+                        ("решётка ▶", "open-grid",
+                         "развернуть РАСПИСАНИЕ"),
+                    ),
+                    Console(id="console"),
+                    ConsoleJournal(id="journal"),
+                    title="ВЫВОД КОМАНД",
+                    id="p-console", topic="console",
+                    has_own_input=True)
             with Vertical(id="lab-right"):
-                yield Panel(Static(id="numbers"),
-                            VerticalScroll(
-                                Static(id="numbers-head"),
-                                Vertical(id="numbers-chain"),
-                                Static(id="numbers-res"),
-                                id="numbers-why"),
-                            title="ЧИСЛА",
-                            id="p-numbers", topic="numbers")
-                yield Panel(Horizontal(id="diag-filter"),
-                            VerticalScroll(id="diag-scroll"),
-                            title="ДИАГНОЗ", id="p-diag", topic="diag")
-                yield Panel(Static(id="machine"),
-                            Horizontal(
-                                Static("фильтр", id="machine-filter-label"),
-                                Input(placeholder="имя операции — часть строки",
-                                      id="machine-filter"),
-                                id="machine-filter-row"),
-                            DataTable(id="machine-matrix", cursor_type="row",
-                                      zebra_stripes=False),
-                            Static(id="machine-foot"),
-                            title="МАШИНА",
-                            id="p-machine", topic="machine")
+                yield Panel(
+                    PanelToolbar(
+                        ("решётка ▶", "open-grid", "развернуть РАСПИСАНИЕ"),
+                        ("диагноз ▶", "open-diag",
+                         "развернуть ДИАГНОЗ — все находки"),
+                    ),
+                    Static(id="numbers"),
+                    VerticalScroll(
+                        Static(id="numbers-head"),
+                        Vertical(id="numbers-chain"),
+                        Static(id="numbers-res"),
+                        id="numbers-why"),
+                    title="ЧИСЛА",
+                    id="p-numbers", topic="numbers")
+                yield Panel(
+                    PanelToolbar(
+                        ("◀ операция", "op-prev",
+                         "курсор на предыдущую операцию расписания"),
+                        ("операция ▶", "op-next",
+                         "курсор на следующую операцию расписания"),
+                        ("по цепочке ▶", "chain-step",
+                         "следующее звено критического пути"),
+                        ("решётка ▶", "open-grid",
+                         "развернуть РАСПИСАНИЕ"),
+                    ),
+                    Static(id="detail"),
+                    Horizontal(
+                        Vertical(id="detail-preds"),
+                        Vertical(id="detail-succs"),
+                        id="detail-graph"),
+                    title="ПОЧЕМУ ЗДЕСЬ",
+                    id="p-detail", topic="detail")
+                yield Panel(
+                    PanelToolbar(
+                        ("◀ пред.", "diag-prev", "предыдущая находка"),
+                        ("след. ▶", "diag-next", "следующая находка"),
+                        ("сброс фильтра", "/find filter all",
+                         "показать находки всех серьёзностей"),
+                        ("решётка ▶", "show-active",
+                         "курсор на клетку активной находки"),
+                    ),
+                    Horizontal(id="diag-filter"),
+                    VerticalScroll(id="diag-scroll"),
+                    title="ДИАГНОЗ", id="p-diag", topic="diag")
+                yield Panel(
+                    PanelToolbar(
+                        ("по числу", "matrix-sort-cnt",
+                         "сортировать по числу операций в участке"),
+                        ("по латентности", "matrix-sort-lat",
+                         "сортировать по ожиданию операции"),
+                        ("решётка ▶", "open-grid",
+                         "развернуть РАСПИСАНИЕ"),
+                    ),
+                    Static(id="machine"),
+                    Horizontal(
+                        Static("фильтр", id="machine-filter-label"),
+                        Input(placeholder="имя операции — часть строки",
+                              id="machine-filter"),
+                        id="machine-filter-row"),
+                    DataTable(id="machine-matrix", cursor_type="row",
+                              zebra_stripes=False),
+                    Static(id="machine-foot"),
+                    title="МАШИНА",
+                    id="p-machine", topic="machine")
 
     def on_ready(self) -> None:
         self._fill_chips()
@@ -296,8 +399,14 @@ class LabScreen(ModeScreen):
             con.write(row)
 
     def hint_pairs(self):
-        return [("F2", "решётка ⇄ ввод"), ("↑↓←→", "по тактам"),
-                ("Enter", "разбор такта"), ("Esc", "назад")]
+        out = [("F2", "решётка ⇄ ввод"), ("↑↓←→", "по тактам"),
+               ("Enter", "разбор такта"), ("Esc", "назад")]
+        # Клавиши развёрнутой решётки — в общей полосе, пока она развёрнута.
+        if self._grid_expanded:
+            out += [("n/N", "находки"), ("[/]", "операции"),
+                    ("c", "цепочка"), ("v", "вид"), ("z", "соседи"),
+                    ("d", "диагноз")]
+        return out
 
     # --- чипы -------------------------------------------------------------
 
@@ -359,6 +468,212 @@ class LabScreen(ModeScreen):
             self._cmd_find(arg.strip().lower())
             return
         self.run_core(line)
+
+    # --- инструменты развёрнутых панелей -----------------------------------
+    #
+    # Разворот — не «та же панель крупнее», а рабочее место: у каждого
+    # развёрнутого блока своя полоса инструментов (см. compose_body) и свой
+    # разбор действий здесь. Слэш-команды уходят в общий путь handle_line,
+    # остальное — навигация и тумблеры отрисовки, которых в командах нет.
+
+    def panel_tool(self, tool: str) -> None:
+        if tool.startswith("/"):
+            self.handle_line(tool)
+            return
+        if tool == "grid-home":
+            self._cursor_to_row(0)
+        elif tool == "grid-end":
+            grid = self.query_one("#grid", ScheduleGrid)
+            self._cursor_to_row(max(len(self._rows) - 1, 0), grid)
+        elif tool == "gaps-toggle":
+            self._toggle_all_cycles()
+        elif tool == "crit-toggle":
+            self._toggle_crit()
+        elif tool == "cells-toggle":
+            self._toggle_wide_cells()
+        elif tool == "deps-toggle":
+            self._toggle_deps()
+        elif tool == "op-prev":
+            self._step_op(-1)
+        elif tool == "op-next":
+            self._step_op(1)
+        elif tool == "chain-step":
+            self._step_chain()
+        elif tool == "diag-prev":
+            self._cmd_find("prev")
+        elif tool == "diag-next":
+            self._cmd_find("next")
+        elif tool == "show-active":
+            f = self._active_finding()
+            if f is not None:
+                findings = self._filtered_findings()
+                self._find_pos = findings.index(f) if f in findings else -1
+                self._jump_to_finding(f)
+        elif tool.startswith("open-"):
+            panels = {"open-grid": ("#p-grid", "grid"),
+                      "open-diag": ("#p-diag", "diag"),
+                      "open-console": ("#p-console", "console")}
+            if tool in panels:
+                self._open_panel(*panels[tool])
+        elif tool == "journal-repeat" or tool == "journal-wipe":
+            try:
+                journal = self.query_one("#journal", ConsoleJournal)
+            except Exception:
+                return
+            journal.action_repeat() if tool == "journal-repeat" \
+                else journal.action_wipe()
+        elif tool.startswith("matrix-sort-"):
+            key = tool[len("matrix-sort-"):]
+            if key in ("cnt", "lat", "op", "occ"):
+                self._matrix_sort_key = key
+                self._matrix_sort_rev = self.MATRIX_SORT_DEFAULT_REV.get(key,
+                                                                         True)
+                self._draw_machine_matrix()
+
+    def _cursor_to_row(self, row: int, grid: ScheduleGrid | None = None) -> None:
+        """Курсор решётки — на строку такта/простоя, разбор следует за ним."""
+        if not self._rows:
+            return
+        grid = grid or self.query_one("#grid", ScheduleGrid)
+        col = min(grid.cursor_coordinate.column,
+                  max(self.app.session.model().width - 1, 0))
+        grid.move_cursor(row=min(row, len(self._rows) - 1), column=col)
+        self._draw_detail()
+        self._draw_diag()
+        self._draw_grid_link()
+        self._update_grid_hud()
+
+    def _toggle_all_cycles(self) -> None:
+        """«Все такты» (x): схлопнутые простои разворачиваются в строки.
+
+        Схлопывание — инструмент обзора: 52% строк slotclash — простой. Но
+        иногда нужен ПОСЛЕДОВАТЕЛЬНЫЙ вид: сверить с чужим дампом или
+        посчитать такты руками. Тумблер даёт оба вида, не теряя первого.
+        """
+        self._all_cycles = not self._all_cycles
+        self._redraw_grid_keep_cursor()
+        self._draw_side()
+
+    def _toggle_crit(self) -> None:
+        """«Крит. путь» (p): подсветку цепочки можно погасить.
+
+        Жирные имена критического пути — самый громкий акцент решётки; когда
+        разбираешь ресурсные находки, он спорит с ними за взгляд.
+        """
+        self._crit_on = not self._crit_on
+        self._redraw_grid_keep_cursor()
+
+    def _toggle_wide_cells(self) -> None:
+        """«Широкие» (w): клетки 11 → 17 колонок, имена не режутся до 7.
+
+        Узкие клетки — компромисс обычного вида, где решётка делит экран с
+        шестью панелями. В развороте места достаточно; обрезать «probe_lo…»,
+        когда рядом полпустого экрана, — значит дразнить.
+        """
+        self._wide_cells = not self._wide_cells
+        self._redraw_grid_keep_cursor()
+
+    def _toggle_deps(self) -> None:
+        """«Соседи» (z): светятся только соседи курсорной операции.
+
+        Прямые предки (кого она ждала) и прямые потомки (кто ждёт её) —
+        остальное тушится. Это ответ решётки на вопрос панели «ПОЧЕМУ
+        ЗДЕСЬ», но глазами: не текст про зависимости, а они сами, на местах.
+        Пересчитывается на каждом движении курсора, пока тумблер включён.
+        """
+        self._deps_on = not self._deps_on
+        self._last_deps_instr = None     # форс-перерисовка на новом курсоре
+        self._redraw_grid_keep_cursor()
+
+    @property
+    def _cell_w(self) -> int:
+        """Ширина рабочей клетки: обычная и развёрнутая («широкие»)."""
+        return 17 if self._wide_cells else 11
+
+    def _cycle_of_row(self, row: int) -> int:
+        """Такт строки решётки (для строки простоя — первый такт отрезка)."""
+        if 0 <= row < len(self._rows):
+            return self._rows[row][1]
+        return 0
+
+    def _redraw_grid_keep_cursor(self) -> None:
+        """Перерисовать решётку, вернув курсор на ту же клетку.
+
+        Пересборка сбрасывает курсор в (0,0); без возврата любой тумблер
+        уносил бы взгляд в начало расписания.
+        """
+        grid = self.query_one("#grid", ScheduleGrid)
+        cur = grid.cursor_coordinate
+        if 0 <= cur.row < len(self._rows):
+            self._want_cell = (self._cycle_of_row(cur.row), cur.column)
+        self._draw_grid()
+
+    def _cursor_relatives(self) -> set[int]:
+        """Прямые предки и потомки операции под курсором; пусто — нет её."""
+        target = self._cursor_target()
+        if not target or target[0] != "такт" or target[3] is None:
+            return set()
+        dag = self.app.session.dag_obj
+        ins = dag[target[3]]
+        return {target[3], *ins.preds, *dag.succs[target[3]]}
+
+    def _sync_grid_tools(self) -> None:
+        """Состояние тумблеров теперь видно в правой колонке (КЛАВИШИ)."""
+        self._draw_side()
+
+    def _step_op(self, delta: int) -> None:
+        """Курсор — к следующей/предыдущей операции по номеру.
+
+        Операции в решётке идут не по номерам: порядок выдачи диктуют
+        зависимости и порты. Шаг по списку размещений — способ листать
+        программу подряд, не выискивая клетки глазами.
+        """
+        instrs = sorted(set(self._cells.values()))
+        if not instrs:
+            return
+        target = self._cursor_target()
+        cur = target[3] if target and target[0] == "такт" else None
+        idx = instrs.index(cur) if cur in instrs else -1 if delta > 0 else 0
+        nxt = instrs[(idx + delta) % len(instrs)]
+        if not self._jump_to_instr(nxt):
+            self.app.bell()
+
+    def _step_chain(self) -> None:
+        """Курсор — к следующему звену критического пути (по кругу)."""
+        chain = self._critical_chain()
+        if not chain:
+            return
+        target = self._cursor_target()
+        cur = target[3] if target and target[0] == "такт" else None
+        idx = chain.index(cur) if cur in chain else -1
+        if not self._jump_to_instr(chain[(idx + 1) % len(chain)]):
+            self.app.bell()
+
+    def _open_panel(self, panel_id: str, topic: str) -> None:
+        """Развернуть другую панель поверх экрана, не теряя режимов.
+
+        Развёрнутые панели РАЗБОРА — режимы отрисовки (флаги _*_expanded),
+        а не просто размеры. Здесь они переключаются ЦЕЛИКОМ: прежняя
+        панель возвращается в обычный вид, новая получает свою полосу и
+        свои слои. Так раньше делали переходы находка⇄решётка; теперь тот
+        же путь у инструментов каждой панели.
+        """
+        for t in ("scen", "grid", "detail", "console",
+                  "numbers", "diag", "machine"):
+            setattr(self, f"_{t}_expanded", t == topic)
+        self.screen.minimize()
+        self.screen.maximize(self.query_one(panel_id, Panel),
+                             container=False)
+        # Перерисовать всё, чей режим мог смениться: флаги выше управляют
+        # тем, ЧТО рисуют методы draw_*, а вызовы после maximize() нужны те
+        # же, что делает on_panel_collapsed при обратном свёртывании.
+        self._draw_journal()
+        self._draw_scen_catalog()
+        self._draw_diag()
+        self._draw_grid_link()
+        self._draw_numbers()
+        self._draw_machine()
+        self._draw_detail()
 
     def _repair_model(self) -> None:
         """Переназначить незаконные каналы. Такты модели не трогаются.
@@ -778,6 +1093,11 @@ class LabScreen(ModeScreen):
         grid.clear(columns=True)
         grid.add_column(note, width=40)
         self.query_one("#p-grid", Panel).set_title("РАСПИСАНИЕ")
+        try:
+            self.query_one("#grid-hud", Static).update(Text("", justify="right"))
+        except Exception:
+            pass
+        self._draw_side()
 
     def _draw_grid(self) -> None:
         if self.view == "model":
@@ -969,20 +1289,30 @@ class LabScreen(ModeScreen):
         # порта остаётся видимым (это те же 9% занятости слотов, только по
         # горизонтали), но перестаёт отбирать место у рабочих колонок.
         used_ports = {p.channel for p in sched.placements.values()}
+        cw = self._cell_w
         for p in range(model.width):
             idle = p not in used_ports
             role = "faint" if idle else "dim"
             label = Text(model.port_label(p), style=palette.role_hex(role))
-            grid.add_column(label, width=4 if idle else 11, key=str(p))
+            grid.add_column(label, width=4 if idle else cw, key=str(p))
 
-        crit = self._critical_set()
+        crit = self._critical_set() if self._crit_on else set()
+        # «Соседи» (z): пока тумблер включён, всё, что не курсор и не его
+        # прямые предки/потомки, рисуется притушенным. None — слой выключен.
+        rels = self._cursor_relatives() if self._deps_on else None
         self._cells = {}
         # Строка решётки больше НЕ равна такту: простои схлопнуты. Список
         # переводит номер строки обратно — ("такт", n) или ("простой", a, b).
         self._rows = []
         span = max(sched.span_cycles, 1)
-        gaps = {a: b for a, b in self._gaps(sched)
-                if (a, b) not in self._expanded_gaps}
+        if self._all_cycles:
+            # «Все такты»: схлопывание отменено, простой — просто пустой
+            # такт. Порог MIN_GAP здесь не работает: тумблер и есть способ
+            # увидеть то, что он прячет.
+            gaps = {}
+        else:
+            gaps = {a: b for a, b in self._gaps(sched)
+                    if (a, b) not in self._expanded_gaps}
 
         cycle = 0
         while cycle < span:
@@ -1003,11 +1333,16 @@ class LabScreen(ModeScreen):
                     continue
                 instr, head = slot
                 self._cells[(row, port)] = instr
+                rel = None if rels is None else instr in rels
                 if not head:
-                    cells.append(Text(f" {CONT}", style=palette.op_style(dag[instr].op)))
+                    style = palette.op_style(dag[instr].op)
+                    if rel is False:
+                        style = palette.role_hex("faint")
+                    cells.append(Text(f" {CONT}", style=style))
                     continue
                 issued += 1
-                cells.append(self._cell_text(dag, instr, crit, instr in illegal))
+                cells.append(self._cell_text(dag, instr, crit,
+                                             instr in illegal, related=rel))
             grid.add_row(*cells, label=self._row_label(cycle, issued, model.width))
             self._rows.append(("такт", cycle))
             cycle += 1
@@ -1017,6 +1352,175 @@ class LabScreen(ModeScreen):
             want = self._want_cell or (0, 0)
             grid.move_cursor(row=min(self._row_of_cycle(want[0]), len(self._rows) - 1),
                              column=min(want[1], model.width - 1))
+        self._update_grid_hud()
+        self._draw_side()
+
+    def _update_grid_hud(self) -> None:
+        """Живой счёт справа от переключателя вида.
+
+        Решётка — главный блок экрана, и её состояние должно читаться, не
+        открывая ЧИСЛА: сколько тактов занимает выдача, как заняты слоты и
+        где стоит курсор. Пустая строка — когда считать ещё нечего.
+        """
+        try:
+            hud = self.query_one("#grid-hud", Static)
+        except Exception:
+            return
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        warn = palette.role_hex("warning")
+        t = Text()
+        if self.view == "model" and self.model_sched is not None \
+                and self.model_sched.placements:
+            dag = self.app.session.dag_obj
+            illegal = self._model_illegal()
+            t.append(f"{len(self.model_sched.placements)}/{len(dag)} оп.",
+                     style=dim)
+            if illegal:
+                t.append(f"   незаконных {len(illegal)}",
+                         style=palette.role_hex("error"))
+        elif self.base is not None:
+            sched = (self.orc if self.view == "oracle" else self.base).schedule
+            util = sched.slot_utilization
+            t.append(f"{sched.makespan} {_takt(sched.makespan)}"
+                     f"   ·   слоты {util:.0%}", style=dim)
+        target = self._cursor_target()
+        if target is not None and target[0] == "такт":
+            machine = self.app.session.model()
+            cell = f"т.{target[1]} ,{target[2]}"
+            name = self.app.session.dag_obj[target[3]].name \
+                if target[3] is not None else ""
+            t.append(f"   ·   {cell}"
+                     + (f"  {name}" if name else ""),
+                     style=warn if name else faint)
+        elif self.view == "model":
+            t.append("   ·   модель не запускалась — /learned", style=faint)
+        hud.update(t)
+
+    # --- правая колонка разворота ------------------------------------------
+    #
+    # Разворот решётки — не «та же решётка крупнее»: справа появляется
+    # инспектор, который отвечает на вопрос «на что я смотрю?» без хождения
+    # по свёрнутым панелям. Четыре блока: состояние слоёв и курсор, находка,
+    # занятость каналов, легенда с клавишами.
+
+    def _draw_side(self) -> None:
+        try:
+            cursor = self.query_one("#side-cursor", Static)
+            finding = self.query_one("#side-finding", Static)
+            ports = self.query_one("#side-ports", Static)
+            legend = self.query_one("#side-legend", Static)
+        except Exception:
+            return
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        title = palette.role_hex("title")
+        accent = palette.role_hex("accent")
+
+        def mark(on: bool) -> Text:
+            return Text("вкл" if on else "выкл",
+                        style=palette.role_hex("success" if on else "faint"))
+
+        # --- слои + курсор -------------------------------------------------
+        t = Text()
+        t.append_text(self._section("курсор"))
+        t.append("\n")
+        t.append("z соседи ", style=dim); t.append_text(mark(self._deps_on))
+        t.append("  ·  x такты ", style=dim); t.append_text(mark(self._all_cycles))
+        t.append("\n")
+        t.append("p путь   ", style=dim); t.append_text(mark(self._crit_on))
+        t.append("  ·  w широко ", style=dim); t.append_text(mark(self._wide_cells))
+        t.append("\n\n")
+        facts = self._cursor_facts()
+        if not facts:
+            t.append("решётка ещё пуста", style=faint)
+        for i, line in enumerate(facts):
+            if i:
+                t.append("\n")
+            t.append(_wrapped(line, 40, 2) if i == 0
+                     else "  " + _wrapped(line, 38, 2), style=title if i == 0
+                     else dim)
+        cursor.update(t)
+
+        # --- находка -------------------------------------------------------
+        f = self._active_finding()
+        tf = Text()
+        tf.append_text(self._section("находка",
+                                     "" if f is not None else "чисто"))
+        tf.append("\n\n")
+        if f is None:
+            tf.append("под курсором нет проблем доктора", style=faint)
+        else:
+            head = f"−{f.cycles_lost} т. "
+            tf.append(head, style=palette.role_hex(
+                "dim" if f.kind == "limit" else "error"))
+            tf.append(_wrapped(f.title, 36, len(head)),
+                      style=f"{title} bold")
+            tf.append("\n  " + _wrapped(f.where, 34, 2),
+                      style=palette.role_hex("accent_soft"))
+            tf.append("\n  " + _wrapped(f.why, 34, 2), style=dim)
+            if getattr(f, "fix", ""):
+                tf.append("\n  " + _wrapped(f.fix, 34, 2),
+                          style=palette.role_hex("success"))
+        finding.update(tf)
+
+        # --- занятость каналов ----------------------------------------------
+        tp = Text()
+        tp.append_text(self._section("каналы"))
+        tp.append("\n\n")
+        model = self.app.session.model()
+        res = None if self.view == "model" else self._result
+        if res is None:
+            tp.append("вид «модель» — счёт по завершении прогона", style=faint)
+        else:
+            busy = res.schedule.busy_map()
+            span = max(res.schedule.makespan, 1)
+            per: dict[int, int] = {}
+            for (_c, port) in busy:
+                per[port] = per.get(port, 0) + 1
+            worst = max(per.values(), default=0)
+            for port in model.ports:
+                held = per.get(port.index, 0)
+                bar_w = max(0, min(14, round(14 * held / span)))
+                tp.append(port.label.ljust(4), style=dim)
+                tp.append("─" * bar_w,
+                          style=accent if held == worst and held
+                          else palette.role_hex("success"))
+                tp.append("·" * (14 - bar_w), style=faint)
+                tp.append(f" {held:>3}", style=title if held else faint)
+                if held == worst and held:
+                    tp.append(" держит", style=accent)
+                tp.append("\n")
+        ports.update(tp)
+
+        # --- клавиши + легенда -----------------------------------------------
+        tl = Text()
+        tl.append_text(self._section("клавиши"))
+        tl.append("\n\n")
+        for key, what in (
+                ("n / N", "находка вперёд / назад"),
+                ("[ / ]", "операция вперёд / назад"),
+                ("c", "звено критического пути"),
+                ("v", "вид: baseline ↔ оракул"),
+                ("z x p w", "слои — как помечено выше"),
+                ("d", "диагноз: все находки списком"),
+                ("o", "развернуть журнал команд"),
+        ):
+            tl.append("  ")
+            tl.append(key.ljust(8), style=f"{accent} bold")
+            tl.append(what, style=dim)
+            tl.append("\n")
+        tl.append("\n")
+        tl.append_text(self._section("метки"))
+        tl.append("\n\n")
+        tl.append("  ▸ разошлась с оракулом\n", style=palette.role_hex("diverge"))
+        tl.append("  жирное имя — критический путь\n",
+                  style=f"{title} bold")
+        tl.append("  ✗ канал не исполняет операцию\n",
+                  style=palette.role_hex("error"))
+        tl.append("  ─── простой ≥ 3 тактов\n", style=faint)
+        tl.append("  ▁▄█ загрузка строки такта", style=dim)
+        legend.update(tl)
 
     def _row_of_cycle(self, cycle: int) -> int:
         """Номер строки, в которой виден этот такт (или его простой)."""
@@ -1032,10 +1536,11 @@ class LabScreen(ModeScreen):
 
         Разница видна боковым зрением и означает ровно то, что произошло:
         не «здесь ничего не выдали в этот такт», а «здесь не выдавали
-        несколько тактов подряд».
+        несколько тактов подряд». Длина — по текущей ширине клетки.
         """
         style = palette.role_hex("faint")
-        return [Text(" ─────────", style=style) for _ in range(width)]
+        line = " " + "─" * (self._cell_w - 2)
+        return [Text(line, style=style) for _ in range(width)]
 
     def _active_finding(self):
         """Находка доктора, к которой относится клетка под курсором.
@@ -1071,7 +1576,13 @@ class LabScreen(ModeScreen):
         return t
 
     def _cell_text(self, dag, instr: int, crit: set[int],
-                   illegal: bool = False) -> Text:
+                   illegal: bool = False, related: bool | None = None) -> Text:
+        """Клетка операции.
+
+        related — слой «соседей» (z): True операция подсвечена как предок/
+        потомок курсорной, False притушена, None слой выключен. Незаконная
+        клетка не тушится никогда — ошибка модели важнее любого слоя.
+        """
         ins = dag[instr]
         t = Text()
         if illegal:
@@ -1081,16 +1592,24 @@ class LabScreen(ModeScreen):
             t.append("✗", style=palette.role_hex("error") + " bold")
         else:
             moved = instr in self.diverged
-            t.append("▸" if moved else " ",
-                     style=palette.role_hex("diverge") if moved else "")
-        t.append(ins.op.lower()[:3].ljust(4), style=palette.op_style(ins.op))
+            mark_style = palette.role_hex("diverge") if moved \
+                else palette.role_hex("faint") if related is False else ""
+            t.append("▸" if moved else " ", style=mark_style)
+        op_style = palette.op_style(ins.op)
+        if related is False:
+            op_style = palette.role_hex("faint")
+        t.append(ins.op.lower()[:3].ljust(4), style=op_style)
+        # Имя: 7 знаков в обычной клетке (как и было), до 12 — в широкой.
+        name_w = 12 if self._wide_cells else 7
         if illegal:
             style = palette.role_hex("error") + " bold"
         elif instr in crit:
             style = palette.role_hex("crit") + " bold"
+        elif related is False:
+            style = palette.role_hex("faint")
         else:
             style = palette.role_hex("text")
-        t.append(ins.name[:7], style=style)
+        t.append(ins.name[:name_w], style=style)
         return t
 
     def _row_label(self, cycle: int, issued: int, width: int) -> Text:
@@ -1121,9 +1640,21 @@ class LabScreen(ModeScreen):
 
     def on_data_table_cell_highlighted(self, event) -> None:
         event.stop()
+        # Слой «соседей» (z) пересчитывается на движении курсора: если под
+        # курсором новая операция — решётка перерисовывается с новой
+        # подсветкой. _last_deps_instr рвёт петлю: перерисовка сама снова
+        # зажигает highlight уже для той же клетки.
+        target = self._cursor_target()
+        instr = target[3] if target and target[0] == "такт" else None
+        if self._deps_on and instr != self._last_deps_instr:
+            self._last_deps_instr = instr
+            self._redraw_grid_keep_cursor()
+            return                   # отрисовка уже обновила всё остальное
         self._draw_detail()
         self._draw_diag()          # подсветить находку про эту клетку
         self._draw_grid_link()     # то же для мостика под развёрнутой решёткой
+        self._update_grid_hud()    # счёт в строке над решёткой
+        self._draw_side()          # инспектор в правой колонке разворота
         self._cell_ai_restart()
 
     # --- разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима, не общий чат -----
@@ -1142,6 +1673,8 @@ class LabScreen(ModeScreen):
             self._draw_diag()
         elif topic == "grid":
             self._grid_expanded = True
+            self._draw_side()   # инспектор разворота — сразу с содержимым
+            self.refresh_hints()
             self._draw_grid_link()
         elif topic == "numbers":
             self._numbers_expanded = True
@@ -1238,8 +1771,6 @@ class LabScreen(ModeScreen):
         """
         wide = self._scen_expanded
         self.query_one("#scen-wide").display = wide
-        self.query_one("#view-chips").display = not wide
-        self.query_one("#scenario-chips").display = not wide
         panel = self.query_one("#p-scen", Panel)
         if not wide:
             panel.set_title("УЧАСТОК")
@@ -1369,16 +1900,7 @@ class LabScreen(ModeScreen):
         """
         if not self._jump_to_instr(instr):
             return
-        self._numbers_expanded = False
-        self._machine_expanded = False
-        self._detail_expanded = False
-        self._grid_expanded = True
-        self.screen.minimize()
-        self.screen.maximize(self.query_one("#p-grid", Panel), container=False)
-        self._draw_numbers()
-        self._draw_machine()
-        self._draw_detail()
-        self._draw_grid_link()
+        self._open_panel("#p-grid", "grid")
 
     def on_instr_link_picked(self, event) -> None:
         event.stop()
@@ -1415,12 +1937,7 @@ class LabScreen(ModeScreen):
             return
         self._find_pos = event.index
         self._jump_to_finding(findings[event.index])
-        self._diag_expanded = False
-        self._grid_expanded = True
-        self.screen.minimize()
-        self.screen.maximize(self.query_one("#p-grid", Panel), container=False)
-        self._draw_diag()
-        self._draw_grid_link()
+        self._open_panel("#p-grid", "grid")
 
     def on_grid_link_picked(self, event) -> None:
         event.stop()
@@ -1432,10 +1949,7 @@ class LabScreen(ModeScreen):
             self._diag_filter = "all"
             findings = self._filtered_findings()
         self._find_pos = findings.index(f) if f in findings else -1
-        self._grid_expanded = False
-        self._diag_expanded = True
-        self.screen.minimize()
-        self.screen.maximize(self.query_one("#p-diag", Panel), container=False)
+        self._open_panel("#p-diag", "diag")
         self._draw_diag()
 
     # --- ИИ по курсору -----------------------------------------------------
@@ -2356,63 +2870,40 @@ class LabScreen(ModeScreen):
         if self._diag_expanded:
             self._draw_diag_full(scroll)
             return
+        # Свёрнутая панель — СВОДКА одной строкой, а не топ-список.
+        # Подробности давно живут там, где глаз уже смотрит: простой —
+        # строкой в решётке, находка под курсором — в инспекторе разворота,
+        # переходы — клавишами n/N. Панель оставляет себе единственное, чего
+        # нет больше нигде: сколько проблем всего и какая хуже — видно до
+        # того, как тронул хоть одну клавишу. Полный список — d / 2×клик.
         self.query_one("#diag-filter", Horizontal).remove_children()
+        scroll.remove_children()
         from ...core.doctor import diagnose
 
         s = self.app.session
-        scroll.remove_children()
         try:
             diag = diagnose(s.dag_obj, s.model(), self.base.schedule, self.met)
         except Exception as e:
             scroll.mount(Static(Text(str(e), style=palette.role_hex("error"))))
             return
-        dim = palette.role_hex("dim")
         t = Text()
         if diag.clean:
             t.append("находок нет — baseline уложился в предел",
                      style=palette.role_hex("success"))
             scroll.mount(Static(t))
             return
-        width = max(24, self.query_one("#p-diag", Panel).size.width - 4)
-        # Простои НЕ повторяем: они теперь видны в самой решётке отдельными
-        # строками, и наведение на них даёт этот же разбор. Две формулировки
-        # одного факта на одном экране — это и есть лишнее; панель оставляет
-        # себе то, чего в решётке не видно.
-        shown_in_grid = {f"такты {a}–{b}" for a, b in self._gaps(self.base.schedule)
-                         if (a, b) not in self._expanded_gaps}
-        rest = [f for f in diag.top
-                if not (f.code == "idle-stall" and f.where in shown_in_grid)]
-        hidden = len(diag.top) - len(rest)
-        # Структурно, не по объекту: находка приходит из СВОЕГО вызова
-        # diagnose() (diag.top выше), а активная — из _active_finding(),
-        # который зовёт diagnose() заново и получает НОВЫЕ объекты Finding с
-        # теми же полями. `is` тут всегда врал бы — сравниваем содержимое.
-        active = self._active_finding()
-        for i, f in enumerate(rest):
-            if i:
-                t.append("\n")
-            here = active is not None and f == active
-            mark, role = self._finding_mark(f)
-            # Находка про клетку под курсором помечена стрелкой и подсвечена.
-            # Без этого ДИАГНОЗ и решётка говорили об одном и том же, но
-            # связать их взглядом было нельзя.
-            head = f"{'▸' if here else mark:<3}−{f.cycles_lost} т. "
-            t.append(head, style=palette.role_hex("accent" if here else role))
-            t.append(_wrapped(f.title, width, len(head)),
-                     style=(palette.role_hex("title") + " bold") if here
-                     else palette.role_hex("text"))
-            t.append("\n")
-            t.append("     " + _wrapped(f.where, width, 5),
-                     style=palette.role_hex("accent_soft") if here else dim)
-            t.append("\n")
-        if hidden:
-            if rest:
-                t.append("\n")
-            t.append(f"простои ({hidden}) — строками в решётке, "
-                     "наведите курсор", style=palette.role_hex("faint"))
-            t.append("\n")
+        worst = diag.top[0]
+        n = len(diag.top)
+        t.append(f"{n} ", style=palette.role_hex("title") + " bold")
+        t.append(plural(n, "находка", "находки", "находок") + "  ·  худшая ",
+                 style=palette.role_hex("dim"))
+        t.append(f"−{worst.cycles_lost} т.", style=palette.role_hex("error"))
+        t.append(" ")
+        width = max(20, self.query_one("#p-diag", Panel).size.width - 4)
+        t.append(_wrapped(worst.title, width - 24, 0)[:width],
+                 style=palette.role_hex("text"))
         t.append("\n")
-        t.append("2×клик — все находки и переход по ним",
+        t.append("d или 2×клик — все находки и переход по ним",
                  style=palette.role_hex("accent_soft"))
         scroll.mount(Static(t))
 
@@ -2447,7 +2938,17 @@ class LabScreen(ModeScreen):
             return
         active = self._active_finding()
         dim = palette.role_hex("dim")
-        width = max(30, self.size.width // 2 - 6)
+        # Ширина — от панели, а не от пол-экрана: в развороте панель во всё
+        # окно, и завёрнутый на половину текст оставлял пустую правую половину.
+        # Размер панели в момент разворота ещё старый (maximize() только что
+        # вызван, раскладка не пересчитана), поэтому у развёрнутой берём
+        # ширину экрана. Потолок 120 — читаемость: строка на 200+ символов
+        # глазами не идёт.
+        panel = self.query_one("#p-diag", Panel)
+        if self.maximized is panel:
+            width = max(30, min(self.app.size.width - 8, 120))
+        else:
+            width = max(30, min(panel.size.width - 6, 120))
         for i, f in enumerate(findings):
             here = active is not None and f == active
             mark, role = self._finding_mark(f)

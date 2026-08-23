@@ -25,6 +25,10 @@ TopBar {
 }
 
 /* --- док ввода --------------------------------------------------------- */
+/* Поле ввода — три строки: строка текста с полем сверху и снизу. Рамка
+    съедала место у главного блока экрана, а «сюда можно печатать» показывают
+    и фон, и подсветка строки при фокусе; высота делает док заметным якорем
+    экрана — его видно краем глаза, даже когда читаешь панели. */
 
 #dock {
     dock: bottom;
@@ -42,14 +46,16 @@ PromptBar {
     height: 3;
     width: 100%;
     margin: 0 1;
-    padding: 0 1;
+    padding: 1 1;
     background: $nex-raised;
-    border: round $nex-line;
 }
 
 #prompt-field:focus-within {
-    border: round $primary;
+    background: $primary 18%;
 }
+
+/* Дети — по одной строке: центрирует их сам паддинг поля, и текст с
+    курсором встают ровно на средний ряд. */
 
 #prompt-mark {
     width: 6;
@@ -120,6 +126,43 @@ Panel {
 Panel:focus-within {
     border: round $primary;
     border-title-color: $primary;
+}
+
+/* --- инструменты развёрнутой панели ------------------------------------- */
+/* Полоса инструментов живёт ПЕРВЫМ ребёнком панели и показывается CSS-ом
+    только у Panel.-maximized: в обычном виде она не отнимает ни строки,
+    в развёрнутом — даёт панели её собственные инструменты (навигацию,
+    тумблеры, переходы в связные панели), а не «ту же панель крупнее». */
+
+PanelToolbar {
+    display: none;
+    height: 1;
+    width: 100%;
+}
+
+Panel.-maximized PanelToolbar {
+    display: block;
+}
+
+Tool {
+    height: 1;
+    width: auto;
+    padding: 0 1;
+    margin-right: 1;
+    background: $nex-raised;
+    color: $nex-dim;
+}
+
+Tool:hover {
+    background: $primary 30%;
+    color: $nex-title;
+    text-style: bold;
+}
+
+Tool.tool-on {
+    background: $primary 30%;
+    color: $nex-title;
+    text-style: bold;
 }
 
 /* Развёрнутая панель занимает весь экран — чем бы ни была её обычная высота.
@@ -196,7 +239,7 @@ Console {
 }
 
 #core-right {
-    width: 46;
+    width: 42;
     height: 100%;
 }
 
@@ -219,7 +262,7 @@ Console {
 }
 
 #p-names { height: 1fr; min-height: 6; }
-#p-mem   { height: 9; }
+#p-mem   { height: 7; }
 #p-prog  { height: 2fr; min-height: 8; }
 
 .chip {
@@ -240,19 +283,47 @@ Console {
 .chip-kernel { color: $nex-accent-soft; }
 
 /* --- РАЗБОР: расписание, которое можно потрогать ------------------------ */
+/* Расписание — главный блок экрана, и высоты остальных панелей держатся
+    нарочно малыми: УЧАСТОК — полоса чипов, «почему здесь» и вывод команд —
+    узкие окна. Всё освободившееся забирает решётка (#p-grid, 1fr). */
 
 #lab-body { height: 1fr; width: 100%; }
 #lab-left { width: 1fr; height: 100%; }
-#lab-right { width: 42; height: 100%; }
+#lab-right { width: 46; height: 100%; }
 
 #p-scen {
     height: auto;
-    max-height: 7;
+    max-height: 5;
     padding: 0 1;
 }
 
-#view-chips { height: 1; width: 100%; }
+#view-chips { height: auto; width: auto; }
 #scenario-chips { height: auto; width: 100%; grid-gutter: 0; }
+
+/* Строка над решёткой: слева переключатель вида, справа живой счёт. */
+#grid-head { height: 1; width: 100%; }
+#grid-hud {
+    width: 1fr;
+    height: 1;
+    content-align: right middle;
+    color: $nex-dim;
+}
+
+/* Разворот решётки: слева решётка, справа инспектор. Рамка и отступ —
+    чтобы колонка читалась отдельной панелью со своими секциями
+    (КУРСОР / НАХОДКА / КАНАЛЫ / КЛАВИШИ), а не пустотой рядом. */
+#grid-main { height: 1fr; width: 100%; }
+
+#grid-side {
+    display: none;
+    width: 44;
+    height: 100%;
+    border-left: thick $nex-line;
+    padding: 0 0 0 1;
+    background: $nex-panel;
+}
+
+Panel.-maximized #grid-side { display: block; }
 
 .chip-view { color: $nex-dim; }
 
@@ -270,8 +341,7 @@ Console {
 }
 
 #p-grid { height: 1fr; min-height: 8; }
-#p-detail { height: 9; }
-#p-console { height: 10; }
+#p-console { height: 7; }
 
 #grid {
     background: transparent;
@@ -343,9 +413,16 @@ Console {
     background: $nex-raised;
 }
 
-#p-numbers  { height: 9; }
-#p-diag     { height: 1fr; min-height: 8; }
-#p-machine  { height: auto; min-height: 6; max-height: 10; }
+/* ДИАГНОЗ свёрнут до строки-сводки: подробности дублируют решётку
+    (простой виден строкой, находка под курсором — в инспекторе разворота),
+    панель держит только «сколько проблем и какая хуже». Полный список —
+    по 2×клику или клавише d из решётки. */
+/* Правая колонка: ЧИСЛА и ПОЧЕМУ ЗДЕСЬ — по содержимому, ДИАГНОЗ забирает
+    остаток (список прокручивается), МАШИНА ограничена сверху. */
+#p-numbers  { height: auto; }
+#p-detail   { height: auto; }
+#p-diag     { height: 1fr; }
+#p-machine  { height: auto; min-height: 6; max-height: 9; }
 
 /* --- АГЕНТ: диалог, у которого видно основание -------------------------- */
 
@@ -418,20 +495,19 @@ Console {
     margin-bottom: 1;
 }
 
-#p-seen  { height: 12; }
+#p-seen  { height: 10; }
 #p-trace { height: 1fr; min-height: 6; }
-#p-mind-console { height: 12; }
+#p-mind-console { height: 8; }
 
 /* --- узкое окно --------------------------------------------------------- */
 
 ModeScreen.narrow #core-right,
-ModeScreen.narrow #lab-right,
+ModeScreen.narrow #lab-right { width: 40; }
 ModeScreen.narrow #mind-right { width: 38; }
 
-ModeScreen.narrow #p-detail { height: 8; }
-ModeScreen.narrow #p-console { height: 7; }
-ModeScreen.narrow #p-mind-console { height: 8; }
-ModeScreen.narrow #p-seen { height: 11; }
+ModeScreen.narrow #p-console { height: 6; }
+ModeScreen.narrow #p-mind-console { height: 6; }
+ModeScreen.narrow #p-seen { height: 9; }
 
 ModeScreen.tight #core-right,
 ModeScreen.tight #lab-right,
@@ -441,7 +517,125 @@ ModeScreen.tight #p-kernels,
 ModeScreen.tight #p-scen,
 ModeScreen.tight #p-questions { display: none; }
 
-ModeScreen.tight #p-console { height: 5; }
+ModeScreen.tight #p-console { height: 4; }
+
+/* --- КОД: исходник и его расписание ------------------------------------- */
+
+#code-body { height: 1fr; width: 100%; }
+#p-code { width: 1fr; }
+#code-right { width: 48; height: 100%; }
+
+#code-main { height: 1fr; width: 100%; }
+
+/* Редактор: без собственной рамки (рамкой служит панель), фон прозрачен —
+    полотно режима. Курсор и выделение красит акцент темы. */
+#code-edit {
+    height: 100%;
+    width: 1fr;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $nex-text;
+}
+
+#code-edit:focus {
+    border: none;
+    background: transparent;
+}
+
+#code-edit > .text-area--cursor-line {
+    background: $primary 10%;
+}
+
+/* «ЭТА СТРОКА» — колонка разворота ИСХОДНИКА. В обычном виде её нет: треть
+    ширины редактора под справку о строке дороже самой справки. В развороте
+    места хватает, и рядом с кодом появляется ответ на главный вопрос —
+    почему операция встанет именно в этот такт. */
+#code-side {
+    display: none;
+    width: 46;
+    height: 100%;
+    border-left: thick $nex-line;
+    padding: 0 1;
+    background: $nex-panel;
+    scrollbar-size-vertical: 1;
+}
+
+Panel.-maximized #code-side { display: block; }
+
+/* Строка итога под редактором: сколько тактов стоит написанное. */
+#code-status {
+    height: 1;
+    width: 100%;
+    background: $nex-shadow;
+}
+
+#p-code-sched { height: 1fr; min-height: 9; }
+
+/* Вкладки решётки: две кнопки и счёт тактов справа. Видны всегда — в
+    отличие от полосы инструментов, которая приходит только с разворотом. */
+#sched-tabs { height: 1; width: 100%; }
+#sched-head { height: 1; width: 1fr; content-align: right middle; }
+#code-grids { height: 1fr; width: 100%; }
+#code-grid-wrap { width: 1fr; height: 100%; }
+#code-grid-orc-wrap { display: none; width: 1fr; height: 100%; }
+
+/* Разбор решётки — только в развороте: в колонке 48 знаков ширины он отнял
+    бы место у самой решётки, ради которой панель и открыта. */
+#sched-side {
+    display: none;
+    width: 46;
+    height: 100%;
+    border-left: thick $nex-line;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+Panel.-maximized #sched-side { display: block; }
+#sched-side-body { height: auto; width: 100%; }
+#code-grid-orc-head { height: 1; width: 100%; }
+
+#code-grid, #code-grid-orc {
+    background: transparent;
+    height: 1fr;
+    width: 100%;
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+}
+
+#code-grid > .datatable--header, #code-grid-orc > .datatable--header {
+    background: transparent;
+    color: $nex-dim;
+    text-style: none;
+}
+
+#code-grid > .datatable--cursor, #code-grid-orc > .datatable--cursor {
+    background: $primary 30%;
+    color: $nex-title;
+}
+
+#p-code-lint { height: 12; }
+#lint-scroll { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
+
+/* Замечание — не абзац текста, а ссылка: клик ведёт курсор на строку. */
+.lint-item {
+    height: auto;
+    width: 100%;
+    padding: 0 0 0 0;
+}
+
+.lint-item:hover {
+    background: $primary 20%;
+}
+
+#p-code-out { height: 8; }
+
+ModeScreen.narrow #code-right { width: 42; }
+ModeScreen.narrow #p-code-lint { height: 9; }
+ModeScreen.narrow #p-code-out { height: 6; }
+ModeScreen.tight #code-right { width: 36; }
+ModeScreen.tight #p-code-lint { height: 7; }
+ModeScreen.tight #p-code-out { height: 5; }
 
 /* --- выбор режима ------------------------------------------------------ */
 
@@ -578,19 +772,17 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     scrollbar-size-vertical: 1;
 }
 
-/* Строка ввода терминала — своя рамка и фон, как у общего дока внизу
-   экрана: тот же приём, чтобы читалось как «сюда можно печатать», а не как
-   продолжение вывода. */
+/* Строка ввода терминала — тот же минималистичный вид, что у общего дока:
+    одна строка, фон вместо рамки. */
 #journal-field {
-    height: 3;
+    height: 1;
     width: 100%;
     margin: 0 0 0 2;
     padding: 0 1;
     background: $nex-raised;
-    border: round $nex-line;
 }
 
-#journal-field:focus-within { border: round $primary; }
+#journal-field:focus-within { background: $primary 18%; }
 
 #journal-mark { width: 6; height: 1; content-align: left middle; }
 

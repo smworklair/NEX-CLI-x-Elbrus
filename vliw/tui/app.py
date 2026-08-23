@@ -133,6 +133,8 @@ class NexApp(App):
             from .screens.core_screen import CoreScreen as cls
         elif mode == "mind":
             from .screens.agent_screen import AgentScreen as cls
+        elif mode == "code":
+            from .screens.code_screen import CodeScreen as cls
         else:
             from .screens.lab_screen import LabScreen as cls
             mode = "lab"

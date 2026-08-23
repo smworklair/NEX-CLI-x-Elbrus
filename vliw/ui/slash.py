@@ -9,6 +9,23 @@ from __future__ import annotations
 
 from ..core import PROFILES, SCENARIOS
 
+#: Порядок групп команд в справке и палитре. Идентификатор → заголовок.
+#: Живёт здесь, а не в cli.py: палитра вставляет заголовки сама и не должна
+#: тянуть реестр команд (cli импортирует этот модуль, не наоборот).
+GROUPS = [
+    ("sched",   "расписание"),
+    ("graph",   "граф · диагноз"),
+    ("machine", "модель машины"),
+    ("runs",    "прогоны"),
+    ("agent",   "агент · обучение"),
+    ("data",    "данные"),
+    ("session", "сессия"),
+]
+
+#: Сколько команд должно быть на экране, чтобы появились заголовки групп.
+#: Короткий фильтр («/r» → три штуки) читается и без них.
+HEADER_THRESHOLD = 8
+
 # Что предлагать после имени команды и пробела.
 _ARGS: dict[str, tuple[str, object]] = {
     "run":     ("сценарий", sorted(SCENARIOS)),
@@ -18,7 +35,8 @@ _ARGS: dict[str, tuple[str, object]] = {
     "doctor":  ("кто", ["baseline", "oracle"]),
     "model":   ("профиль", list(PROFILES) + ["measured", "naive"]),
     "theme":   ("тема", None),
-    "mode":    ("панель", ["work", "lab", "mind"]),
+    "mode":    ("панель", ["work", "lab", "mind", "code"]),
+    "code":    ("действие", ["run", "show", "save", "load", "clear"]),
 }
 
 
@@ -68,6 +86,32 @@ def arg_hits(command: str, typed: str) -> list[dict]:
     return out
 
 
+def _with_headers(items: list[dict]) -> list[dict]:
+    """Вставить заголовки групп в длинный список команд.
+
+    Заголовок — пункт kind="header": палитра рисует его плашкой и не даёт
+    выбрать (см. Palette.selected/step). Короткий фильтр остаётся без
+    заголовков — там они шумят, а не организуют.
+    """
+    if len(items) < HEADER_THRESHOLD:
+        return items
+    titles = dict(GROUPS)
+    out: list[dict] = []
+    last = None
+    for c in items:
+        g = c.get("group", "")
+        if g != last:
+            last = g
+            title = titles.get(g)
+            # Команды без группы (экранные инструменты вроде /view) идут
+            # в хвосте без плашки: заголовок «пусто» хуже отсутствия.
+            if title:
+                out.append({"name": "", "arg": "", "help": title,
+                            "kind": "header"})
+        out.append(c)
+    return out
+
+
 def items_for(buf: str, commands: list[dict]) -> list[dict]:
     """Пункты палитры для текущего буфера. Пусто — режим слеша закрыт."""
     parsed = parse_slash(buf)
@@ -76,7 +120,7 @@ def items_for(buf: str, commands: list[dict]) -> list[dict]:
     name, arg, rest = parsed
     if " " not in rest:
         hits = command_hits(commands, name)
-        return [{**c, "kind": "cmd"} for c in hits]
+        return _with_headers([{**c, "kind": "cmd"} for c in hits])
     return arg_hits(name, arg)
 
 

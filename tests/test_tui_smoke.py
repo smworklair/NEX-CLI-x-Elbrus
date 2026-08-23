@@ -74,6 +74,9 @@ class TestScreensMount(unittest.TestCase):
     def test_mind(self):
         self._mounts("mind", "AgentScreen")
 
+    def test_code(self):
+        self._mounts("code", "CodeScreen")
+
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestPickerNavigation(unittest.TestCase):
@@ -1003,6 +1006,77 @@ class TestEscapeIsOneStepBack(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestGridKeyboardTools(unittest.TestCase):
+    """Развёрнутая решётка управляется клавишами, а не строкой кнопок.
+
+    Строка «тегов» над расписанием режется по краям и дублирует подсказки.
+    Вместо неё: клавиши при фокусе решётки + правая колонка-инспектор,
+    где список клавиш и состояние слоёв видно всегда.
+    """
+
+    def _screen(self, body):
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(app.screen, pilot)
+
+        return asyncio.run(go())
+
+    def _maximize_grid(self, sc):
+        from vliw.tui.screens.lab_screen import ScheduleGrid
+        from vliw.tui.widgets import Panel
+
+        panel = sc.query_one("#p-grid", Panel)
+        sc.maximize(panel, container=False)
+        panel.post_message(Panel.Expanded(panel))
+        sc.query_one("#grid", ScheduleGrid).focus()
+
+    def test_side_inspector_is_drawn(self) -> None:
+        """Правая колонка не пустует: курсор и клавиши заполнены."""
+        from textual.widgets import Static
+
+        async def body(sc, pilot):
+            self._maximize_grid(sc)
+            for _ in range(4):
+                await pilot.pause(0.05)
+            cursor = sc.query_one("#side-cursor", Static).content.plain
+            legend = sc.query_one("#side-legend", Static).content.plain
+            return cursor, legend
+
+        cursor, legend = self._screen(body)
+        self.assertTrue(cursor.strip(), "инспектор курса пуст")
+        self.assertIn("n / N", legend, "в легенде нет списка клавиш")
+
+    def test_tool_keys_act_on_focused_grid(self) -> None:
+        """v/z/[ ] — инструменты прямо с клавиатуры; фокус остаётся в решётке."""
+
+        async def body(sc, pilot):
+            self._maximize_grid(sc)
+            for _ in range(3):
+                await pilot.pause(0.05)
+            before = sc.view
+            await pilot.press("v")
+            await pilot.pause()
+            after = sc.view
+            await pilot.press("z")
+            await pilot.pause()
+            deps_on = sc._deps_on
+            from vliw.tui.screens.lab_screen import ScheduleGrid
+
+            focused = sc.focused is sc.query_one("#grid", ScheduleGrid) \
+                or sc.query_one("#grid", ScheduleGrid).has_focus
+            return before, after, deps_on, focused
+
+        before, after, deps_on, focused = self._screen(body)
+        self.assertNotEqual(before, after, "v не переключил вид")
+        self.assertTrue(deps_on, "z не включил слой соседей")
+        self.assertTrue(focused, "фокус сбежал из решётки после инструмента")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestTerminalHasCommandCatalog(unittest.TestCase):
     """Развёрнутый ВЫВОД КОМАНД — терминал с каталогом, а не поле для слепого набора.
 
@@ -1114,3 +1188,185 @@ class TestTerminalHasCommandCatalog(unittest.TestCase):
         value, before, after = self._term(body)
         self.assertTrue(value.startswith("/run "))
         self.assertEqual(before, after, "клик не должен запускать команду")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCodeScreen(unittest.TestCase):
+    """КОД: редактор обязан ЗНАТЬ, что в нём написано.
+
+    Разница между этим режимом и текстовым полем с логом ровно в этом: буфер
+    разбирается на лету, расписание стоит в гуттере у своей строки, а `^R`
+    переписывает код по точному поиску. Каждая из трёх вещей и проверяется —
+    остальное (цвета, рамки) не сломается молча, а это сломается.
+    """
+
+    @staticmethod
+    def _screen(body, run=False):
+        """Поднять КОД, при желании прогнать буфер, отдать тело теста экрану."""
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    screen = app.screen
+                    if run:
+                        screen.action_run_code()
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        await pilot.pause()
+                    return await body(screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_buffer_is_parsed_without_running_anything(self):
+        """Разбор идёт при открытии: расписание видно до всякого F5."""
+        async def body(screen, pilot, session):
+            return (len(screen.parsed.ops),
+                    screen.comp.makespan,
+                    [p for p in screen.problems if p.severity == "error"])
+
+        ops, makespan, errors = self._screen(body)
+        self.assertGreater(ops, 0, "буфер по умолчанию не разобрался")
+        self.assertGreater(makespan, 0)
+        self.assertEqual(errors, [], "пример по умолчанию обязан быть законным")
+
+    def test_gutter_carries_the_schedule(self):
+        """У строки с операцией в гуттере стоит её такт, а не просто номер."""
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            op = screen.parsed.ops[0]
+            return edit._marks.get(op.line - 1), op.cycle
+
+        mark, cycle = self._screen(body)
+        self.assertIsNotNone(mark, "у первой операции нет метки расписания")
+        self.assertIn(f"т{cycle}", mark[0])
+
+    def test_typing_reaches_the_buffer(self):
+        """Буквы обязаны печататься — это редактор, а не витрина.
+
+        Тест дословный, потому что поломка была ровно такая: перехваченный
+        `TextArea._on_key` объявлен `async`, обычное переопределение
+        проглатывало корутину родителя, и редактор молча переставал
+        принимать ввод. Ни один тест «экран поднялся» этого не видит.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.focus()
+            edit.move_cursor(edit.document.end)
+            await pilot.press("a", "d", "d", "s")
+            await pilot.pause()
+            return edit.text.rstrip()
+
+        self.assertTrue(self._screen(body).endswith("adds"))
+
+    def test_cursor_move_redraws_the_line_panel(self):
+        """Переезд курсора разбирает НОВУЮ строку, а не держит старую."""
+        async def body(screen, pilot, session):
+            op = screen.parsed.ops[2]
+            screen.query_one("#code-edit").goto_line(op.line)
+            await pilot.pause()
+            await pilot.pause()
+            info = screen.query_one("#code-line-info").content
+            return op.line, str(info)
+
+        line, info = self._screen(body)
+        self.assertIn(f"СТРОКА {line}", info)
+        self.assertIn("латентность", info)
+
+    def test_run_fills_the_oracle_and_the_moves(self):
+        """F5 доводит до конца: точный поиск, находки и список перестановок."""
+        async def body(screen, pilot, session):
+            return (screen.orc is not None, len(screen._moves()),
+                    screen.comp.makespan,
+                    screen.orc.schedule.makespan if screen.orc else None)
+
+        have, moves, src, orc = self._screen(body, run=True)
+        self.assertTrue(have, "после F5 нет результата точного поиска")
+        self.assertLess(orc, src, "пример обязан иметь резерв")
+        self.assertGreater(moves, 0, "нечего переставлять — список пуст")
+
+    def test_rewrite_produces_a_buffer_that_matches_the_oracle(self):
+        """^R пишет код, а не совет: переписанный буфер обязан пере-разбираться.
+
+        Самая дорогая ошибка этого действия — выдать текст, который сам себя
+        не читает (потерянный `nop`, канал не из матрицы). Поэтому проверка
+        сквозная: переписали → разобрали заново → длина совпала с той, что
+        обещал точный поиск, и ни одной ошибки линтера.
+        """
+        async def body(screen, pilot, session):
+            promised = screen.orc.schedule.makespan
+            # Именно клавишей: F5/F6 приоритетные, и проверить их стоит на
+            # том же фокусе, что у человека, — курсор стоит в редакторе, а
+            # TextArea забирает себе почти все нажатия.
+            screen.query_one("#code-edit").focus()
+            await pilot.press("f6")
+            await pilot.pause()
+            await pilot.pause()
+            return (promised, screen.comp.makespan if screen.comp else None,
+                    [p.text for p in screen.problems if p.severity == "error"],
+                    screen.query_one("#code-edit").text)
+
+        promised, got, errors, text = self._screen(body, run=True)
+        self.assertEqual(errors, [], "переписанный буфер обязан быть законным")
+        self.assertEqual(got, promised,
+                         "переписали не в то расписание, которое обещали")
+        self.assertIn("muls,", text)
+
+    def test_editing_marks_the_search_result_as_stale(self):
+        """Правка буфера обязана обесценить прошлые числа, а не молчать."""
+        async def body(screen, pilot, session):
+            before = screen._stale()
+            edit = screen.query_one("#code-edit")
+            edit.text = edit.text + "{\n  adds,0 %r90, %r91, %r92\n}\n"
+            screen.reparse()
+            await pilot.pause()
+            return before, screen._stale()
+
+        before, after = self._screen(body, run=True)
+        self.assertFalse(before, "сразу после прогона числа свежие")
+        self.assertTrue(after, "после правки числа относятся к другому тексту")
+
+    def test_clicking_a_problem_moves_the_cursor_to_its_line(self):
+        """Замечание — ссылка: клик ведёт курсор на ту самую строку."""
+        from vliw.tui.screens.code_screen import LintItem, SEED_BROKEN
+
+        async def body(screen, pilot, session):
+            screen.panel_tool("code-broken")
+            await pilot.pause()
+            await pilot.pause()
+            items = list(screen.query(LintItem))
+            target = next(i for i in items if i.line)
+            target.post_message(LintItem.Picked(target.line))
+            await pilot.pause()
+            await pilot.pause()
+            return target.line, screen.query_one("#code-edit").cursor_location[0] + 1
+
+        line, cursor = self._screen(body)
+        self.assertEqual(cursor, line)
+
+    def test_buffer_where_nothing_parsed_still_says_so(self):
+        """Буфер, в котором не разобралась ни одна строка, — не «всё хорошо».
+
+        Самый частый первый опыт: человек вставил не то или набрал по памяти.
+        Замечания разбора обязаны показываться и тогда, когда операций ноль,
+        иначе экран молча выглядит как чистый.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.text = "{\n  ??? какой-то текст\n}\n"
+            screen.reparse()
+            await pilot.pause()
+            return [(p.line, p.kind) for p in screen.problems]
+
+        self.assertEqual(self._screen(body), [(2, "parse")])
+
+    def test_broken_example_is_actually_caught(self):
+        """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""
+        async def body(screen, pilot, session):
+            screen.panel_tool("code-broken")
+            await pilot.pause()
+            await pilot.pause()
+            return sorted({p.kind for p in screen.problems
+                           if p.severity == "error"})
+
+        self.assertEqual(self._screen(body), ["busy", "channel", "ready"])

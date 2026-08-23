@@ -60,7 +60,7 @@ SURFACES = {
     "shadow":  "#080a10",   # подложка дока ввода
 }
 
-MODE_ROLE = {"work": "work", "lab": "lab", "mind": "mind"}
+MODE_ROLE = {"work": "work", "lab": "lab", "mind": "mind", "code": "accent2"}
 
 
 def role_hex(role: str, fallback: str = "#c8ccd4") -> str:

@@ -10,7 +10,8 @@
   schedule_view.py  пачки-рамки, вердикт, границы, критический путь, разбор
   context.py        контекст сессии (она же /status)
   panes.py          три панели workstation: ядро / разбор / агент
-  tui.py            полноэкранный workstation (curses)
+
+Полноэкранный интерфейс живёт в отдельном пакете `vliw.tui` (Textual).
 """
 
 from . import context, logo, panes, render, schedule_view, tables, theme

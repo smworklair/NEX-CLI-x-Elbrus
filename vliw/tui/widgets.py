@@ -525,7 +525,12 @@ class ConsoleJournal(Horizontal):
 
 
 class Palette(OptionList):
-    """Список команд под курсором ввода. Открыт, пока строка начинается с «/»."""
+    """Список команд под курсором ввода. Открыт, пока строка начинается с «/».
+
+    Пункты бывают двух видов: команды (kind="cmd") и заголовки групп
+    (kind="header"). Заголовок — оформление, не выбор: стрелки его
+    перепрыгивают, Enter/Tab видят только команды.
+    """
 
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
@@ -542,27 +547,53 @@ class Palette(OptionList):
             return
         key = palette.role_hex("accent")
         dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
         val = palette.role_hex("text")
         for it in items:
+            if it.get("kind") == "header":
+                row = Text()
+                row.append(" ─ ", style=faint)
+                row.append(it.get("help") or "", style=f"{dim} bold")
+                self.add_option(Option(row, disabled=True))
+                continue
             row = Text()
             name = it["name"] if it.get("kind") == "arg" else "/" + it["name"]
             row.append(f" {name:<14}", style=f"{key} bold")
             row.append(f"{(it.get('arg') or ''):<14}", style=val)
             row.append(it.get("help") or "", style=dim)
             self.add_option(Option(row))
-        self.highlighted = 0
+        self.highlighted = self._first_cmd()
+
+    # --- индексация с учётом заголовков ------------------------------------
+
+    def _is_header(self, index: int) -> bool:
+        return (0 <= index < len(self.items)
+                and self.items[index].get("kind") == "header")
+
+    def _first_cmd(self) -> int | None:
+        for i, it in enumerate(self.items):
+            if it.get("kind") != "header":
+                return i
+        return None
 
     @property
     def selected(self) -> dict | None:
         if not self.items or self.highlighted is None:
             return None
-        return self.items[min(self.highlighted, len(self.items) - 1)]
+        i = min(self.highlighted, len(self.items) - 1)
+        while i >= 0 and self._is_header(i):
+            i -= 1
+        return self.items[i] if i >= 0 else None
 
     def step(self, delta: int) -> None:
         if not self.items:
             return
-        cur = self.highlighted or 0
-        self.highlighted = max(0, min(len(self.items) - 1, cur + delta))
+        cur = self.highlighted if self.highlighted is not None else -1
+        nxt = cur + delta
+        while 0 <= nxt < len(self.items) and self._is_header(nxt):
+            nxt += delta
+        if 0 <= nxt < len(self.items):
+            self.highlighted = nxt
 
 
 # --------------------------------------------------------------------------
@@ -571,7 +602,12 @@ class Palette(OptionList):
 
 
 class NexInput(Input):
-    """Поле ввода: цифры остаются цифрами, стрелки — истории и палитре."""
+    """Поле ввода: цифры остаются цифрами, стрелки — истории и палитре.
+
+    Многострочная вставка (bracketed paste) сюда не вставляется: поле одно-
+    строчное, и многострочный текст в нём ломался бы. Вместо этого текст
+    целиком уезжает в буфер КОДА (см. ModeScreen.on_nex_input_pasted).
+    """
 
     BINDINGS = [
         Binding("up", "nex_up", "", show=False),
@@ -585,6 +621,13 @@ class NexInput(Input):
             super().__init__()
             self.action = action
 
+    class Pasted(Message):
+        """В поле вставили многострочный текст — он теперь в буфере КОДА."""
+
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
     def action_nex_up(self) -> None:
         self.post_message(self.Nav("up"))
 
@@ -596,6 +639,15 @@ class NexInput(Input):
 
     def action_nex_escape(self) -> None:
         self.post_message(self.Nav("escape"))
+
+    def _on_paste(self, event) -> None:
+        text = event.text or ""
+        if "\n" in text.strip():
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Pasted(text))
+            return
+        self.insert_text_at_cursor(text)
 
 
 class PromptBar(Vertical):
@@ -774,6 +826,66 @@ class Chip(Static):
 
     def on_click(self) -> None:
         self.post_message(self.Picked(self.value))
+
+
+class Tool(Static):
+    """Кнопка на панели инструментов развёрнутой панели.
+
+    Отличие от Chip принципиальное: чип ПОДСТАВЛЯЕТ текст в строку ввода
+    (это подсказка «что можно набрать»), инструмент СРАЗУ выполняет действие.
+    Разворачивают панель, чтобы работать в ней — и инструменты у неё должны
+    работать в один клик, а не через подстановку и Enter.
+    """
+
+    class Picked(Message):
+        def __init__(self, tool: str) -> None:
+            super().__init__()
+            self.tool = tool
+
+    def __init__(self, label: str, tool: str, tooltip: str = "", **kw) -> None:
+        super().__init__(label, **kw)
+        self.tool = tool
+        if tooltip:
+            self.tooltip = tooltip
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.tool))
+
+    def set_on(self, on: bool) -> None:
+        """Пометка-состояние для тумблеров (включён/выключен)."""
+        self.set_class(on, "tool-on")
+
+
+class PanelToolbar(Horizontal):
+    """Панель инструментов развёрнутой панели — то, чего ей не хватало.
+
+    Долгое время разворот был «той же панелью крупнее»: контент растягивался,
+    а инструменты оставались внизу экрана, в общем доке. Теперь каждый
+    развёрнутый блок несёт СВОИ инструменты первой строкой: навигацию,
+    тумблеры, переходы в связные панели.
+
+    Видимость ведёт CSS, а не код: в обычном виде полоса display:none и не
+    отнимает ни строки у решётки; у Panel.-maximized показывается. Экрану
+    остаётся только отвечать на Tool.Picked — см. ModeScreen.panel_tool().
+    """
+
+    def __init__(self, *tools: tuple[str, str, str], **kw) -> None:
+        super().__init__(**kw)
+        # Каждый элемент — (надпись, идентификатор действия, всплывающая
+        # подсказка). Кортежи, а не готовые Tool: compose() вызывается позже
+        # конструктора, и виджеты нельзя создавать до монтирования в него.
+        self._tools = tools
+
+    def compose(self):
+        for label, tool, tip in self._tools:
+            yield Tool(label, tool, tip)
+
+    def mark(self, tool: str, on: bool) -> None:
+        """Отметить тумблер включённым. Неизвестный id молча пропускается."""
+        for t in self.query(Tool):
+            if t.tool == tool:
+                t.set_on(on)
 
 
 class HintBar(Static):

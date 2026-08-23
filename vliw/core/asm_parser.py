@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, field
 
@@ -78,6 +79,32 @@ class AsmOp:
     cycle: int              # такт выдачи по расписанию компилятора
     text: str
     known: bool = True
+    line: int = 0
+    """Номер строки в исходнике, 1-based.
+
+    Нужен редактору КОДА: он ставит расписание НА текст (такт и канал в
+    гуттере той самой строки) и водит курсор от находки к строке. Без этого
+    операция и её строка связаны только порядком, а порядок ломает первый
+    же пропуск нераспознанной строки.
+    """
+
+
+@dataclass
+class AsmProblem:
+    """Замечание к строке исходника.
+
+    Разбор и раньше считал, сколько строк не понял и сколько мнемоник не
+    знает, — но только ЧИСЛОМ в отчёте («пропущено строк: 3»). Найти эти
+    строки человек мог лишь глазами. Замечание держит номер строки, поэтому
+    редактор ставит метку прямо на неё, а клик по списку ведёт курсор.
+    """
+
+    line: int
+    kind: str              # parse | mnemonic | channel | busy | free
+    severity: str          # error | warn | info
+    text: str
+    hint: str = ""
+    op: int = -1           # индекс операции, если замечание про операцию
 
 
 @dataclass
@@ -90,6 +117,8 @@ class ParsedAsm:
     skipped_lines: int = 0
     unknown_mnemonics: dict[str, int] = field(default_factory=dict)
     source: str = ""
+    problems: list[AsmProblem] = field(default_factory=list)
+    """Что разбор не понял — с номерами строк, а не только счётчиком."""
 
     @property
     def compiler_cycles(self) -> int:
@@ -113,7 +142,7 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
     in_bundle = False
     pending_nop = 0
 
-    for raw in text.splitlines():
+    for lineno, raw in enumerate(text.splitlines(), 1):
         line = _COMMENT.sub("", raw).strip()
         if not line:
             continue
@@ -145,6 +174,10 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
         m = _OP.match(line)
         if not m:
             res.skipped_lines += 1
+            res.problems.append(AsmProblem(
+                line=lineno, kind="parse", severity="warn",
+                text="строку не разобрать — в граф она не попала",
+                hint="ждём операцию вида `adds,0 %r1, %r2, %r3`"))
             continue
 
         mn = m.group("mn").lower()
@@ -156,6 +189,13 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
         if not known:
             op_class = "ADD"      # считаем простой арифметикой, но помечаем
             res.unknown_mnemonics[mn] = res.unknown_mnemonics.get(mn, 0) + 1
+            near = difflib.get_close_matches(mn, MNEMONICS, n=3, cutoff=0.72)
+            res.problems.append(AsmProblem(
+                line=lineno, kind="mnemonic", severity="warn", op=len(res.ops),
+                text=f"мнемоника `{mn}` незнакомая — считаю как арифметику "
+                     f"(латентность 1, любой канал)",
+                hint=("может быть: " + "  ".join(near)) if near else
+                     "список известных — в MNEMONICS (core/asm_parser.py)"))
 
         args = (m.group("args") or "").strip()
         regs = _REG.findall(args)
@@ -168,7 +208,7 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
             channel=int(chan) if chan is not None else None,
             dst=dst, srcs=srcs,
             bundle=max(0, bundle), cycle=cycle,
-            text=line, known=known,
+            text=line, known=known, line=lineno,
         ))
 
     res.bundles = bundle + 1
@@ -237,6 +277,103 @@ def compiler_schedule(parsed: ParsedAsm, dag: DAG, model: MachineModel) -> Sched
             used[(o.cycle + k, port)] = o.index
         sched.place(o.index, o.cycle, port)
     return sched
+
+
+def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
+    """Проверить разобранный исходник по модели машины.
+
+    Разбор отвечает на вопрос «что здесь написано», линтер — на вопрос
+    «может ли машина это исполнить так, как написано». Три вещи, на которых
+    рукописный e2k-ассемблер ломается чаще всего, и все три проверяются
+    ИЗМЕРЕННЫМИ числами из `model.py`, а не догадкой:
+
+      1. канал не тот — `muls,2` ассемблер отвергает («cannot be encoded in
+         ALC2»), потому что умножение живёт на `,0 ,1 ,3 ,4`;
+      2. порт уже занят — деление держит `,5` два такта, и второе деление
+         в следующем такте физически не примут;
+      3. результат ещё не готов — латентность деления 11 тактов, и чтение
+         его приёмника через такт читает старое значение.
+
+    Третья ошибка самая злая: она не мешает ни ассемблеру, ни нашему
+    разбору — код собирается и «работает», просто считает не то. Поэтому
+    замечание несёт номер такта, в котором значение будет готово.
+
+    Возвращает список замечаний, отсортированный по строке; замечания
+    разбора (`parsed.problems`) сюда НЕ входят — они уже есть у разбора.
+    """
+    out: list[AsmProblem] = []
+    if not parsed.ops:
+        return out
+
+    # 1. Канал против матрицы портов.
+    for o in parsed.ops:
+        if o.channel is None:
+            continue
+        allowed = model.channels_for(o.op)
+        if allowed and o.channel not in allowed:
+            names = " ".join(model.port_label(p) for p in allowed)
+            out.append(AsmProblem(
+                line=o.line, kind="channel", severity="error", op=o.index,
+                text=f"{o.mnemonic} в канале ,{o.channel} — этого канала у "
+                     f"операции нет",
+                hint=f"{o.op} исполним на: {names}"))
+
+    # 2. Порт занят. Считаем ровно так же, как compiler_schedule: операция с
+    #    occupancy > 1 держит клетку и в следующих тактах.
+    held: dict[tuple[int, int], AsmOp] = {}
+    for o in parsed.ops:
+        ports = model.channels_for(o.op)
+        port = o.channel if (o.channel is not None and o.channel in ports) else None
+        if port is None:
+            port = next((p for p in ports if (o.cycle, p) not in held), None)
+        if port is None:
+            continue
+        occ = model.occupancy(o.op)
+        prev = held.get((o.cycle, port))
+        if prev is not None:
+            same = prev.cycle == o.cycle
+            free_at = prev.cycle + model.occupancy(prev.op)
+            out.append(AsmProblem(
+                line=o.line, kind="busy", severity="error", op=o.index,
+                text=(f"канал ,{port} в такте {o.cycle} уже занят: "
+                      + (f"{prev.mnemonic} из строки {prev.line}" if same else
+                         f"{prev.mnemonic} из строки {prev.line} держит порт "
+                         f"{model.occupancy(prev.op)} т.")),
+                hint=f"порт освободится в такте {free_at}"))
+        for k in range(occ):
+            held.setdefault((o.cycle + k, port), o)
+
+    # 3. Результат ещё не готов: чтение раньше латентности.
+    last_writer: dict[str, AsmOp] = {}
+    for o in parsed.ops:
+        for src in o.srcs:
+            w = last_writer.get(src)
+            if w is None:
+                continue
+            ready = w.cycle + model.latency(w.op)
+            if o.cycle < ready:
+                out.append(AsmProblem(
+                    line=o.line, kind="ready", severity="error", op=o.index,
+                    text=f"%{src} читается в такте {o.cycle}, а {w.mnemonic} "
+                         f"из строки {w.line} отдаст его только в такте {ready}",
+                    hint=f"латентность {w.op} — {model.latency(w.op)} т.; "
+                         f"нужен разрыв в {ready - w.cycle} т."))
+        if o.dst:
+            last_writer[o.dst] = o
+
+    # 4. Каналы вообще не проставлены: расписание компилятора мы тогда не
+    #    восстанавливаем, а раскладываем сами — и это надо сказать вслух,
+    #    иначе «18 тактов у lcc» выглядит как замер, хотя это наша догадка.
+    free = [o for o in parsed.ops if o.channel is None]
+    if free:
+        out.append(AsmProblem(
+            line=free[0].line, kind="free", severity="info", op=free[0].index,
+            text=f"{len(free)} из {len(parsed.ops)} операций без канала — "
+                 f"раскладку по портам домысливаем",
+            hint="в выводе lcc канал есть всегда: `adds,0 …`"))
+
+    out.sort(key=lambda p: (p.line, p.kind))
+    return out
 
 
 def parse_file(path: str) -> ParsedAsm:

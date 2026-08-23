@@ -19,7 +19,7 @@ from textual.screen import Screen
 
 from .. import palette
 from ..widgets import (Console, HintBar, Panel, PanelChat, PanelPrompt,
-                       PromptBar, TopBar)
+                        PromptBar, Tool, TopBar)
 
 
 class ModeScreen(Screen):
@@ -225,6 +225,43 @@ class ModeScreen(Screen):
         bar.focus_input()
         bar.history.append(event.value)
         self.handle_line(event.value)
+
+    def on_nex_input_pasted(self, event) -> None:
+        """Многострочную вставку поле ввода не рвёт построчно, а отдаёт
+        целиком — в буфер КОДА. Из любого режима: вставил — F5 в КОДЕ.
+        """
+        event.stop()
+        self.app.session.code_text = event.text
+        lines = [l for l in event.text.splitlines() if l.strip()]
+        con = self.console
+        if con is not None:
+            con.note(f"  вставлено {len(lines)} "
+                     f"строк → буфер КОДА   ·   режим КОД (клавиша 4) — "
+                     "редактор, /code run — прогнать", "warning")
+
+    # --- инструменты развёрнутой панели ------------------------------------
+
+    def on_tool_picked(self, event: Tool.Picked) -> None:
+        """Клик по инструменту развёрнутой панели — действие сразу.
+
+        Инструмент, в отличие от чипа, не подставляет команду в строку ввода:
+        панель разворачивают, чтобы работать в ней, и её кнопки обязаны
+        работать без обходного пути через док внизу экрана.
+        """
+        event.stop()
+        self.panel_tool(event.tool)
+
+    def panel_tool(self, tool: str) -> None:
+        """Действие инструмента развёрнутой панели. Переопределяется экраном.
+
+        Базовая реализация знает только один вид инструментов — команду со
+        слэшем; всё остальное (навигация курсором, тумблеры отрисовки,
+        переходы между панелями) — дело конкретного экрана.
+        """
+        if tool.startswith("/"):
+            self.handle_line(tool)
+        else:
+            self.app.bell()
 
     # --- Esc: один шаг назад ----------------------------------------------
 

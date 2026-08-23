@@ -26,7 +26,7 @@ from textual.widgets import Static
 from ...core import InterpError, kernel_help
 from ...core.interp import MEM_SIZE
 from .. import palette
-from ..widgets import Chip, Console, Panel, PromptBar, plural
+from ..widgets import Chip, Console, Panel, PanelToolbar, PromptBar, plural
 from .base import ModeScreen
 
 MEM_ROWS = 5
@@ -87,10 +87,22 @@ class CoreScreen(ModeScreen):
     def compose_body(self):
         with Horizontal(id="core-body"):
             with Vertical(id="core-left"):
-                yield Panel(Console(id="console"),
-                            VerticalScroll(Static(id="tape-full"),
-                                           id="tape-wide"),
-                            title="ЛЕНТА", id="p-tape", topic="tape")
+                yield Panel(
+                    # Развёрнутая ЛЕНТА — рабочий терминал интерпретатора:
+                    # глаголы под рукой, а не «где-то в соседней панели».
+                    PanelToolbar(
+                        ("names", "verb-names", "показать имена и значения"),
+                        ("mem", "verb-mem", "показать память"),
+                        ("list", "verb-list", "показать накопленный граф"),
+                        ("go", "verb-go",
+                         "отдать граф в разбор и посчитать"),
+                        ("reset", "verb-reset",
+                         "очистить имена и память"),
+                    ),
+                    Console(id="console"),
+                    VerticalScroll(Static(id="tape-full"),
+                                   id="tape-wide"),
+                    title="ЛЕНТА", id="p-tape", topic="tape")
                 yield Panel(
                     Horizontal(id="kernel-chips"),
                     Horizontal(id="verb-chips"),
@@ -108,10 +120,30 @@ class CoreScreen(ModeScreen):
                                      Static(id="mem-foot"),
                                      id="mem-wide"),
                             title="ПАМЯТЬ", id="p-mem", topic="memory")
-                yield Panel(VerticalScroll(Static(id="program")),
-                            VerticalScroll(Static(id="prog-tiers"),
-                                           id="prog-wide"),
-                            title="ПРОГРАММА", id="p-prog", topic="program")
+                yield Panel(
+                    PanelToolbar(
+                        ("go", "verb-go", "отдать граф в разбор и посчитать"),
+                        ("list", "verb-list", "показать накопленный граф"),
+                    ),
+                    VerticalScroll(Static(id="program")),
+                    VerticalScroll(Static(id="prog-tiers"),
+                                   id="prog-wide"),
+                    title="ПРОГРАММА", id="p-prog", topic="program")
+
+    def panel_tool(self, tool: str) -> None:
+        """Инструменты развёрнутых панелей ЯДРА — глаголы интерпретатора.
+
+        Это НЕ slash-команды: обычная строка здесь и есть запись в ленту,
+        и инструменты идут тем же путём `_exec_interp`, что и набранное.
+        Вывод виден сразу — консоль лежит внутри той же ЛЕНТЫ.
+        """
+        verbs = {"verb-names": "names", "verb-mem": "mem",
+                 "verb-list": "list", "verb-go": "go",
+                 "verb-reset": "reset"}
+        if tool in verbs:
+            self._exec_interp(verbs[tool])
+            return
+        super().panel_tool(tool)
 
     def on_ready(self) -> None:
         self._fill_chips()

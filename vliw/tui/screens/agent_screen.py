@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 from rich.text import Text
+from textual.binding import Binding
 from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.widgets import Static
 
 from .. import palette
-from ..widgets import Chip, Console, ConsoleJournal, Panel, plural
+from ..widgets import Chip, Console, ConsoleJournal, Panel, PanelToolbar, plural
 from .base import ModeScreen
 
 QUESTIONS = [
@@ -70,7 +71,10 @@ class AgentScreen(ModeScreen):
             with Vertical(id="mind-left"):
                 # Развёрнутый ДИАЛОГ — рабочая область с историей слева
                 # (заполняется кодом при развороте, как слои у других панелей),
-                # а не та же лента в большем размере.
+                # а не та же лента в большем размере. Кнопок над лентой нет
+                # намеренно: очистка и повтор живут на ^L/^R, как в журнале
+                # команд, — полоса инструментов над разговором читалась бы
+                # как чужая панель и залезала на текст.
                 with Panel(title="ДИАЛОГ", id="p-chat", topic="chat"):
                     with Horizontal(id="chat-body"):
                         yield Vertical(VerticalScroll(id="chat-hist"),
@@ -87,11 +91,59 @@ class AgentScreen(ModeScreen):
                             VerticalScroll(Static(id="trace-full"),
                                            id="trace-wide"),
                             title="ТРАССА", id="p-trace", topic="trace")
-                yield Panel(Console(id="console"),
-                            ConsoleJournal(id="journal"),
-                            title="ВЫВОД КОМАНД",
-                            id="p-mind-console", topic="console",
-                            has_own_input=True)
+                yield Panel(
+                    PanelToolbar(
+                        ("↻ повторить", "journal-repeat",
+                         "прогнать выбранный запуск заново (^R)"),
+                        ("очистить", "journal-wipe",
+                         "стереть журнал запусков (^L)"),
+                        ("диалог ▶", "open-chat", "развернуть ДИАЛОГ"),
+                    ),
+                    Console(id="console"),
+                    ConsoleJournal(id="journal"),
+                    title="ВЫВОД КОМАНД",
+                    id="p-mind-console", topic="console",
+                    has_own_input=True)
+
+    BINDINGS = ModeScreen.BINDINGS + [
+        # Клавиши развёрнутого ДИАЛОГА — тот же паттерн, что у журнала
+        # команд (^R повтор / ^L очистить), только действуют они здесь на
+        # разговор. Никаких кнопок над лентой: действие есть, шума нет.
+        Binding("ctrl+l", "dialog_clear", "очистить диалог", show=False),
+        Binding("ctrl+r", "dialog_repeat", "повторить вопрос", show=False),
+    ]
+
+    def action_dialog_clear(self) -> None:
+        """^L — стереть ленту диалога; история вопросов остаётся."""
+        if self._wide == "chat":
+            self.submit_line("/clear")
+
+    def action_dialog_repeat(self) -> None:
+        """^R — задать последний вопрос ещё раз (из истории или живой)."""
+        if self._wide != "chat":
+            return
+        q = self._last_q or (self._asked[-1]["q"] if self._asked else "")
+        if q:
+            import time as _time
+
+            self._t0 = _time.monotonic()
+            self.submit_line(q)
+
+    def panel_tool(self, tool: str) -> None:
+        """Инструменты развёрнутых панелей АГЕНТА.
+
+        Действия диалога живут на ^L/^R (см. BINDINGS), здесь остаётся
+        только журнал запусков.
+        """
+        if tool in ("journal-repeat", "journal-wipe"):
+            try:
+                journal = self.query_one("#journal", ConsoleJournal)
+            except Exception:
+                return
+            journal.action_repeat() if tool == "journal-repeat" \
+                else journal.action_wipe()
+            return
+        super().panel_tool(tool)
 
     def on_ready(self) -> None:
         grid = self.query_one("#question-chips", ItemGrid)

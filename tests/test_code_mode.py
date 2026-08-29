@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from vliw.core import asm_parser
 from vliw.core.model import DEFAULT_PROFILE, get_profile
@@ -102,6 +103,59 @@ class TestLint(unittest.TestCase):
                          ["free"])
 
 
+class TestExampleCatalogue(unittest.TestCase):
+    """Примеры из `examples/code/*.s` обязаны говорить о себе правду.
+
+    В шапке каждого файла стоит строка `! nex: src=… orc=… err=…` — числа,
+    которые пример обещает показать. Пример живёт годами, модель машины и
+    планировщик меняются, и разъехаться эти числа могут молча: файл никто не
+    открывает, пока он не понадобился на демонстрации. Тест пересчитывает их
+    заново тем же кодом, что и режим КОД.
+    """
+
+    import re as _re
+
+    HEADER = _re.compile(r"!\s*nex:\s*src=(\S+)\s+orc=(\d+)\s+err=(\d+)")
+
+    def _files(self):
+        from vliw.tui.screens.code_screen import EXAMPLES, examples_dir
+
+        return [(name, examples_dir() / f"{name}.s") for name, _, _ in EXAMPLES]
+
+    def test_every_catalogue_entry_has_a_file(self) -> None:
+        for name, path in self._files():
+            self.assertTrue(path.exists(), f"{name}: нет файла {path}")
+
+    def test_headers_match_what_the_tool_computes(self) -> None:
+        from vliw.core.oracle import OracleScheduler
+
+        model = get_profile(DEFAULT_PROFILE)
+        for name, path in self._files():
+            with self.subTest(example=name):
+                text = path.read_text(encoding="utf-8")
+                m = self.HEADER.search(text)
+                self.assertIsNotNone(m, f"{name}: нет строки `! nex: …`")
+                want_src, want_orc, want_err = m.groups()
+
+                parsed = asm_parser.parse_asm(text, source=name)
+                dag = asm_parser.build_dag(parsed, key=f"asm:{name}")
+                sched = asm_parser.compiler_schedule(parsed, dag, model)
+                # То же правило, что в ядре: раскладка, которая не сходится с
+                # моделью, расписанием НЕ считается.
+                src = sched.makespan if sched and not sched.validate() else None
+                orc = OracleScheduler(budget_s=6.0,
+                                      portfolio_s=2.0).schedule(dag, model)
+                problems = list(parsed.problems) + asm_parser.lint(parsed, model)
+                errs = [p for p in problems if p.severity == "error"]
+
+                self.assertEqual(str(src if src is not None else "none"),
+                                 want_src, f"{name}: src разъехался")
+                self.assertEqual(orc.schedule.makespan, int(want_orc),
+                                 f"{name}: orc разъехался")
+                self.assertEqual(len(errs), int(want_err),
+                                 f"{name}: число ошибок разъехалось")
+
+
 class TestResultsFreshness(unittest.TestCase):
     """Правка буфера обязана менять числа, а не показывать прошлый прогон."""
 
@@ -129,3 +183,107 @@ class TestResultsFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRealCompilerOutput(unittest.TestCase):
+    """Разбор НАСТОЯЩЕГО вывода lcc, а не только калибровочных проб.
+
+    Все три проверяемые здесь вещи найдены одинаково: сравнением разбора с
+    выводом `lcc -O3` на обычной C-программе. На `examples/probes/*.s` ни
+    одна из них не проявляется — пробы слишком просты, — поэтому и прожили
+    незамеченными до первого настоящего файла.
+    """
+
+    def test_speculative_modifier_does_not_eat_the_line(self):
+        """`,sm` после канала не должен выбрасывать операцию целиком.
+
+        Компилятор помечает спекулятивные операции `merges,2,sm`. Прежний
+        шаблон ждал после канала пробел, строка не подходила под него
+        ЦЕЛИКОМ и молча пропадала: на обычном цикле так терялось 90 строк
+        из 182 — больше половины кода.
+        """
+        from vliw.core.asm_parser import parse_asm
+
+        src = "{\n  merges,2,sm\t0x1, %g17, %r9, %pred3\n  adds,0\t%r1, %r2, %r3\n}\n"
+        parsed = parse_asm(src)
+        self.assertEqual(len(parsed.ops), 2, "спекулятивная операция потерялась")
+        spec = parsed.ops[0]
+        self.assertEqual(spec.channel, 2, "канал перед модификатором не прочитан")
+        self.assertEqual(spec.flags, ("sm",), "модификатор не сохранён")
+        self.assertEqual(parsed.ops[1].flags, (), "обычной операции приписан флаг")
+
+    def test_unknown_mnemonic_is_not_passed_off_as_addition(self):
+        """Незнакомое с каналом — UNKNOWN, а не ADD.
+
+        Прежде класс подменялся на ADD (иначе `model.op()` бросал KeyError),
+        и `fdivd` уезжал в отчёт арифметикой с латентностью 1. Подмена была
+        не видна: в сводке она выглядела как «88% ADD».
+        """
+        from vliw.core.asm_parser import parse_asm
+
+        parsed = parse_asm("{\n  fdivd,5\t%dr1, %dr2, %dr3\n}\n")
+        self.assertEqual(len(parsed.ops), 1)
+        self.assertEqual(parsed.ops[0].op, "UNKNOWN")
+        self.assertFalse(parsed.ops[0].known)
+        self.assertEqual(parsed.unknown_mnemonics, {"fdivd": 1})
+
+    def test_unknown_without_channel_is_not_an_alc_operation(self):
+        """Незнакомое БЕЗ канала в граф вычислений не идёт.
+
+        В e2k всё, что исполняется на шести арифметических каналах, несёт
+        `,N`. Без него это предикатная логика (`landp`, `pass`) или
+        подготовка перехода (`ldisp`) — другой блок машины. Раньше такие
+        занимали арифметические порты, и восстановление расписания
+        компилятора падало на первом же из них.
+        """
+        from vliw.core.asm_parser import parse_asm
+
+        parsed = parse_asm("{\n  landp\t~%pred0, ~%pred1, %pred2\n"
+                           "  adds,0\t%r1, %r2, %r3\n}\n")
+        self.assertEqual([o.mnemonic for o in parsed.ops], ["adds"])
+        self.assertEqual(parsed.control_ops, 1)
+        self.assertIn("landp", parsed.unknown_mnemonics)
+
+    def test_setwd_and_friends_are_control_not_arithmetic(self):
+        """`setwd` объявляет окно регистров — это не вычисление."""
+        from vliw.core.asm_parser import parse_asm
+
+        parsed = parse_asm("{\n  setwd\twsz = 0xc, nfx = 0x1\n"
+                           "  adds,0\t%r1, %r2, %r3\n}\n")
+        self.assertEqual([o.mnemonic for o in parsed.ops], ["adds"])
+        self.assertEqual(parsed.control_ops, 1)
+        self.assertEqual(parsed.unknown_mnemonics, {},
+                         "управляющая операция не должна числиться незнакомой")
+
+    def test_model_answers_for_unknown_class(self):
+        """Модель обязана знать UNKNOWN во ВСЕХ профилях.
+
+        Иначе парсер не может честно сказать «не знаю»: `model.op()` бросит
+        KeyError и уронит всё, что ниже по цепочке. Ровно поэтому подмена на
+        ADD и появилась.
+        """
+        from vliw.core.model import PROFILES, get_profile
+
+        for name in PROFILES:
+            with self.subTest(профиль=name):
+                model = get_profile(name)
+                self.assertEqual(model.latency("UNKNOWN"), 1)
+                self.assertTrue(model.channels_for("UNKNOWN"),
+                                "без портов операцию некуда поставить")
+
+    def test_calibration_probes_still_parse(self):
+        """Пробы, на которых снята модель машины, разбираются без незнакомых.
+
+        Страховка от правок словаря: если из `MNEMONICS` пропадёт что-то
+        нужное, это увидится здесь, а не в отчёте по настоящему коду.
+        """
+        from vliw.core.asm_parser import parse_asm
+
+        root = Path(__file__).resolve().parent.parent / "examples" / "probes"
+        found = sorted(root.glob("*.s"))
+        self.assertTrue(found, "пробы не найдены — проверять нечего")
+        for path in found:
+            with self.subTest(проба=path.name):
+                parsed = parse_asm(path.read_text(encoding="utf-8"))
+                self.assertEqual(parsed.unknown_mnemonics, {})
+                self.assertTrue(parsed.ops)

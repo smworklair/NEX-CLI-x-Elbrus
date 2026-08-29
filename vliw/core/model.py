@@ -241,6 +241,18 @@ class MachineModel:
 # --------------------------------------------------------------------------
 
 _OPS: dict[str, OpClass] = {
+    # Операция, которой в словаре нет. Нужна, чтобы разбор настоящего `.s`
+    # мог СКАЗАТЬ «не знаю» вместо того, чтобы выдать чужую операцию за
+    # сложение. Прежде парсер подменял незнакомое на ADD (иначе `model.op()`
+    # бросал KeyError и падало всё ниже по цепочке) — и `fdivd` уезжал в
+    # отчёт как арифметика с латентностью 1.
+    #
+    # Числа здесь — ЗАГЛУШКА, а не измерение: латентность 1 и любой канал.
+    # Расписание, посчитанное по ним, физике не соответствует; смысл класса
+    # в том, что теперь это видно в каждом отчёте, а не спрятано под ADD.
+    # Чинится не подкруткой этих чисел, а пополнением MNEMONICS настоящими
+    # классами (плавающая точка, предикаты, SIMD) с замером портов.
+    "UNKNOWN": OpClass("UNKNOWN", latency=1, latency_source=ASSUMED),
     "ADD": OpClass("ADD", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "SUB": OpClass("SUB", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "AND": OpClass("AND", latency=1, latency_source=ASSUMED),
@@ -290,6 +302,7 @@ LOAD_PORTS = (0, 2, 3, 5)
 STORE_PORTS = (2, 5)
 
 _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
+    "UNKNOWN": _ALU_PORTS,          # заглушка: где стоит, там и считаем
     "ADD": _ALU_PORTS,
     "SUB": _ALU_PORTS,
     "AND": _ALU_PORTS,
@@ -388,7 +401,7 @@ _FIRSTPROBE_OPS: dict[str, OpClass] = dict(_OPS) | {
 
 
 def _firstprobe_ports() -> tuple[Port, ...]:
-    universal = {"ADD", "SUB", "AND", "SHL", "LOAD", "STORE"}
+    universal = {"UNKNOWN", "ADD", "SUB", "AND", "SHL", "LOAD", "STORE"}
     ports = []
     for idx in range(6):
         ops = set(universal)

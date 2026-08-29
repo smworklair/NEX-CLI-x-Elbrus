@@ -51,15 +51,48 @@ MNEMONICS: dict[str, str] = {
     "sars": "SHL", "sard": "SHL", "scls": "SHL", "scrs": "SHL",
     "ands": "AND", "andd": "AND", "ors": "AND", "ord": "AND",
     "xors": "AND", "xord": "AND", "andns": "AND",
-    "movts": "ADD", "movtd": "ADD", "adds_": "ADD",
+    # `sxt` — расширение знака, встречается в настоящем выводе lcc. Здесь
+    # раньше стоял `adds_`: такой мнемоники нет, ни в одной пробе и ни в
+    # одном скомпилированном файле она не встречается — опечатка с первого
+    # коммита, занимавшая место настоящей операции.
+    "movts": "ADD", "movtd": "ADD", "sxt": "ADD",
 }
 
 # `adds,0 %r1, %r2, %r3` — мнемоника, необязательный канал, операнды.
+CONTROL = {
+    "nop", "return", "ct", "ibranch", "call", "disp", "rbranch",
+    "setwd", "setbn", "setsft", "settr", "setmas", "setei",
+    "getsp", "getpl", "bap", "eap", "flushr", "flushc", "wait",
+    "ipd", "abn", "abp", "abg", "alc", "loop_mode", "pref", "landing",
+}
+"""Управляющие и настроечные операции — в графе ВЫЧИСЛЕНИЙ им не место.
+
+`setwd` объявляет окно регистров, `disp` готовит переход, `getsp` берёт
+указатель стека — они не считают и зависимостей по данным не создают.
+Раньше список был из шести имён, а всё остальное попадало в граф как
+арифметика: на настоящем `-O3` такие фантомы занимали чужие порты и
+восстановление расписания компилятора падало на первом же `setwd` в такте 0.
+Считаются отдельно (`ParsedAsm.control_ops`): спрятать их молча было бы
+враньём, посчитать сложением — тоже.
+"""
+
 _OP = re.compile(
     r"^\s*(?P<mn>[a-z][a-z0-9_]*)"      # мнемоника
     r"(?:,(?P<chan>\d+))?"              # канал: ,0 … ,5
+    r"(?P<flags>(?:,[a-z][a-z0-9]*)*)"  # модификаторы после канала: ,sm и др.
     r"(?:\s+(?P<args>.*?))?\s*$"
 )
+"""Команда широкой команды.
+
+МОДИФИКАТОРЫ. После канала компилятор ставит признаки исполнения — прежде
+всего `,sm` (speculative mode, спекулятивное исполнение). Раньше их не было
+в шаблоне, и такая строка не подходила под него ЦЕЛИКОМ: операция молча
+пропадала. На пробах это не проявлялось (в `examples/probes/*.s` ни одного
+`,sm`), а на настоящем `-O3` так теряется больше половины кода — 90 строк
+из 182 на обычном цикле. Модификаторы разбираются и сохраняются в
+`AsmOp.flags`: спекулятивная операция всё равно занимает канал и такт,
+поэтому в графе ей место, а признак может понадобиться позже.
+"""
 _NOP = re.compile(r"^\s*nop\s+(?P<n>\d+)\s*$", re.I)
 _REG = re.compile(r"%?\b([a-z]+\d+|[a-z]+\[\d+\])\b")
 _COMMENT = re.compile(r"(//|!|;).*$")
@@ -79,6 +112,8 @@ class AsmOp:
     cycle: int              # такт выдачи по расписанию компилятора
     text: str
     known: bool = True
+    flags: tuple[str, ...] = ()
+    """Модификаторы после канала: `("sm",)` у спекулятивной операции."""
     line: int = 0
     """Номер строки в исходнике, 1-based.
 
@@ -115,6 +150,8 @@ class ParsedAsm:
     bundles: int = 0
     nop_cycles: int = 0
     skipped_lines: int = 0
+    control_ops: int = 0
+    """Сколько управляющих операций пропущено (см. CONTROL)."""
     unknown_mnemonics: dict[str, int] = field(default_factory=dict)
     source: str = ""
     problems: list[AsmProblem] = field(default_factory=list)
@@ -181,13 +218,30 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
             continue
 
         mn = m.group("mn").lower()
-        if mn in ("nop", "return", "ct", "ibranch", "call", "disp"):
+        if mn in CONTROL:
+            res.control_ops += 1
             continue
+
+        chan = m.group("chan")
 
         op_class = MNEMONICS.get(mn)
         known = op_class is not None
         if not known:
-            op_class = "ADD"      # считаем простой арифметикой, но помечаем
+            # Незнакомая мнемоника БЕЗ канала — не операция ALC. В e2k всё,
+            # что исполняется на шести арифметических каналах, несёт `,N`;
+            # без него это предикатная логика (`landp`, `pass`), подготовка
+            # перехода (`ldisp`) или иной блок. Раньше такие попадали в граф
+            # сложением и занимали чужие порты — восстановление расписания
+            # компилятора падало на первом же из них. Считаем их вместе с
+            # управляющими и в граф вычислений не берём.
+            if chan is None:
+                res.control_ops += 1
+                res.unknown_mnemonics[mn] = res.unknown_mnemonics.get(mn, 0) + 1
+                continue
+            # С каналом — настоящая операция ALC, просто класс нам неизвестен.
+            # Раньше здесь стояло op_class = "ADD": чужая операция уезжала в
+            # отчёт сложением с латентностью 1, и `fdivd` считался как ADD.
+            op_class = "UNKNOWN"
             res.unknown_mnemonics[mn] = res.unknown_mnemonics.get(mn, 0) + 1
             near = difflib.get_close_matches(mn, MNEMONICS, n=3, cutoff=0.72)
             res.problems.append(AsmProblem(
@@ -202,13 +256,13 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
         dst = regs[-1] if regs else None
         srcs = tuple(regs[:-1]) if len(regs) > 1 else ()
 
-        chan = m.group("chan")
         res.ops.append(AsmOp(
             index=len(res.ops), mnemonic=mn, op=op_class,
             channel=int(chan) if chan is not None else None,
             dst=dst, srcs=srcs,
             bundle=max(0, bundle), cycle=cycle,
             text=line, known=known, line=lineno,
+            flags=tuple(f for f in (m.group("flags") or "").split(",") if f),
         ))
 
     res.bundles = bundle + 1

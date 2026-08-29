@@ -82,7 +82,7 @@ class ModeCard(Static):
 
     def redraw(self) -> None:
         m = self.meta
-        accent = palette.role_hex(palette.MODE_ROLE[m["id"]])
+        accent = palette.mode_hex(m["id"])
         dim = palette.role_hex("dim")
         faint = palette.role_hex("faint")
         title_color = palette.role_hex("title") if self.selected else dim
@@ -175,12 +175,12 @@ class PickerScreen(Screen):
         tag.append("   ·   ", style=palette.role_hex("faint"))
         tag.append(VERSION_LABEL, style=palette.role_hex("warning"))
         tag.append("\n")
-        tag.append("три инструмента — у каждого свой экран",
+        tag.append("четыре инструмента — у каждого свой экран",
                    style=palette.role_hex("dim"))
         self.query_one("#picker-tagline", Static).update(tag)
 
         hint = Text()
-        for key, label in (("↑↓ / 1 2 3", "выбрать"), ("Enter", "открыть"),
+        for key, label in (("↑↓ / 1-4", "выбрать"), ("Enter", "открыть"),
                            ("q", "выход")):
             hint.append(key, style=palette.role_hex("accent_soft"))
             hint.append(f" {label}    ", style=palette.role_hex("faint"))

@@ -131,6 +131,28 @@ def render_bench(res, adapter_name: str) -> list[str]:
             f"разрыв до оптимума среди законных: {sum(gaps) / len(gaps):.2f} т., "
             f"точно в оптимум {exact}/{len(gaps)}"))
 
+    bo = getattr(res, "best_of", None)
+    if bo is not None and any(r.samples for r in res.rows):
+        out.append("")
+        out.append("  " + paint("title",
+                                f"best-of: {bo.n} сэмплов, "
+                                f"temperature {bo.temperature:g}, seed {bo.seed}"))
+        out.append("  " + Style.dim("валиден = хотя бы один из первых k сэмплов"))
+        for k in range(1, bo.n + 1):
+            ok, total = res.best_of_valid(k)
+            if not total:
+                continue
+            colour = "success" if ok >= total / 2 else "warning"
+            bar = "█" * max(1, round(20 * ok / total))
+            out.append(f"    k={k:<2} валидно {paint(colour, f'{100 * ok / total:>4.0f}%')}"
+                       + Style.dim(f"  ({ok}/{total})  {bar}"))
+        sampled = sum(r.valid_samples for r in res.rows if r.samples)
+        n_s = sum(len(r.samples) for r in res.rows if r.samples)
+        if n_s:
+            out.append("  " + Style.dim(
+                f"валидных сэмплов всего: {sampled}/{n_s} "
+                f"({100 * sampled / n_s:.0f}%) — это и есть качество одного сэмпла"))
+
     split = res.split_store()
     out.append("")
     out.append("  " + paint("title", "разрез по наличию STORE в графе"))

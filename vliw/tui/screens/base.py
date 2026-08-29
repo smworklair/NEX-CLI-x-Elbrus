@@ -12,14 +12,15 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual import work
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
 
 from .. import palette
-from ..widgets import (Console, HintBar, Panel, PanelChat, PanelPrompt,
-                        PromptBar, Tool, TopBar)
+from ..widgets import (Console, ConsoleJournal, HintBar, Panel, PanelChat,
+                        PanelPrompt, PromptBar, Tool, TopBar)
 
 
 class ModeScreen(Screen):
@@ -78,12 +79,14 @@ class ModeScreen(Screen):
         """Раскладка режима. Переопределяется каждым экраном."""
         yield Vertical(id="body")
 
-    #: Что ещё видно, когда панель развёрнута. По умолчанию Textual прячет
-    #: ВСЕХ прямых детей экрана, кроме развёрнутого, — и чат по панели
-    #: исчезал вместе с ними. Строка ввода и подсказки остаются нарочно: без
-    #: них развёрнутая панель становится тупиком, из которого не видно, как
-    #: выйти и что вообще можно.
-    ALLOW_IN_MAXIMIZED_VIEW = "PanelChat, PanelPrompt, PromptBar, HintBar, Footer"
+    #: Что остаётся видимым, когда панель развёрнута. Textual по умолчанию
+    #: прячет ВСЕХ прямых детей экрана, кроме развёрнутого, — и чат по панели
+    #: исчезал вместе с ними. #dock назван ПОЛНОСТЬЮ: его дети (PromptBar,
+    #: HintBar) в списке есть, но родитель спрятанного контейнера не виден —
+    #: без этого «полный экран» съедал строку ввода и подсказки, и выходить
+    #: из разворота приходилось наугад.
+    ALLOW_IN_MAXIMIZED_VIEW = ("PanelChat, PanelPrompt, PromptBar, HintBar, "
+                               "Footer, #dock, TopBar")
 
     #: Textual сам перехватывает Esc ДО всех биндингов, когда что-то
     #: развёрнуто (`App._process_messages`: `escape_to_minimize` → сразу
@@ -254,14 +257,115 @@ class ModeScreen(Screen):
     def panel_tool(self, tool: str) -> None:
         """Действие инструмента развёрнутой панели. Переопределяется экраном.
 
-        Базовая реализация знает только один вид инструментов — команду со
-        слэшем; всё остальное (навигация курсором, тумблеры отрисовки,
-        переходы между панелями) — дело конкретного экрана.
+        Базовая реализация знает три вида инструментов: мостик журнала
+        («@lab»/«@agent»/«@work»/«@code» — отправить выбранный прогон в
+        другой режим), команду со слэшем; всё остальное (навигация
+        курсором, тумблеры отрисовки, переходы между панелями) — дело
+        конкретного экрана.
         """
-        if tool.startswith("/"):
+        if tool in ("@lab", "@agent", "@work", "@code"):
+            self._bridge_run(tool[1:])
+        elif tool == "@restore":
+            self._restore_run()
+        elif tool.startswith("/"):
             self.handle_line(tool)
         else:
             self.app.bell()
+
+    # --- мостик: прогон из журнала → другой режим ---------------------------
+
+    def _bridge_run(self, dest: str) -> None:
+        """Отправить выбранный в журнале прогон туда, куда решил человек.
+
+        Ничего не уезжает само: пока кнопка не нажата, прогон живёт только
+        в журнале. Какой прогон поедет — выбираешь кликом в ЗАПУСКАХ, и
+        подсветка строки показывает, кого тронет кнопка. Полная сетка:
+        из любого режима прогон доезжает до любого другого. «В разбор»
+        делает прогон текущим участком и открывает РАЗБОР; «в агента»
+        открывает АГЕНТА с готовым вопросом в строке; «в ядро» и «в код»
+        открывают верстак с пометкой о прогоне — а если у записи есть его
+        исходник (прогон буфера КОДА), «в код» кладёт исходник в буфер.
+        """
+        con = self.console
+        if con is None or not con.runs:
+            self.app.bell()
+            return
+        rec = con.runs[min(self._bridge_index(con), len(con.runs) - 1)]
+        if dest == "lab":
+            dag = rec.get("dag")
+            if dag is None:
+                self.app.bell()
+                return
+            self.app.session.set_dag(dag, rec.get("scenario") or "прогон")
+            self.app.open_mode("lab")
+        elif dest == "agent":
+            scenario = rec.get("scenario") or "—"
+            self.app.session.pending_question = (
+                f"прогон «{rec['cmd']}» на участке {scenario} — что он "
+                "показал и где здесь теряются такты?")
+            self.app.open_mode("mind")
+        elif dest == "work":
+            self.app.session.pending_note = (
+                f"из журнала: прогон «{rec['cmd']}» на участке "
+                f"{rec.get('scenario') or '—'}")
+            self.app.open_mode("work")
+        elif dest == "code":
+            src = rec.get("code")
+            if src:
+                # Исходник прогона существует только у прогонов буфера:
+                # им «в код» возвращает текст целиком, правь и F5 заново.
+                self.app.session.code_text = src
+                self.app.session.pending_note = (
+                    f"из журнала: исходник «{rec['cmd']}» — в буфере")
+            else:
+                self.app.session.pending_note = (
+                    f"из журнала: прогон «{rec['cmd']}» на участке "
+                    f"{rec.get('scenario') or '—'} — исходника у записи "
+                    "нет, буфер не тронут")
+            self.app.open_mode("code")
+
+    def _restore_run(self) -> None:
+        """«Вернуть» — checkout состояния выбранного прогона на месте.
+
+        Мостик перевозит прогон в другой режим; «вернуть» делает то же,
+        но без переезда: участок, граф и исходник сессии становятся такими,
+        какими были у этого прогона, а экран остаётся текущим. Это ответ
+        на «а что если вернуться к тому, что я считал десять минут назад» —
+        вопрос, ради которого в git существует log.
+        """
+        con = self.console
+        if con is None or not con.runs:
+            self.app.bell()
+            return
+        pos = min(self._bridge_index(con), len(con.runs) - 1)
+        rec = con.runs[pos]
+        dag = rec.get("dag")
+        code = rec.get("code")
+        if dag is None and code is None:
+            self.app.bell()
+            return
+        if dag is not None:
+            self.app.session.set_dag(dag, rec.get("scenario") or "прогон")
+        if code:
+            self.app.session.code_text = code
+        con.note(f"  состояние #{pos + 1} возвращено: "
+                 f"{rec.get('scenario') or '—'}"
+                 + (f"  ·  исходник в буфере" if code else ""),
+                 "success")
+        self.refresh_context()
+        self.after_command()
+
+    def _bridge_index(self, con) -> int:
+        """Какой прогон мостим: тот, что выбран в журнале, если он открыт;
+        иначе последний. Журнал у консоли один, выбранная позиция в нём.
+        """
+        try:
+            journal = self.query_one(ConsoleJournal)
+            if 0 <= journal.pos < len(con.runs):
+                return journal.pos
+        except Exception:
+            pass
+        return len(con.runs) - 1
 
     # --- Esc: один шаг назад ----------------------------------------------
 
@@ -363,9 +467,24 @@ class ModeScreen(Screen):
     # текстом; экран, у которого есть решётка, переопределяет и заливает её.
 
     def on_scheduler_text(self, text: str) -> None:
-        con = self.console
-        if con is not None:
-            con.note("  " + text.replace("[end of text]", "").rstrip(), "dim")
+        """Живой поток (строки модели, пометки планировщика) — в СОБЫТИЯ.
+
+        Раньше он лился в вывод команд и перемешивался с отчётами: таблица
+        обрывалась строкой генерации, а при открытом журнале — когда лента
+        консоли скрыта — текст вообще уходил «в никуда». Отдельная лента
+        решает оба раза: отчёты чисты, а поток читается целиком на вкладке
+        СОБЫТИЯ развёрнутого ОТЧЁТА. Экраны, для которых этот поток — само
+        содержимое (решётка РАЗБОРА), переопределяют метод и рисуют его
+        по-своему.
+        """
+        clean = "  " + text.replace("[end of text]", "").rstrip()
+        self.app.session.journal_events.append(
+            Text(clean, style=palette.role_hex("dim")))
+        try:
+            journal = self.query_one("#journal", ConsoleJournal)
+        except Exception:
+            return
+        journal.append_event(Text(clean, style=palette.role_hex("dim")))
 
     def on_scheduler_event(self, ev) -> None:
         """Не-текстовое событие: размещение, починка, вердикт, отказ."""
@@ -378,10 +497,35 @@ class ModeScreen(Screen):
             if err:
                 con.note("  " + err, "error")
             con.write("")
+            # Мостик-поля последнего прогона: что показывал, чем считалось.
+            # Без них запись — просто текст; с ними её можно отправить в
+            # РАЗБОР или АГЕНТУ одной кнопкой из журнала.
+            if con.runs:
+                rec = con.runs[-1]
+                rec["scenario"] = self.app.session.scenario
+                rec["dag"] = self.app.session.dag_obj
+                rec["profile"] = self.app.session.profile
         self.set_busy(False)
         self.app.reload_palette()   # команда могла сменить тему
         self.refresh_context()
         self.after_command()
+        # Журнал мог быть открыт ДО того, как команда донесла свой граф:
+        # без перечитывания у свежего прогона оставались бы пустыми мостик-
+        # кнопки и список строк. Перечитываем всегда, когда он виден.
+        self._refresh_journal()
+
+    def _refresh_journal(self) -> None:
+        """Показанный журнал — перечитать: у него свои данные, а не общие
+        с лентой консоли. Дешёво: список прогонов уже в памяти."""
+        try:
+            journal = self.query_one("#journal", ConsoleJournal)
+        except Exception:
+            return
+        if not journal.display:
+            return
+        journal.load(self.app.session.journal_runs, self.mode,
+                     list(self.app.commands) + self.extra_commands(),
+                     self.app.session.journal_events)
 
     # --- чат по развёрнутой панели ----------------------------------------
 
@@ -649,8 +793,6 @@ class ModeScreen(Screen):
         except Exception:
             return
         if busy:
-            from rich.text import Text
-
             bar.set_side(Text("считаю…", style=palette.role_hex("warning")))
         else:
             bar.set_side("")

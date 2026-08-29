@@ -18,7 +18,8 @@ from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.widgets import Static
 
 from .. import palette
-from ..widgets import Chip, Console, ConsoleJournal, Panel, PanelToolbar, plural
+from ..widgets import (Chip, Console, ConsoleJournal, Panel, PanelToolbar,
+                       PromptBar, plural)
 from .base import ModeScreen
 
 QUESTIONS = [
@@ -96,12 +97,13 @@ class AgentScreen(ModeScreen):
                         ("↻ повторить", "journal-repeat",
                          "прогнать выбранный запуск заново (^R)"),
                         ("очистить", "journal-wipe",
-                         "стереть журнал запусков (^L)"),
+                         "стереть историю git (^L)"),
                         ("диалог ▶", "open-chat", "развернуть ДИАЛОГ"),
                     ),
-                    Console(id="console"),
+                    Console(id="console",
+                            runs=self.app.session.journal_runs),
                     ConsoleJournal(id="journal"),
-                    title="ВЫВОД КОМАНД",
+                    title="GIT",
                     id="p-mind-console", topic="console",
                     has_own_input=True)
 
@@ -155,6 +157,25 @@ class AgentScreen(ModeScreen):
         self._greet()
         self._check_model()
         self._watch_warmup()
+        self._take_pending_question()
+
+    def _take_pending_question(self) -> None:
+        """Вопрос, привезённый мостиком из журнала, — в строку, не в отправку.
+
+        Кнопка «в агента» у прогона решает только одно: о чём спросить.
+        Отправлять или стереть — решает тот, кто нажал. Поэтому текст
+        подставляется, а Enter остаётся за человеком.
+        """
+        q = getattr(self.app.session, "pending_question", "")
+        if not q:
+            return
+        self.app.session.pending_question = ""
+        try:
+            bar = self.query_one("#prompt", PromptBar)
+        except Exception:
+            return
+        bar.focus_input()
+        bar.set_value(q)
 
     def _watch_warmup(self) -> None:
         """Пока модель греется — обновлять панель, потом перестать.
@@ -421,7 +442,13 @@ class AgentScreen(ModeScreen):
                            + plural(it["acts"], "действие", "действия",
                                     "действий"), style=accent)
             row.append("\n")
-            hist.mount(Chip(row, value=it["q"], classes="hist-item"))
+            chip = Chip(row, value=it["q"], classes="hist-item")
+            # Подсказка — вопрос ЦЕЛИКОМ и что из него вышло: в колонке
+            # истории текст зажат 40 колонками, и длинный вопрос без
+            # наведения обрезан ровно там, где начинается смысл.
+            chip.tooltip = (f"{it['q']}\n{it['seconds']:.0f} с  ·  "
+                            f"действий {it['acts']}\nклик — задать ещё раз")
+            hist.mount(chip)
 
     def on_panel_expanded(self, event) -> None:
         topic = getattr(event.panel, "topic", "")
@@ -470,7 +497,7 @@ class AgentScreen(ModeScreen):
             return base + lines
         if topic == "console":
             con = self.query_one("#console", Console)
-            return base + [f"Запусков в журнале: {len(con.runs)}."]
+            return base + [f"Коммитов в git сессии: {len(con.runs)}."]
         return base
 
     def panel_chips(self, topic: str) -> list[str]:
@@ -598,12 +625,13 @@ class AgentScreen(ModeScreen):
         journal.display = self._console_expanded
         con.display = not self._console_expanded
         if not self._console_expanded:
-            panel.set_title("ВЫВОД КОМАНД")
+            panel.set_title("GIT")
             return
         n = len(con.runs)
-        panel.set_title(f"ВЫВОД КОМАНД   ·   журнал   ·   "
+        panel.set_title(f"GIT   ·   история сессии   ·   "
                         f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
-        journal.load(con.runs, self.mode, list(self.app.commands))
+        journal.load(con.runs, self.mode, list(self.app.commands),
+                     self.app.session.journal_events)
 
     def _draw_seen(self) -> None:
         wide = self._wide == "seen"

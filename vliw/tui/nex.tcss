@@ -10,18 +10,62 @@
    ------------------------------------------------------------------------ */
 
 Screen {
+    /* Слой для подсказки при наборе: она всплывает поверх раскладки и места
+       под себя не резервирует. */
+    layers: base overlay;
     background: $nex-canvas;
     color: $nex-text;
 }
 
+/* --- полосы прокрутки --------------------------------------------------- */
+/* Размер 1 — по всей поверхности интерфейса. Дефолт Textual (2 клетки) без
+   этого правила торчал у редактора и контейнеров: тёмный столб посреди кода
+   и двухрядная полоса под панелью выглядели как сломанная раскладка, а не
+   как указатель положения. Цвета полос задаёт тема ($scrollbar-*): фон =
+   панель, бегунок чуть светлее — полоса не спорит с содержимым. */
+TextArea, VerticalScroll, OptionList, DataTable, RichLog, ItemGrid {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+}
+
 /* --- шапка режима ------------------------------------------------------ */
+/* height auto, а не 1: под основной строкой может стоять вторая — факты
+    спящих режимов. Без фактов второй строки нет (display ставит код), и
+    шапка во всех режимах остаётся однорядной. */
 
 TopBar {
     dock: top;
-    height: 1;
+    height: auto;
     width: 100%;
     padding: 0 2;
     background: $nex-shadow;
+}
+
+#topbar-line { height: 1; width: 100%; }
+
+/* Вторая строка — пилот РАЗБОРА: по одному короткому факту на каждый
+    спящий режим (ЯДРО/АГЕНТ/КОД), клик открывает тот режим. */
+
+#topbar-sleep {
+    display: none;
+    height: 1;
+    width: 100%;
+}
+
+#topbar-sleep.on { display: block; }
+
+.sleep-sep { width: auto; height: 1; color: $nex-faint; }
+
+.sleep-chip {
+    width: auto;
+    height: 1;
+    color: $nex-dim;
+}
+
+.sleep-chip:hover {
+    background: $primary 25%;
+    color: $nex-title;
+    text-style: bold;
 }
 
 /* --- док ввода --------------------------------------------------------- */
@@ -55,10 +99,11 @@ PromptBar {
 }
 
 /* Дети — по одной строке: центрирует их сам паддинг поля, и текст с
-    курсором встают ровно на средний ряд. */
+    курсором встают ровно на средний ряд. Марка шире обычного: бейдж
+    «nex» на плашке плюс шеврон. */
 
 #prompt-mark {
-    width: 6;
+    width: 8;
     height: 1;
     content-align: left middle;
 }
@@ -128,20 +173,17 @@ Panel:focus-within {
     border-title-color: $primary;
 }
 
-/* --- инструменты развёрнутой панели ------------------------------------- */
-/* Полоса инструментов живёт ПЕРВЫМ ребёнком панели и показывается CSS-ом
-    только у Panel.-maximized: в обычном виде она не отнимает ни строки,
-    в развёрнутом — даёт панели её собственные инструменты (навигацию,
-    тумблеры, переходы в связные панели), а не «ту же панель крупнее». */
+/* --- инструменты панели -------------------------------------------------- */
+/* Полоса инструментов живёт ПЕРВЫМ ребёнком панели и видна ВСЕГДА, а не
+    только в развороте: «прогнать», «переписать по оракулу», фильтры и
+    навигация — основные действия панели, прятать их за двойной клик
+    значило бы прятать саму функциональность. Разворот добавляет колонки
+    и место, а не открывает базовые кнопки. */
 
 PanelToolbar {
-    display: none;
+    display: block;
     height: 1;
     width: 100%;
-}
-
-Panel.-maximized PanelToolbar {
-    display: block;
 }
 
 Tool {
@@ -165,16 +207,20 @@ Tool.tool-on {
     text-style: bold;
 }
 
-/* Развёрнутая панель занимает весь экран — чем бы ни была её обычная высота.
-   Textual вешает класс `-maximized` на развёрнутый виджет, но собственная
-   высота панели никуда не девается: у половины панелей она задана числом по
-   id (#p-console: 10, #p-detail: 9, #p-seen: 12), и по специфичности id
-   побеждает класс. Получалась узкая полоска посреди пустого экрана вместо
-   разворота — а разворачивают как раз те панели, где текст не помещается.
+/* Развёрнутая панель занимает всё место между шапкой и доком ввода — чем
+   бы ни была её обычная высота. Textual вешает класс `-maximized` на
+   развёрнутый виджет, но собственная высота панели никуда не девается: у
+   половины панелей она задана числом по id (#p-console: 10, #p-detail: 9,
+   #p-seen: 12), и по специфичности id побеждает класс. Получалась узкая
+   полоска посреди пустого экрана вместо разворота.
+   1fr, а не 100%: со 100% панель накрывала док ввода с полосой подсказок —
+   в «полного экрана» пропадала нижняя панель, и выход из разворота
+   превращался в угадайку. 1fr честно занимает остаток: шапка, строка
+   ввода и подсказки видны всегда.
    `!important` здесь по делу: развёрнутое состояние обязано перебивать
    любую обычную раскладку. */
 Panel.-maximized {
-    height: 100% !important;
+    height: 1fr !important;
     max-height: 100% !important;
     min-height: 0 !important;
     width: 100% !important;
@@ -318,7 +364,7 @@ Console {
     display: none;
     width: 44;
     height: 100%;
-    border-left: thick $nex-line;
+    border-left: thick $nex-line 35%;
     padding: 0 0 0 1;
     background: $nex-panel;
 }
@@ -341,7 +387,47 @@ Panel.-maximized #grid-side { display: block; }
 }
 
 #p-grid { height: 1fr; min-height: 8; }
-#p-console { height: 7; }
+
+/* GIT повыше, чем было (7): полоска в две строки вывода читалась как
+    обрезок, а не как панель. Внутри — командная строка-чип, высота
+    включает и её три строки. */
+#p-console { height: 12; }
+
+/* Командная строка внутри GIT — чип с круглой рамкой в цвет ПАНЕЛИ:
+    контура нет (шов со стенкой не читается), середина остаётся
+    приподнятой подложкой со скруглёнными краями. В фокусе проявляется
+    приглушённый акцентный контур и подсветка фона. Тот же PromptBar:
+    палитра по «/», история, «считаю…». */
+#p-console #prompt { height: auto; width: 100%; }
+
+#p-console #prompt-field {
+    height: 3;
+    margin: 0;
+    padding: 0 1;
+    background: $nex-raised;
+    border: round $nex-panel;
+}
+
+#p-console #prompt-field:focus-within {
+    background: $primary 12%;
+    border: round $primary 45%;
+}
+
+#p-console #prompt-side { padding: 0 1; }
+
+/* Подсказка в пустом поле чуть живее «faint»: это приглашение к набору,
+    а не вывод, который можно пролистать не читая. */
+#p-console #prompt-input > .input--placeholder {
+    color: $nex-dim;
+}
+
+/* Палитра по «/» — внутри панели места впятеро меньше, чем было у дока:
+    без потолка она вытесняла само поле ввода за нижний край панели.
+    Список прокручивается, полный каталог — в развёрнутом GIT. */
+#p-console Palette {
+    max-height: 5;
+    scrollbar-size-vertical: 1;
+}
 
 #grid {
     background: transparent;
@@ -417,12 +503,24 @@ Panel.-maximized #grid-side { display: block; }
     (простой виден строкой, находка под курсором — в инспекторе разворота),
     панель держит только «сколько проблем и какая хуже». Полный список —
     по 2×клику или клавише d из решётки. */
-/* Правая колонка: ЧИСЛА и ПОЧЕМУ ЗДЕСЬ — по содержимому, ДИАГНОЗ забирает
-    остаток (список прокручивается), МАШИНА ограничена сверху. */
-#p-numbers  { height: auto; }
+/* Правая колонка обязана помещаться ЦЕЛИКОМ: ЧИСЛА и «ПОЧЕМУ ЗДЕСЬ» —
+    по содержимому, но с потолком; длинный разбор и ответ ИИ прокручиваются
+    внутри панели, а не распирают её и не уносят МАШИНУ за нижний край.
+    ДИАГНОЗ забирает остаток. Разворот снимает потолки: -maximized идёт
+    с !important. */
+#p-numbers  { height: auto; max-height: 12; }
 #p-detail   { height: auto; }
-#p-diag     { height: 1fr; }
+#p-diag     { height: 1fr; min-height: 4; }
 #p-machine  { height: auto; min-height: 6; max-height: 9; }
+
+#detail-scroll {
+    height: auto;
+    max-height: 12;
+    scrollbar-size-vertical: 1;
+}
+
+/* Развёрнутый разбор забирает всю высоту панели, а не 12 строк. */
+#p-detail.-maximized #detail-scroll { height: 1fr; max-height: 100%; }
 
 /* --- АГЕНТ: диалог, у которого видно основание -------------------------- */
 
@@ -441,7 +539,7 @@ Panel.-maximized #grid-side { display: block; }
     display: none;
     width: 46;
     height: 100%;
-    border-right: solid $nex-line;
+    border-right: solid $nex-line 35%;
     padding-right: 1;
 }
 
@@ -505,7 +603,7 @@ ModeScreen.narrow #core-right,
 ModeScreen.narrow #lab-right { width: 40; }
 ModeScreen.narrow #mind-right { width: 38; }
 
-ModeScreen.narrow #p-console { height: 6; }
+ModeScreen.narrow #p-console { height: 11; }
 ModeScreen.narrow #p-mind-console { height: 6; }
 ModeScreen.narrow #p-seen { height: 9; }
 
@@ -517,20 +615,23 @@ ModeScreen.tight #p-kernels,
 ModeScreen.tight #p-scen,
 ModeScreen.tight #p-questions { display: none; }
 
-ModeScreen.tight #p-console { height: 4; }
+ModeScreen.tight #p-console { height: 8; }
 
-/* --- КОД: исходник и его расписание ------------------------------------- */
+/* --- КОД: рабочая область, полоса состояния, выдвижная панель ---------- */
+/*
+   Каркас режима собран не как у остальных экранов: постоянного дока ввода
+   снизу нет, строка ввода живёт внутри выдвижной панели (вкладка ОТЧЁТ).
+   Ряд, который она занимала всегда, отдан коду.
+*/
 
 #code-body { height: 1fr; width: 100%; }
-#p-code { width: 1fr; }
-#code-right { width: 48; height: 100%; }
+#p-code { width: 1fr; min-width: 40; }
+#p-code-sched { width: 42; height: 100%; }
 
-#code-main { height: 1fr; width: 100%; }
-
-/* Редактор: без собственной рамки (рамкой служит панель), фон прозрачен —
-    полотно режима. Курсор и выделение красит акцент темы. */
 #code-edit {
-    height: 100%;
+    height: 1fr;
+    /* 1fr, а не 100%: рядом в развороте встают колонки разбора, и при 100%
+       редактор выдавливал их за край. */
     width: 1fr;
     border: none;
     padding: 0;
@@ -538,61 +639,46 @@ ModeScreen.tight #p-console { height: 4; }
     color: $nex-text;
 }
 
-#code-edit:focus {
-    border: none;
-    background: transparent;
-}
+#code-edit:focus { border: none; background: transparent; }
+#code-edit > .text-area--cursor-line { background: $primary 10%; }
 
-#code-edit > .text-area--cursor-line {
-    background: $primary 10%;
-}
+/* Полоса состояния: слева курсор (кликабельно), справа итог по буферу. */
+#code-status-row { height: 1; width: 100%; background: $nex-shadow; }
 
-/* «ЭТА СТРОКА» — колонка разворота ИСХОДНИКА. В обычном виде её нет: треть
-    ширины редактора под справку о строке дороже самой справки. В развороте
-    места хватает, и рядом с кодом появляется ответ на главный вопрос —
-    почему операция встанет именно в этот такт. */
-#code-side {
-    display: none;
-    width: 46;
-    height: 100%;
-    border-left: thick $nex-line;
-    padding: 0 1;
-    background: $nex-panel;
-    scrollbar-size-vertical: 1;
-}
-
-Panel.-maximized #code-side { display: block; }
-
-/* Строка итога под редактором: сколько тактов стоит написанное. */
-#code-status {
+#code-line-chip {
+    width: auto;
+    min-width: 24;
     height: 1;
-    width: 100%;
-    background: $nex-shadow;
+    padding: 0 1 0 0;
 }
 
-#p-code-sched { height: 1fr; min-height: 9; }
+#code-line-chip:hover { background: $primary 25%; }
 
-/* Вкладки решётки: две кнопки и счёт тактов справа. Видны всегда — в
-    отличие от полосы инструментов, которая приходит только с разворотом. */
+#code-status { width: 1fr; height: 1; content-align: right middle; }
+
+/* Пункты-лаунчеры в строке состояния: ошибки и отчёт. Вид — как у обычного
+   текста строки состояния, кликабельность проявляется наведением, как у
+   ссылок: строка состояния в IDE не должна выглядеть кнопочной панелью. */
+#status-lint, #status-term {
+    width: auto;
+    height: 1;
+    padding: 0 1;
+    color: $nex-dim;
+}
+
+#status-lint:hover, #status-term:hover {
+    background: $primary 25%;
+    color: $nex-title;
+    text-style: bold;
+}
+
+/* --- решётка расписания ------------------------------------------------ */
+
 #sched-tabs { height: 1; width: 100%; }
 #sched-head { height: 1; width: 1fr; content-align: right middle; }
 #code-grids { height: 1fr; width: 100%; }
 #code-grid-wrap { width: 1fr; height: 100%; }
 #code-grid-orc-wrap { display: none; width: 1fr; height: 100%; }
-
-/* Разбор решётки — только в развороте: в колонке 48 знаков ширины он отнял
-    бы место у самой решётки, ради которой панель и открыта. */
-#sched-side {
-    display: none;
-    width: 46;
-    height: 100%;
-    border-left: thick $nex-line;
-    padding: 0 1;
-    scrollbar-size-vertical: 1;
-}
-
-Panel.-maximized #sched-side { display: block; }
-#sched-side-body { height: auto; width: 100%; }
 #code-grid-orc-head { height: 1; width: 100%; }
 
 #code-grid, #code-grid-orc {
@@ -614,28 +700,142 @@ Panel.-maximized #sched-side { display: block; }
     color: $nex-title;
 }
 
-#p-code-lint { height: 12; }
+/* Разбор решётки — только в развороте. */
+#sched-side {
+    display: none;
+    width: 46;
+    height: 100%;
+    border-left: thick $nex-line 35%;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+Panel.-maximized #sched-side { display: block; }
+#sched-side-body { height: auto; width: 100%; }
+
+/* --- выдвижная панель снизу -------------------------------------------- */
+/*
+   Одна панель, три вкладки: ЗАМЕЧАНИЯ / ОТЧЁТ / СТРОКА. Закрыта по
+   умолчанию (display ставится из кода), открывается F12 или кликом по
+   строке курсора. Треть экрана — столько же, сколько у нижней панели в
+   любой IDE: хватает читать, но рабочая область остаётся главной.
+*/
+
+#p-drawer {
+    display: none;
+    height: 34%;
+    min-height: 8;
+    width: 100%;
+}
+
+#drawer-tabs { height: 1; width: 100%; }
+#drawer-head { height: 1; width: 1fr; content-align: right middle; }
+
 #lint-scroll { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
+#drawer-term-box { height: 1fr; width: 100%; }
+
+/* Строка ввода внутри ОТЧЁТА — ОДНА строка, как приглашение терминала.
+   Трёхрядное поле с отступами она была, пока стояла в доке и была главным
+   элементом экрана; здесь она просто последняя строка вывода. */
+#drawer-term-box #prompt-field {
+    height: 1;
+    margin: 0;
+    padding: 0 1;
+}
+
+#drawer-term-box #console { height: 1fr; }
+#drawer-line-box { height: 1fr; width: 100%; }
+#code-line-info { height: auto; width: 100%; }
+/* Каталог тактов забирает остаток вкладки: разбор строки сверху — по
+    содержимому, каталог — со своей прокруткой. */
+#drawer-bundles { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
 
 /* Замечание — не абзац текста, а ссылка: клик ведёт курсор на строку. */
-.lint-item {
+.lint-item { height: auto; width: 100%; }
+.lint-item:hover { background: $primary 20%; }
+
+/* --- узкое окно --------------------------------------------------------- */
+
+ModeScreen.narrow #p-code-sched { width: 38; }
+
+/* Совсем узкое окно: расписание уходит ПОД редактор, а не жмёт его сбоку.
+   34 знака кода — это не работа. */
+ModeScreen.tight #code-body { layout: vertical; }
+ModeScreen.tight #p-code-sched { width: 100%; height: 11; }
+ModeScreen.tight Panel.-maximized #sched-side { display: none; }
+
+/* Узкое окно с открытой панелью: расписание уступает ей место. Иначе на
+   тридцати строках получается три этажа по пять строк каждый, и код,
+   ради которого экран существует, виден хуже всех. Расписание в этот
+   момент открывается своей вкладкой или разворотом. */
+ModeScreen.tight.drawer #p-code-sched { display: none; }
+
+/* Разворот ИСХОДНИКА не выключает остальное: расписание и нижняя панель
+   остаются на местах. Разворот здесь значит «дай коду всю ширину», а не
+   «убери всё, чем я пользуюсь». Раньше в развороте пропадало и то и другое —
+   и получалось, что чем глубже работаешь, тем меньше видишь. */
+/* --- подсказка при наборе ---------------------------------------------- */
+/*
+   Всплывает под курсором, поверх раскладки. Слой `overlay` обязателен:
+   обычный виджет отобрал бы место у редактора, а подсказка живёт доли
+   секунды и место занимать не должна.
+*/
+
+Suggest {
+    display: none;
+    layer: overlay;
+    width: 52;
     height: auto;
-    width: 100%;
-    padding: 0 0 0 0;
+    max-height: 9;
+    background: $nex-raised;
+    border: round $primary;
+    padding: 0;
 }
 
-.lint-item:hover {
-    background: $primary 20%;
+.suggest-item { height: 1; width: 100%; }
+.suggest-item:hover { background: $primary 25%; }
+.suggest-on { background: $primary 35%; text-style: bold; }
+
+/* --- разворот блока: даёт место и ДОБАВЛЯЕТ колонки -------------------- */
+/*
+   Свой разворот вместо встроенного maximize. Встроенный показывает ровно
+   один виджет и прячет соседей — редактор разворачивался в пустоту без
+   расписания и без нижней панели. Здесь блок получает место за счёт
+   соседей, но соседи остаются, а у блока появляется то, чему в обычном
+   виде места не было.
+*/
+
+#code-main { height: 1fr; width: 100%; }
+#code-zoom-col { display: none; }
+#code-line-body, #code-chain-body { height: auto; width: 100%; }
+
+/* Разворот ИСХОДНИКА: код шире, плюс разбор строки и цепочка зависимостей. */
+
+ModeScreen.zoom-code #code-zoom-col {
+    display: block;
+    width: 38;
+    height: 100%;
+    padding: 0 1;
+    /* Разделитель колонок — не вторая рамка, а намёк: сплошная линия
+        $nex-line читалась как палка, отрезающая код от разбора. */
+    border-left: thick $nex-line 35%;
+    scrollbar-size-vertical: 1;
 }
 
-#p-code-out { height: 8; }
+/* Расписание в развороте кода сжимается до самого нужного — номер такта и
+   занятые каналы, — но не исчезает: это то, ради чего в редакторе сидят. */
+ModeScreen.zoom-code #p-code-sched { width: 26; }
 
-ModeScreen.narrow #code-right { width: 42; }
-ModeScreen.narrow #p-code-lint { height: 9; }
-ModeScreen.narrow #p-code-out { height: 6; }
-ModeScreen.tight #code-right { width: 36; }
-ModeScreen.tight #p-code-lint { height: 7; }
-ModeScreen.tight #p-code-out { height: 5; }
+/* Разворот РАСПИСАНИЯ: решётка забирает ширину, код остаётся полоской —
+   видно, на какой строке стоишь, но место отдано тому, что разворачивали. */
+ModeScreen.zoom-sched #p-code { width: 44; }
+ModeScreen.zoom-sched #p-code-sched { width: 1fr; }
+ModeScreen.zoom-sched #sched-side { display: block; }
+ModeScreen.zoom-sched #code-grid-orc-wrap { display: block; }
+
+/* Разворот нижнего блока: он забирает высоту, но код виден всегда. */
+ModeScreen.zoom-drawer #p-drawer { height: 70%; }
+ModeScreen.tight.drawer #p-drawer { height: 45%; }
 
 /* --- выбор режима ------------------------------------------------------ */
 
@@ -739,13 +939,12 @@ ModeScreen.tight #p-code-out { height: 5; }
 
 ConsoleJournal { display: none; height: 1fr; width: 100%; }
 
-/* Левая колонка узкая нарочно: главное здесь — вывод справа. Раньше она
-   занимала 40 колонок из 150 при том, что длиннее «/load <файл.s>» там
-   ничего не бывает. 26 — по самой длинной команде с аргументом. */
+/* Левая колонка: история сессии. 32 — по строке коммита
+    «▸ #12 14:02 к /code run», а не «на глаз побольше». */
 #journal-side {
-    width: 26;
+    width: 32;
     height: 100%;
-    border-right: solid $nex-line;
+    border-right: solid $nex-line 35%;
     padding-right: 1;
 }
 
@@ -772,19 +971,37 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     scrollbar-size-vertical: 1;
 }
 
-/* Строка ввода терминала — тот же минималистичный вид, что у общего дока:
-    одна строка, фон вместо рамки. */
-#journal-field {
-    height: 1;
+/* Вкладки потока: отчёты команд или живые события. Одна строка, как
+   вкладки расписания — тот же язык, что во всём интерфейсе. */
+#feed-tabs { height: 1; width: 100%; margin-bottom: 1; }
+
+#events-out {
+    display: none;
     width: 100%;
-    margin: 0 0 0 2;
-    padding: 0 1;
-    background: $nex-raised;
+    height: 1fr;
+    background: transparent;
+    padding-left: 2;
+    scrollbar-size-vertical: 1;
 }
 
-#journal-field:focus-within { background: $primary 18%; }
+/* Строка ввода терминала — тот же чип, что и командная строка панели:
+    бейдж со шевроном, круглая рамка в цвет панели, в фокусе —
+    приглушённый акцентный контур и подсветка. */
+#journal-field {
+    height: 3;
+    width: auto;
+    margin: 0 1 0 2;
+    padding: 0 1;
+    background: $nex-raised;
+    border: round $nex-panel;
+}
 
-#journal-mark { width: 6; height: 1; content-align: left middle; }
+#journal-field:focus-within {
+    background: $primary 12%;
+    border: round $primary 45%;
+}
+
+#journal-mark { width: 8; height: 1; content-align: left middle; }
 
 #journal-input {
     width: 1fr;
@@ -796,14 +1013,35 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     text-style: bold;
 }
 
+/* Подсказка — приглашение к набору, а не пролистываемый вывод. */
 #journal-input > .input--placeholder {
-    color: $nex-faint;
+    color: $nex-dim;
     text-style: none;
 }
 
-.run-item { height: 1; width: 100%; }
+/* Запись истории — две строки, как коммит в git log: кто/когда и что
+    за состояние. height auto, а не 1: строка состояния вторая по счёту. */
+.run-item { height: auto; width: 100%; }
 .run-item:hover { background: $nex-raised; }
 .run-item.on { background: $primary 18%; }
+
+/* Ряд мостика: куда отправить выбранный прогон. Общий виджет — он живёт
+    и в развёрнутом журнале (#run-actions), и в свёрнутой вкладке ОТЧЁТА
+    КОДА (#drawer-bridge): перенос не должен требовать разворота. */
+BridgeRow {
+    height: 1;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+/* Подпись ряда: без неё кнопки — просто кнопки, и не видно, что все они
+    действуют на ВЫБРАННЫЙ в истории прогон. */
+.bridge-label {
+    width: auto;
+    height: 1;
+    padding: 0 1 0 0;
+    color: $nex-faint;
+}
 
 /* --- развёрнутые панели ЯДРА -------------------------------------------- */
 

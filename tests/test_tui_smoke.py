@@ -367,6 +367,61 @@ class TestMaximizedPanelFillsScreen(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestLabRightColumnFits(unittest.TestCase):
+    """Правая колонка РАЗБОРА помещается на экран целиком.
+
+    Найдено на скриншоте: длинный ответ ИИ в «ПОЧЕМУ ЗДЕСЬ» распирал панель,
+    ДИАГНОЗ сжимался в одну рамку, а МАШИНА уезжала за нижний край. Потолки
+    высоты и прокрутка внутри панели обязаны держать все четыре панели в
+    кадре при любом объёме текста.
+    """
+
+    def test_machine_stays_on_screen_with_long_detail(self) -> None:
+        from rich.text import Text
+
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc._cell_ai_token += 1
+                    # Длинный разбор — как после развёрнутого ответа ИИ.
+                    sc._set_detail(Text(
+                        "\n".join(f"строка разбора {i}" for i in range(40))))
+                    await pilot.pause()
+                    await pilot.pause()
+                    mach = sc.query_one("#p-machine")
+                    bottom = mach.region.y + mach.region.height
+                    return bottom, sc.size.height
+
+        bottom, screen_h = asyncio.run(go())
+        self.assertLessEqual(bottom, screen_h,
+                             "МАШИНА уехала за нижний край экрана")
+
+    def test_command_line_lives_inside_git(self) -> None:
+        """Командная строка — внутри GIT, а не большой полосой внизу."""
+        from vliw.tui.widgets import PromptBar
+
+        async def go():
+            app, _ = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    bar = sc.query_one("#prompt", PromptBar)
+                    dock = sc.query("#dock")
+                    git = sc.query_one("#p-console")
+                    inside = git.region.overlaps(bar.region)
+                    return inside, len(list(dock)), bar.display
+
+        inside, docks, shown = asyncio.run(go())
+        self.assertTrue(inside, "строка ввода не внутри панели GIT")
+        self.assertEqual(docks, 0, "большой нижний док должен исчезнуть")
+        self.assertTrue(shown)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestCursorAI(unittest.TestCase):
     """ИИ в РАЗБОРЕ подключён к курсору, а не к строке ввода.
 
@@ -734,10 +789,11 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
 class TestConsoleJournalIsATerminal(unittest.TestCase):
     """Развёрнутый ВЫВОД КОМАНД — живой терминал, а не список для чтения.
 
-    Глобальная строка ввода остаётся доступной, пока панель развёрнута
-    (`ALLOW_IN_MAXIMIZED_VIEW`), и команда, набранная там, обязана сразу
-    появиться в журнале — иначе разворот выглядит терминалом только на
-    словах: набрал команду, а видишь по-прежнему старый запуск.
+    Командная строка в РАЗБОРЕ одна: пока журнал развёрнут, это ЕГО строка
+    (панельная спрятана — две одинаковых рядом только путают). Команда,
+    набранная в ней, обязана сразу появиться в журнале — иначе разворот
+    выглядит терминалом только на словах: набрал команду, а видишь по-
+    прежнему старый запуск.
     """
 
     def test_new_run_while_maximized_jumps_to_it(self) -> None:
@@ -752,7 +808,7 @@ class TestConsoleJournalIsATerminal(unittest.TestCase):
                     for _ in range(12):
                         await pilot.pause()
 
-                    from vliw.tui.widgets import Panel, PromptBar
+                    from vliw.tui.widgets import ConsoleJournal, Panel, PromptBar
 
                     panel = sc.query_one("#p-console", Panel)
                     sc.maximize(panel, container=False)
@@ -760,17 +816,18 @@ class TestConsoleJournalIsATerminal(unittest.TestCase):
                     await pilot.pause()
                     await pilot.pause()
 
-                    bar = sc.query_one("#prompt", PromptBar)
-                    bar.focus_input()
-                    bar.set_value("/bounds")
+                    # Панельная строка спрятана — командная теперь одна.
+                    self.assertFalse(sc.query_one("#prompt", PromptBar).display,
+                                     "в развороте не должно быть двух строк")
+                    inp = sc.query_one("#journal-input")
+                    inp.focus()
+                    inp.value = "/bounds"
                     await pilot.press("enter")
                     for _ in range(12):
                         await pilot.pause()
 
-                    journal = sc.query_one("#journal")
+                    journal = sc.query_one("#journal", ConsoleJournal)
                     return len(journal.runs), journal.pos
-
-            return None
 
         n, pos = asyncio.run(go())
         self.assertEqual(n, 2)
@@ -1260,18 +1317,27 @@ class TestCodeScreen(unittest.TestCase):
         self.assertTrue(self._screen(body).endswith("adds"))
 
     def test_cursor_move_redraws_the_line_panel(self):
-        """Переезд курсора разбирает НОВУЮ строку, а не держит старую."""
+        """Переезд курсора разбирает НОВУЮ строку, а не держит старую.
+
+        Полоса состояния меняется всегда, полный разбор — только когда
+        вкладка СТРОКА открыта: закрытая вкладка не должна стоить отрисовки
+        на каждое нажатие стрелки.
+        """
         async def body(screen, pilot, session):
             op = screen.parsed.ops[2]
+            screen.open_drawer("line")
             screen.query_one("#code-edit").goto_line(op.line)
             await pilot.pause()
             await pilot.pause()
-            info = screen.query_one("#code-line-info").content
-            return op.line, str(info)
+            return (op.line,
+                    str(screen.query_one("#code-line-chip").content),
+                    str(screen.query_one("#code-line-info").content),
+                    screen.query_one("#p-drawer")._title)
 
-        line, info = self._screen(body)
-        self.assertIn(f"СТРОКА {line}", info)
+        line, chip, info, title = self._screen(body)
+        self.assertIn(f"стр.{line}", chip)
         self.assertIn("латентность", info)
+        self.assertIn(str(line), title)
 
     def test_run_fills_the_oracle_and_the_moves(self):
         """F5 доводит до конца: точный поиск, находки и список перестановок."""
@@ -1328,10 +1394,14 @@ class TestCodeScreen(unittest.TestCase):
 
     def test_clicking_a_problem_moves_the_cursor_to_its_line(self):
         """Замечание — ссылка: клик ведёт курсор на ту самую строку."""
-        from vliw.tui.screens.code_screen import LintItem, SEED_BROKEN
+        from vliw.tui.screens.code_screen import LintItem
 
         async def body(screen, pilot, session):
-            screen.panel_tool("code-broken")
+            screen.handle_line("/example broken")
+            await pilot.pause()
+            # Замечания живут во вкладке выдвижной панели: пока она закрыта,
+            # их и не рисуют — так же, как в IDE не рисуют закрытый Problems.
+            screen.open_drawer("lint")
             await pilot.pause()
             await pilot.pause()
             items = list(screen.query(LintItem))
@@ -1360,13 +1430,608 @@ class TestCodeScreen(unittest.TestCase):
 
         self.assertEqual(self._screen(body), [(2, "parse")])
 
+    def test_drawer_is_closed_until_asked(self):
+        """Нижняя панель закрыта, пока не позвали: экран отдан коду."""
+        async def body(screen, pilot, session):
+            was = (screen.drawer_open,
+                   screen.query_one("#p-drawer").display)
+            await pilot.press("f12")
+            await pilot.pause()
+            now = (screen.drawer_open,
+                   screen.query_one("#p-drawer").display)
+            await pilot.press("escape")
+            await pilot.pause()
+            return was, now, screen.drawer_open
+
+        was, now, after_esc = self._screen(body)
+        self.assertEqual(was, (False, False))
+        self.assertEqual(now, (True, True))
+        self.assertFalse(after_esc, "Esc обязан убирать панель первым шагом")
+
+    def test_ctrl_p_opens_the_terminal_tab(self):
+        """^P — команда: панель на ОТЧЁТЕ, слэш уже введён.
+
+        Клавиша именно непечатная: фокус в КОДЕ почти всегда в редакторе, и
+        «/» там обязан оставаться символом — иначе командой не открыть
+        терминал никогда, а слэш перестанет печататься.
+        """
+        async def body(screen, pilot, session):
+            screen.query_one("#code-edit").focus()
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            return (screen.drawer_open, screen.drawer_tab,
+                    screen.query_one("#prompt").input.value)
+
+        opened, tab, value = self._screen(body)
+        self.assertTrue(opened)
+        self.assertEqual(tab, "term")
+        self.assertEqual(value, "/")
+
+    def test_slash_in_the_editor_is_just_a_character(self):
+        """В редакторе «/» печатается: отбирать у текста знак нельзя."""
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.focus()
+            edit.move_cursor(edit.document.end)
+            await pilot.press("slash")
+            await pilot.pause()
+            return edit.text.endswith("/"), screen.drawer_open
+
+        typed, opened = self._screen(body)
+        self.assertTrue(typed, "слэш не напечатался в редакторе")
+        self.assertFalse(opened, "редактор не должен открывать панель")
+
     def test_broken_example_is_actually_caught(self):
         """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""
         async def body(screen, pilot, session):
-            screen.panel_tool("code-broken")
+            screen.handle_line("/example broken")
             await pilot.pause()
             await pilot.pause()
             return sorted({p.kind for p in screen.problems
                            if p.severity == "error"})
 
         self.assertEqual(self._screen(body), ["busy", "channel", "ready"])
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestJournalIsSessionBridge(unittest.TestCase):
+    """Журнал — «гит сессии»: метка режима, мостик в ЯДРО, поток событий.
+
+    Журнал общий на все экраны, и запись без пометки, ГДЕ она сделана, —
+    просто текст. Метка режима, кнопки «в разбор / в агента / в ядро» и
+    отдельная лента событий превращают его в место, откуда человек сам
+    решает, что из сессии куда поедет.
+    """
+
+    @staticmethod
+    def _journal(body):
+        async def go():
+            app, session = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    from vliw.tui.widgets import Panel
+
+                    panel = sc.query_one("#p-console", Panel)
+                    sc.maximize(panel, container=False)
+                    panel.post_message(Panel.Expanded(panel))
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(sc, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_run_records_its_mode(self) -> None:
+        """Запись журнала помнит режим, в котором её сделали."""
+        async def body(sc, pilot, session):
+            sc.handle_line("/bounds")
+            for _ in range(10):
+                await pilot.pause()
+            return session.journal_runs[-1].get("mode")
+
+        self.assertEqual(self._journal(body), "lab")
+
+    def test_bridge_to_core_is_present_and_works(self) -> None:
+        """«В ядро» открывает ЯДРО и оставляет там пометку о прогоне."""
+        async def body(sc, pilot, session):
+            from vliw.tui.widgets import Tool
+
+            sc.handle_line("/bounds")
+            for _ in range(10):
+                await pilot.pause()
+            # Кнопка обязана существовать и быть видимой: мостик без графа
+            # всё равно имеет смысл — контекст прогона нужен и ядру.
+            tool = sc.query_one("#bridge-work", Tool)
+            self.assertTrue(tool.display)
+            sc.panel_tool("@work")
+            await pilot.pause()
+            await pilot.pause()
+            return (sc.app.screen.__class__.__name__, session.pending_note)
+
+        where, note = self._journal(body)
+        self.assertEqual(where, "CoreScreen")
+        # Пустая пометка после перехода — не потеря, а показ: ЯДРО гасит её
+        # в on_ready (это отдельный тест ниже). Здесь важно, что мостик
+        # довёл до другого режима и ничего не оставил висеть.
+        self.assertEqual(note, "")
+
+    def test_core_consumes_pending_note_on_mount(self) -> None:
+        """Приехавшая в ЯДРО пометка показывается строкой, а не теряется."""
+        async def go():
+            app, session = _make_app("work")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    con = sc.query_one("#console")
+                    before = len(con.lines)
+                    session.pending_note = "из журнала: прогон тест"
+                    sc._take_pending_note()
+                    await pilot.pause()
+                    return len(con.lines) > before, session.pending_note
+
+        shown, rest = asyncio.run(go())
+        self.assertTrue(shown, "пометка мостика не дошла до ленты ядра")
+        self.assertEqual(rest, "", "пометка должна гаснуть после показа")
+
+    def test_scheduler_text_goes_to_events_not_console(self) -> None:
+        """Живой поток пишется в СОБЫТИЯ и не мешает отчётам команд.
+
+        Экран нарочно КОД: у РАЗБОРА этот поток — содержимое решётки, там
+        он переопределён и в ленту событий не попадает. Базовое поведение
+        проверять честнее всего там, где переопределения нет.
+        """
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.on_scheduler_text("модель пишет расписание")
+                    await pilot.pause()
+                    journal = sc.query_one("#journal")
+                    return (len(session.journal_events), len(journal.events),
+                            journal._feed)
+
+        n_session, n_journal, feed = asyncio.run(go())
+        self.assertEqual(n_session, 1)
+        self.assertEqual(n_journal, 1, "события обязаны доехать до журнала")
+        self.assertEqual(feed, "runs", "по умолчанию показан поток команд")
+
+    def test_events_feed_switches_and_renders(self) -> None:
+        """Вкладка СОБЫТИЯ реально переключает правую колонку журнала."""
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    from vliw.tui.widgets import RichLog
+
+                    sc.on_scheduler_text("строка потока")
+                    await pilot.pause()
+                    journal = sc.query_one("#journal")
+                    journal.show_feed("events")
+                    await pilot.pause()
+                    out = sc.query_one("#journal-out", RichLog)
+                    ev = sc.query_one("#events-out", RichLog)
+                    return out.display, ev.display
+
+        runs_visible, events_visible = asyncio.run(go())
+        self.assertFalse(runs_visible, "при событиях отчёты обязаны прятаться")
+        self.assertTrue(events_visible)
+
+    def test_journal_reloads_after_command_finishes(self) -> None:
+        """Открытый журнал видит мостик-поля прогона БЕЗ переоткрытия.
+
+        Команда едет в фоне: запись появляется в ЗАПУСКАХ сразу, а граф
+        проставляется только в конце. Если журнал не перечитывается после
+        завершения, у свежего прогона навсегда спрятаны «в разбор / в
+        агента» — мостик выглядит сломанным ровно на самом нужном прогоне.
+        """
+        async def body(sc, pilot, session):
+            sc.handle_line("/bounds")
+            for _ in range(14):
+                await pilot.pause()
+            await sc.app.workers.wait_for_complete()
+            await pilot.pause()
+            from vliw.tui.widgets import Tool
+
+            lab_btn = sc.query_one("#bridge-lab", Tool)
+            rec = session.journal_runs[-1]
+            return lab_btn.display, rec.get("dag") is not None
+
+        visible, has_dag = self._journal(body)
+        self.assertTrue(has_dag, "граф не доехал до записи журнала")
+        self.assertTrue(visible, "открытый журнал не показал мостик после "
+                                 "завершения команды")
+
+    def test_bridge_to_code_carries_the_source(self) -> None:
+        """«В код» возвращает исходник прогона в буфер редактора."""
+        async def body(sc, pilot, session):
+            from vliw.tui.widgets import Tool
+
+            session.journal_runs.append(
+                {"cmd": "/code run", "lines": [], "error": False,
+                 "mode": "code",
+                 "code": "{\n  adds,0 %r1, %r2, %r3\n}\n",
+                 "scenario": "буфер", "dag": None})
+            sc.panel_tool("@code")
+            await pilot.pause()
+            await pilot.pause()
+            screen = sc.app.screen
+            return (screen.__class__.__name__,
+                    session.code_text,
+                    session.pending_note)
+
+        where, text, note = self._journal(body)
+        self.assertEqual(where, "CodeScreen")
+        self.assertIn("adds,0", text, "исходник прогона не попал в буфер")
+        # Пустая пометка — она уже показана строкой в отчёте КОДА (on_ready
+        # гасит её, как и ЯДРО). Главное здесь — текст в буфере.
+        self.assertEqual(note, "")
+
+    def test_history_rows_look_like_commits(self) -> None:
+        """История — не лог команд, а коммиты: граф, номер, время, состояние.
+
+        Пользователь ищет «гит»: запись обязана отвечать на «что это было
+        за состояние», а не только «что я набрал». Точка графа и линия —
+        чтобы список читался как git log с первого взгляда.
+        """
+        async def body(sc, pilot, session):
+            session.journal_runs.append(
+                {"cmd": "/doctor", "lines": ["a", "b"], "error": False,
+                 "mode": "lab", "time": "14:02",
+                 "scenario": "slotclash", "dag": [1, 2, 3]})
+            journal = sc.query_one("#journal")
+            journal.load(session.journal_runs, "lab", [])
+            await pilot.pause()
+            text = journal._row(0, session.journal_runs[0]).plain
+            return ("#1" in text, "14:02" in text,
+                    "slotclash" in text, "3 оп." in text,
+                    "●" in text, "│" in text)
+
+        has_num, has_time, has_scen, has_ops, dot, line = self._journal(body)
+        self.assertTrue(has_num, "в истории нет номера записи")
+        self.assertTrue(has_time, "в истории нет времени прогона")
+        self.assertTrue(has_scen, "в истории не видно участок")
+        self.assertTrue(has_ops, "в истории не видно размер графа")
+        self.assertTrue(dot, "в истории нет точки графа")
+        self.assertTrue(line, "в истории нет линии графа")
+
+    def test_restore_returns_state_without_leaving(self) -> None:
+        """«Вернуть» — checkout: состояние прогона восстанавливается,
+        экран остаётся текущим."""
+        async def body(sc, pilot, session):
+            from vliw.tui.widgets import Tool
+
+            session.set_scenario("mulclash")
+            session.journal_runs.append(
+                {"cmd": "/run mulclash", "lines": [], "error": False,
+                 "mode": "lab", "time": "14:02",
+                 "scenario": "mulclash", "dag": session.dag_obj})
+            before = session.scenario
+            session.set_scenario("slotclash")
+            sc.panel_tool("@restore")
+            await pilot.pause()
+            btn = sc.query_one("#bridge-restore", Tool)
+            return before, session.scenario, btn.display, \
+                sc.app.screen.__class__.__name__
+
+        before, after, visible, where = self._journal(body)
+        self.assertEqual(before, "mulclash")
+        self.assertEqual(after, "mulclash",
+                         "«вернуть» не восстановил участок прогона")
+        self.assertTrue(visible)
+        self.assertEqual(where, "LabScreen",
+                         "«вернуть» не должен уводить с экрана")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCoreHasTheJournalToo(unittest.TestCase):
+    """Мостик обязан работать ИЗ ядра: журнал доступен и там.
+
+    Раньше у ЯДРА журнала не было вовсе — единственное место сессии,
+    откуда нельзя было ни вернуться к прошлому прогону, ни отправить
+    результат дальше.
+    """
+
+    def test_tape_tool_opens_the_journal(self) -> None:
+        async def go():
+            app, session = _make_app("work")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.panel_tool("tape-journal")
+                    await pilot.pause()
+                    await pilot.pause()
+                    journal = sc.query_one("#journal")
+                    return (sc._wide, journal.display,
+                            app.screen.__class__.__name__)
+
+        wide, visible, _ = asyncio.run(go())
+        self.assertEqual(wide, "tape")
+        self.assertTrue(visible, "журнал не открылся в ЛЕНТЕ")
+
+    def test_journal_from_core_bridges_back_to_lab(self) -> None:
+        """Из журнала ЯДРА прогон уезжает в РАЗБОР — полный круг."""
+        async def go():
+            app, session = _make_app("work")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.handle_line("2+2")
+                    await pilot.pause()
+                    sc.panel_tool("tape-journal")
+                    await pilot.pause()
+                    await pilot.pause()
+                    sc.panel_tool("@lab")
+                    await pilot.pause()
+                    await pilot.pause()
+                    return app.screen.__class__.__name__
+
+        self.assertEqual(asyncio.run(go()), "LabScreen")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
+    """Строка состояния КОДА — лаунчер нижней панели, как в IDE.
+
+    Пункты «замечания» и «отчёт» обязаны жить на виду, нести живые счётчики
+    и открывать свою вкладку одним кликом: функциональность, спрятанная за
+    клавишей, которую надо знать заранее, — это функциональность, которой
+    нет.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_chips_exist_with_live_counters(self) -> None:
+        async def body(screen, pilot, session):
+            lint = screen.query_one("#status-lint")
+            term = screen.query_one("#status-term")
+            return lint._label, term._label
+
+        lint_label, term_label = self._screen(body)
+        self.assertIn("чисто", lint_label)
+        self.assertIn("git", term_label)
+
+    def test_clicking_term_chip_opens_drawer_on_report_tab(self) -> None:
+        from vliw.tui.screens.code_screen import DrawerChip
+
+        async def body(screen, pilot, session):
+            chip = screen.query_one("#status-term", DrawerChip)
+            chip.post_message(DrawerChip.Picked("term"))
+            await pilot.pause()
+            await pilot.pause()
+            return screen.drawer_open, screen.drawer_tab
+
+        opened, tab = self._screen(body)
+        self.assertTrue(opened)
+        self.assertEqual(tab, "term")
+
+    def test_counter_grows_after_a_command_from_another_mode(self) -> None:
+        """Журнал общий: счётчик отчёта реагирует на чужие команды."""
+        async def body(screen, pilot, session):
+            before = screen.query_one("#status-term")._label
+            session.journal_runs.append(
+                {"cmd": "/run slotclash", "lines": [], "error": False,
+                 "mode": "lab"})
+            screen.refresh_status()
+            after = screen.query_one("#status-term")._label
+            return before, after
+
+        before, after = self._screen(body)
+        self.assertNotEqual(before, after,
+                            "счётчик не увидел команду из другого режима")
+
+    def test_bridge_row_in_drawer_sends_run_to_lab(self) -> None:
+        """Мостик доступен БЕЗ разворота: вкладка ОТЧЁТ → «в разбор».
+
+        Ровно тот сценарий, ради которого мостик существует: прогнал
+        буфер в КОДЕ — и тут же отправил его в РАЗБОР, не догадываясь
+        про разворот панели.
+        """
+        from vliw.tui.widgets import Tool
+
+        async def body(screen, pilot, session):
+            screen.open_drawer("term")
+            await pilot.pause()
+            session.journal_runs.append(
+                {"cmd": "/code run", "lines": [], "error": False,
+                 "mode": "code", "time": "14:02",
+                 "scenario": "asm:буфер", "dag": session.dag_obj})
+            screen._sync_drawer_bridge()
+            await pilot.pause()
+            row = screen.query_one("#drawer-bridge")
+            row.sync(session.journal_runs, 0)
+            await pilot.pause()
+            btn = screen.query_one("#dbridge-lab", Tool)
+            self.assertTrue(btn.display, "мостик не виден во вкладке ОТЧЁТ")
+            btn.post_message(Tool.Picked("@lab"))
+            await pilot.pause()
+            await pilot.pause()
+            return screen.app.screen.__class__.__name__
+
+        where = self._screen(body)
+        self.assertEqual(where, "LabScreen",
+                         "прогон из КОДА не доехал до РАЗБОРА")
+
+    def test_drawer_bridge_hidden_without_runs(self) -> None:
+        """Пустая история — ряд мостика пуст: кнопки не обещают лишнего."""
+        from vliw.tui.widgets import Tool
+
+        async def body(screen, pilot, session):
+            screen.open_drawer("term")
+            await pilot.pause()
+            btn = screen.query_one("#dbridge-lab", Tool)
+            return btn.display
+
+        self.assertFalse(self._screen(body),
+                         "без прогонов мостик обязан прятаться")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestLabSleepBar(unittest.TestCase):
+    """Вторая строка шапки РАЗБОРА: факты трёх спящих режимов.
+
+    Экраны уже читают одну Session, но видеть чужое состояние можно было,
+    только физически перейдя в чужой режим. Строка показывает ЯДРО/АГЕНТ/
+    КОД прямо в РАЗБОРЕ: пустой факт не рисуется вовсе, клик по факту
+    открывает тот режим тем же путём, что и мостик журнала.
+    """
+
+    @staticmethod
+    def _screen(body, start_mode="lab"):
+        async def go():
+            app, session = _make_app(start_mode)
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    # Курсорный ИИ решётки здесь не участник: его запрос к
+                    # локальной модели может длиться дольше теста (на машине
+                    # с тёплым llama-server это уже ломает чужие тесты —
+                    # см. TestCoreHasTheJournalToo). Подъём токена гасит
+                    # отложенный запуск детерминированно.
+                    app.screen._cell_ai_token += 1
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    @staticmethod
+    def _facts(sc) -> dict:
+        return {mode: body for _label, body, mode in sc.sleep_facts()}
+
+    def test_fresh_session_shows_no_row(self):
+        """Нечего показать — второй строки нет вовсе: ни места, ни прочерков."""
+        async def body(sc, pilot, session):
+            row = sc.query_one("#topbar-sleep")
+            return list(sc.sleep_facts()), row.has_class("on")
+
+        facts, shown = self._screen(body)
+        self.assertEqual(facts, [])
+        self.assertFalse(shown, "пустая сессия не должна рисовать строку")
+
+    def test_facts_from_sleeping_modes(self):
+        """ЯДРО: граф не отправлен; АГЕНТ: счёт вопросов; КОД: буфер правлен."""
+        from vliw.agent.agent import Turn
+
+        async def body(sc, pilot, session):
+            ws = session.workspace()
+            ws.exec("sum 8")
+            n = len(ws.snapshot())
+            session.agent().history.append(Turn(question="что тут?"))
+            session.code_text = "{\n  adds,0 %r10\n}\n"
+            sc.refresh_context()
+            await pilot.pause()
+            modes = [w.mode for w in sc.query("#topbar-sleep SleepChip")]
+            return self._facts(sc), modes, n
+
+        facts, modes, n = self._screen(body)
+        self.assertEqual(facts["work"], f"граф {n} оп., не отправлен")
+        self.assertEqual(facts["mind"], "1 вопрос")
+        self.assertEqual(facts["code"], "буфер изменён, не разобран")
+        self.assertEqual(modes, ["work", "mind", "code"],
+                         "каждый показанный факт — свой кликабельный кусок")
+
+    def test_sent_graph_reports_passed(self):
+        """Граф ядра — текущий граф сессии: «передан», а не «не отправлен»."""
+        async def body(sc, pilot, session):
+            ws = session.workspace()
+            ws.exec("sum 8")
+            n = len(ws.snapshot())
+            session.set_dag(ws.snapshot(), "interp")
+            sc.refresh_context()
+            await pilot.pause()
+            return self._facts(sc), n
+
+        facts, n = self._screen(body)
+        self.assertEqual(facts["work"], f"граф {n} оп., передан")
+
+    def test_parsed_buffer_is_silent(self):
+        """Буфер прогнан и не правился — факта про КОД нет, куска и точки нет."""
+        async def body(sc, pilot, session):
+            ws = session.workspace()
+            ws.exec("a=2; b=a*a")       # чтобы строка жиля хотя бы одним фактом
+            session.code_text = "{\n  adds,0 %r10\n}\n"
+            session.code_run_text = session.code_text
+            sc.refresh_context()
+            await pilot.pause()
+            row = sc.query_one("#topbar-sleep")
+            children = list(row.children)
+            classes = [c.classes for c in children]
+            return (self._facts(sc), len(children), classes)
+
+        facts, n_children, classes = self._screen(body)
+        self.assertNotIn("code", facts, "разобранный буфер — не факт")
+        self.assertEqual(n_children, 1,
+                         "один факт — один кусок, без пустых мест")
+        self.assertNotIn("sleep-sep", classes,
+                         "разделитель не должен стоять перед единственным")
+
+    def test_click_on_fact_opens_that_mode(self):
+        """Клик по факту ЯДРА открывает ЯДРО — путь мостика, app.open_mode."""
+        async def body(sc, pilot, session):
+            ws = session.workspace()
+            ws.exec("sum 8")
+            sc.refresh_context()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.click("#sleep-work")
+            await pilot.pause()
+            await pilot.pause()
+            return sc.app.screen.__class__.__name__
+
+        where = self._screen(body)
+        self.assertEqual(where, "CoreScreen",
+                         "клик по факту не открыл режим ЯДРО")
+
+    def test_click_on_agent_fact_opens_agent(self):
+        """Клик по факту АГЕНТА открывает АГЕНТА."""
+        from vliw.agent.agent import Turn
+
+        async def body(sc, pilot, session):
+            session.agent().history.append(Turn(question="привет"))
+            sc.refresh_context()
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.click("#sleep-mind")
+            await pilot.pause()
+            await pilot.pause()
+            return sc.app.screen.__class__.__name__
+
+        where = self._screen(body)
+        self.assertEqual(where, "AgentScreen",
+                         "клик по факту не открыл режим АГЕНТ")
+
+    def test_other_screens_stay_one_line(self):
+        """Строка — пилот РАЗБОРА: ЯДРО/АГЕНТ/КОД её не получают."""
+        from vliw.tui.widgets import TopBar
+
+        async def go():
+            out = {}
+            for start in ("work", "mind", "code"):
+                app, _ = _make_app(start)
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(150, 46)) as pilot:
+                        await pilot.pause()
+                        bar = app.screen.query_one("#topbar", TopBar)
+                        row = app.screen.query_one("#topbar-sleep")
+                        out[start] = (list(bar.sleepers),
+                                      row.has_class("on"))
+            return out
+
+        for start, (sleepers, shown) in asyncio.run(go()).items():
+            self.assertEqual(sleepers, [], f"{start}: строка пришла без спроса")
+            self.assertFalse(shown, f"{start}: строка не должна рисоваться")

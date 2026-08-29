@@ -26,7 +26,8 @@ from textual.widgets import Static
 from ...core import InterpError, kernel_help
 from ...core.interp import MEM_SIZE
 from .. import palette
-from ..widgets import Chip, Console, Panel, PanelToolbar, PromptBar, plural
+from ..widgets import (Chip, Console, ConsoleJournal, Panel, PanelToolbar,
+                       PromptBar, plural)
 from .base import ModeScreen
 
 MEM_ROWS = 5
@@ -76,6 +77,9 @@ class CoreScreen(ModeScreen):
         # показывает вывод, но не «какие имена появились и сколько операций
         # добавилось» — а это и есть работа интерпретатора.
         self._history: list[dict] = []
+        # Журнал команд внутри ЛЕНТЫ: выключен по умолчанию — здесь он
+        # не главный, но должен быть под рукой, как на остальных экранах.
+        self._tape_journal = False
         # Какая панель развёрнута. Разворот здесь — не «то же крупнее»: у
         # ИМЁН это происхождение значений, у ПАМЯТИ — карта, из которой
         # можно считать, у ПРОГРАММЫ — ярусы графа, то есть тот самый
@@ -98,8 +102,12 @@ class CoreScreen(ModeScreen):
                          "отдать граф в разбор и посчитать"),
                         ("reset", "verb-reset",
                          "очистить имена и память"),
+                        ("git", "tape-journal",
+                         "история сессии и мостик в другие режимы"),
                     ),
-                    Console(id="console"),
+                    Console(id="console",
+                            runs=self.app.session.journal_runs),
+                    ConsoleJournal(id="journal"),
                     VerticalScroll(Static(id="tape-full"),
                                    id="tape-wide"),
                     title="ЛЕНТА", id="p-tape", topic="tape")
@@ -143,11 +151,76 @@ class CoreScreen(ModeScreen):
         if tool in verbs:
             self._exec_interp(verbs[tool])
             return
+        if tool == "tape-journal":
+            self._toggle_tape_journal()
+            return
         super().panel_tool(tool)
+
+    # --- журнал сессии внутри ЛЕНТЫ -----------------------------------------
+
+    def _toggle_tape_journal(self) -> None:
+        """«журнал» — показать/убрать общий журнал команд в блоке ЛЕНТЫ.
+
+        На других экранах журнал открывается разворотом панели; здесь
+        ЛЕНТА и так разворачивается в лист вычислений, и второй смысл
+        разворота был бы загадкой. Поэтому у журнала своя кнопка: нажатие
+        разворачивает ЛЕНТУ, если она ещё не развёрнута, и меняет её
+        содержимое на журнал — каталог команд, история и мостик в другие
+        режимы, ровно то же, что у остальных экранов.
+        """
+        self._tape_journal = not self._tape_journal
+        if self._tape_journal and self._wide != "tape":
+            panel = self.query_one("#p-tape", Panel)
+            self.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            return
+        try:
+            bar = self.query_one("#p-tape PanelToolbar", PanelToolbar)
+            bar.mark("tape-journal", self._tape_journal)
+        except Exception:
+            pass
+        self.refresh_state()
+
+    def _load_journal(self) -> None:
+        con = self.query_one("#console", Console)
+        n = len(con.runs)
+        self.query_one("#p-tape", Panel).set_title(
+            f"ЛЕНТА   ·   git   ·   "
+            f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
+        journal = self.query_one("#journal", ConsoleJournal)
+        journal.load(con.runs, self.mode, list(self.app.commands),
+                     self.app.session.journal_events)
+        try:
+            self.query_one("#p-tape PanelToolbar",
+                           PanelToolbar).mark("tape-journal", True)
+        except Exception:
+            pass
+
+    def _take_pending_note(self) -> None:
+        """Пометка от мостика журнала («в ядро») — строкой в ленту.
+
+        Чужой граф сюда не вставляется: здесь его собирают руками, и это
+        осознанно. Мостик привозит контекст — чей прогон смотрели, — чтобы
+        человек знал, что перед ним, а не догадывался.
+        """
+        note = getattr(self.app.session, "pending_note", "")
+        if not note:
+            return
+        self.app.session.pending_note = ""
+        con = self.console
+        if con is None:
+            return
+        con.note("  " + note, "accent2")
+        row = Text()
+        row.append("  собери здесь свой вариант графа и отдай ",
+                   style=palette.role_hex("dim"))
+        row.append("go", style=f"{palette.role_hex('work')} bold")
+        con.write(row)
 
     def on_ready(self) -> None:
         self._fill_chips()
         self._intro()
+        self._take_pending_note()
         self.refresh_state()
 
     def hint_pairs(self):
@@ -252,6 +325,14 @@ class CoreScreen(ModeScreen):
         })
         if result.kind not in ("reset", "empty") and not ws.empty():
             self.app.session.set_dag(ws.snapshot(), "interp")
+            # Мостик-поля записи журнала — как в _core_done у остальных
+            # экранов: без них строка интерпретатора в общем журнале не
+            # мостится никуда, хотя именно она чаще всего и нужна в РАЗБОРЕ.
+            if con is not None and con.runs:
+                rec = con.runs[-1]
+                rec["scenario"] = self.app.session.scenario
+                rec["dag"] = self.app.session.dag_obj
+                rec["profile"] = self.app.session.profile
         if con is not None:
             con.ansi("\n".join(interp_view.render_result(
                 ws, result, width=max(24, con.size.width - 2))))
@@ -368,11 +449,27 @@ class CoreScreen(ModeScreen):
                 ("#names-wide", ("#names",), "names"),
                 ("#mem-wide", ("#memory",), "memory"),
                 ("#prog-wide", ("#program",), "program"),
-                ("#tape-wide", ("#console",), "tape"),
+                ("#tape-wide", (), "tape"),
                 ("#kern-wide", ("#kernel-chips", "#verb-chips"), "kernels")):
             self.query_one(wide_id).display = self._wide == topic
             for short_id in short_ids:
                 self.query_one(short_id).display = self._wide != topic
+        # ЛЕНТА — три состояния вместо двух: лента, разворот с листом
+        # вычислений и журнал команд. Журнал заменяет собой и ленту, и лист:
+        # это место «что вообще происходило в сессии», ему нужен весь блок.
+        con = self.query_one("#console", Console)
+        journal = self.query_one("#journal", ConsoleJournal)
+        if self._wide == "tape":
+            con.display = False
+            journal.display = self._tape_journal
+            if self._tape_journal:
+                self.query_one("#tape-wide").display = False
+                self._load_journal()
+            else:
+                self.query_one("#tape-wide").display = True
+        else:
+            con.display = True
+            journal.display = False
         self._draw_names(ws)
         self._draw_memory(ws)
         self._draw_program(ws)

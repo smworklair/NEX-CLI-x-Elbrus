@@ -26,8 +26,8 @@ from textual.widgets import DataTable, Input, Static
 
 from ...core import SCENARIOS
 from .. import palette
-from ..widgets import (Chip, Console, ConsoleJournal, Panel, PanelToolbar,
-                       PromptBar, plural)
+from ..widgets import (Chip, Console, ConsoleJournal, HintBar, Panel,
+                       PanelToolbar, PromptBar, SleepChip, TopBar, plural)
 from .base import ModeScreen
 
 CONT = "│"
@@ -168,7 +168,7 @@ class LabScreen(ModeScreen):
     mode = "lab"
     mode_title = "РАЗБОР"
     mode_subtitle = "исследование"
-    placeholder = "/run slotclash   ·   /doctor   ·   /load examples/probe.s   ·   /compare"
+    placeholder = "команда   ·   «/» каталог   ·   ↑ история"
     SIDE_ID = "#lab-right"
     TIPS_ID = "#p-scen"
 
@@ -249,6 +249,18 @@ class LabScreen(ModeScreen):
 
     # --- раскладка --------------------------------------------------------
 
+    def compose(self):
+        """Каркас РАЗБОРА — свой, без дока ввода.
+
+        Командная строка живёт ВНУТРИ GIT одной строкой (с палитрой и
+        историей — это тот же PromptBar, только компактный): большая
+        нижняя полоса отбирала у решётки три строки всегда, а нужна была
+        раз в сотню нажатий. Снизу остаётся только полоса подсказок.
+        """
+        yield TopBar(self.mode, self.mode_title, self.mode_subtitle, id="topbar")
+        yield from self.compose_body()
+        yield HintBar(id="hints")
+
     def compose_body(self):
         with Horizontal(id="lab-body"):
             with Vertical(id="lab-left"):
@@ -299,13 +311,20 @@ class LabScreen(ModeScreen):
                         ("↻ повторить", "journal-repeat",
                          "прогнать выбранный запуск заново (^R)"),
                         ("очистить", "journal-wipe",
-                         "стереть журнал запусков (^L)"),
+                         "стереть историю git (^L)"),
                         ("решётка ▶", "open-grid",
-                         "развернуть РАСПИСАНИЕ"),
+                          "развернуть РАСПИСАНИЕ"),
                     ),
-                    Console(id="console"),
+                    Console(id="console",
+                            runs=self.app.session.journal_runs),
+                    # Командная строка — здесь, внутри GIT, а не большой
+                    # полосой внизу экрана. В развёрнутом журнале прячется:
+                    # у терминала своя строка, две одинаковых рядом — шум.
+                    PromptBar(self.mode, self.placeholder,
+                              list(self.app.commands) + self.extra_commands(),
+                              id="prompt"),
                     ConsoleJournal(id="journal"),
-                    title="ВЫВОД КОМАНД",
+                    title="GIT",
                     id="p-console", topic="console",
                     has_own_input=True)
             with Vertical(id="lab-right"):
@@ -334,7 +353,10 @@ class LabScreen(ModeScreen):
                         ("решётка ▶", "open-grid",
                          "развернуть РАСПИСАНИЕ"),
                     ),
-                    Static(id="detail"),
+                    # Прокручиваемый разбор: ответ ИИ и длинные объяснения
+                    # не должны распирать панель и уносить МАШИНУ за нижний
+                    # край — правая колонка обязана помещаться целиком.
+                    VerticalScroll(Static(id="detail"), id="detail-scroll"),
                     Horizontal(
                         Vertical(id="detail-preds"),
                         Vertical(id="detail-succs"),
@@ -408,6 +430,86 @@ class LabScreen(ModeScreen):
                     ("d", "диагноз")]
         return out
 
+    # --- спящие режимы: вторая строка шапки ---------------------------------
+    #
+    # Три экрана-режима уже читают ОДНУ сессию, но увидеть чужое состояние
+    # можно было только физически перейдя в чужой режим. Строка под шапкой
+    # отвечает «что происходит в ЯДРЕ, у АГЕНТА, в КОДЕ» прямо здесь — по
+    # одному короткому факту на режим, клик открывает его. Пилот живёт
+    # только в РАЗБОРЕ: приживётся — переедет в остальные шапки.
+
+    def sleep_facts(self) -> list[tuple[str, str, str]]:
+        """Факты спящих режимов: (метка, текст, режим-адресат).
+
+        Факту нечего показать (граф пуст, вопросов не было, буфер пуст или
+        уже разобран) — кусок не рисуется вовсе: ни пустого места, ни
+        прочерка.
+        """
+        out = []
+        for label, mode in (("ЯДРО", "work"), ("АГЕНТ", "mind"),
+                            ("КОД", "code")):
+            body = getattr(self, f"_sleep_{mode}")()
+            if body:
+                out.append((label, body, mode))
+        return out
+
+    def _sleep_work(self) -> str | None:
+        """Сколько операций накопил интерпретатор и уехал ли граф в разбор.
+
+        «Передан» — текущий граф сессии и есть накопленный граф ядра;
+        граф не пуст, но сессия смотрит на другой (сценарий, .s, буфер) —
+        «не отправлен». Рабочую область создаём только если она уже есть:
+        индикатор не должен заводить её одним своим существованием.
+        """
+        s = self.app.session
+        ws = s._workspace
+        if ws is None or ws.empty():
+            return None
+        snap = ws.snapshot()
+        sent = (s.dag_obj is not None and s.dag_obj.key == snap.key
+                and len(s.dag_obj) == len(snap))
+        return f"граф {len(snap)} оп., " + ("передан" if sent else "не отправлен")
+
+    def _sleep_mind(self) -> str | None:
+        """Число вопросов, заданных агенту за сессию. Пусто — диалога не было."""
+        ag = self.app.session._agent
+        if ag is None or not ag.history:
+            return None
+        n = len(ag.history)
+        return f"{n} {plural(n, 'вопрос', 'вопроса', 'вопросов')}"
+
+    def _sleep_code(self) -> str | None:
+        """Буфер КОДА правился после последнего разбора (/code run, F5)."""
+        s = self.app.session
+        if not s.code_text.strip() or s.code_text == s.code_run_text:
+            return None
+        return "буфер изменён, не разобран"
+
+    def on_sleep_chip_goto(self, event: SleepChip.Goto) -> None:
+        """Клик по факту — открыть тот режим. Тот же путь перехода, что у
+        кнопок мостика журнала: `app.open_mode`."""
+        event.stop()
+        self.app.open_mode(event.mode)
+
+    def refresh_context(self) -> None:
+        super().refresh_context()
+        try:
+            self.query_one("#topbar", TopBar).sleepers = \
+                tuple(self.sleep_facts())
+        except Exception:
+            pass
+
+    def on_nex_input_pasted(self, event) -> None:
+        """Вставка кладёт текст в буфер КОДА — факт про КОД устарел сразу."""
+        super().on_nex_input_pasted(event)
+        self.refresh_context()
+
+    def _pp_done(self, seconds: float, acted: bool = False) -> None:
+        super()._pp_done(seconds, acted)
+        # Вопрос из всплывающей строки панели тоже растит историю АГЕНТА,
+        # даже если агент ничего не делал — счётчик обязан это заметить.
+        self.refresh_context()
+
     # --- чипы -------------------------------------------------------------
 
     def _fill_chips(self) -> None:
@@ -477,6 +579,9 @@ class LabScreen(ModeScreen):
     # остальное — навигация и тумблеры отрисовки, которых в командах нет.
 
     def panel_tool(self, tool: str) -> None:
+        if tool in ("@lab", "@agent", "@work", "@code"):
+            # мостик журнала — общий
+            return super().panel_tool(tool)
         if tool.startswith("/"):
             self.handle_line(tool)
             return
@@ -529,6 +634,11 @@ class LabScreen(ModeScreen):
                 self._matrix_sort_rev = self.MATRIX_SORT_DEFAULT_REV.get(key,
                                                                          True)
                 self._draw_machine_matrix()
+        else:
+            # Незнакомый инструмент — общий путь (мостик «вернуть»,
+            # слэш-команды): молча проглотить его значило бы сломать
+            # кнопку во всех панелях сразу.
+            super().panel_tool(tool)
 
     def _cursor_to_row(self, row: int, grid: ScheduleGrid | None = None) -> None:
         """Курсор решётки — на строку такта/простоя, разбор следует за ним."""
@@ -849,7 +959,7 @@ class LabScreen(ModeScreen):
                    or "")]
         if topic == "console":
             con = self.query_one("#console", Console)
-            return base + [f"Запусков в журнале: {len(con.runs)}."] + \
+            return base + [f"Коммитов в git сессии: {len(con.runs)}."] + \
                 [f"Была команда {r['cmd']} ({len(r['lines'])} строк вывода)."
                  for r in con.runs[-6:]]
         return base
@@ -1504,7 +1614,7 @@ class LabScreen(ModeScreen):
                 ("v", "вид: baseline ↔ оракул"),
                 ("z x p w", "слои — как помечено выше"),
                 ("d", "диагноз: все находки списком"),
-                ("o", "развернуть журнал команд"),
+                ("o", "развернуть git сессии"),
         ):
             tl.append("  ")
             tl.append(key.ljust(8), style=f"{accent} bold")
@@ -1860,19 +1970,23 @@ class LabScreen(ModeScreen):
         foot.update(f)
 
     def _draw_journal(self) -> None:
-        """Развёрнутый ВЫВОД КОМАНД — журнал запусков, а не лента подлиннее."""
+        """Развёрнутый GIT — история сессии, а не лента подлиннее."""
         journal = self.query_one("#journal", ConsoleJournal)
         con = self.query_one("#console", Console)
         panel = self.query_one("#p-console", Panel)
+        # Одна командная строка, а не две: у развёрнутого терминала своя,
+        # компактная строка панели в этот момент только путает.
+        self.query_one("#prompt", PromptBar).display = not self._console_expanded
         journal.display = self._console_expanded
         con.display = not self._console_expanded
         if not self._console_expanded:
-            panel.set_title("ВЫВОД КОМАНД")
+            panel.set_title("GIT")
             return
         n = len(con.runs)
-        panel.set_title(f"ВЫВОД КОМАНД   ·   журнал   ·   "
+        panel.set_title(f"GIT   ·   история сессии   ·   "
                         f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
-        journal.load(con.runs, self.mode, list(self.app.commands))
+        journal.load(con.runs, self.mode, list(self.app.commands),
+                     self.app.session.journal_events)
 
     def _jump_to_instr(self, instr: int) -> bool:
         """Курсор решётки — на клетку этой операции. False, если её там нет.
@@ -1919,10 +2033,12 @@ class LabScreen(ModeScreen):
         f = self._active_finding()
         if f is None:
             link.active = False
+            link.tooltip = "строка подсказки: курсор и /find работают всегда"
             link.update(Text("курсор — по клеткам   ·   /find — по находкам",
                              style=palette.role_hex("faint")))
             return
         link.active = True
+        link.tooltip = (f"{f.title}\n{f.why}\nклик — полный список в ДИАГНОЗЕ")
         t = Text()
         t.append("▸ ", style=palette.role_hex("accent"))
         t.append(f.title, style=palette.role_hex("title") + " bold")
@@ -2138,9 +2254,15 @@ class LabScreen(ModeScreen):
         пересказано. Не наоборот — иначе человек читает сперва пересказ и
         принимает его за источник.
         """
-        target = self.query_one("#detail", Static)
+        # Панели может не быть в дереве: в развёрнутом виде экран показывает
+        # одну панель, остальные сняты. Ответ ИИ приходит из фонового
+        # работника и не знает, что за это время развернули другое, — без
+        # проверки он падал NoMatches прямо в работнике. Разбор при этом не
+        # теряется: он лежит в `_detail_base` и отрисуется, когда панель
+        # вернётся.
+        target = self.query("#detail").first(Static) if self.query("#detail") else None
         base = self._detail_base
-        if base is None:
+        if target is None or base is None:
             return
         t = base.copy()
         faint = palette.role_hex("faint")
@@ -2235,7 +2357,14 @@ class LabScreen(ModeScreen):
                 pl = placed.get(i)
                 row.append((f"т.{pl.cycle}" if pl else "—").rjust(5), style=dim)
                 row.append("  " + phrase(i, depth), style=faint)
-                box.mount(InstrLink(i, row, classes="instr-link"))
+                link = InstrLink(i, row, classes="instr-link")
+                # Подсказка объясняет, что клик не просто так: строка —
+                # ссылка, и куда она ведёт, должно быть видно до клика.
+                pl = placed.get(i)
+                link.tooltip = (f"строка решётки: {ins.name} "
+                                f"(т.{pl.cycle})"
+                                if pl else f"операция {ins.name} — в решётку")
+                box.mount(link)
 
         up = cone(instr, lambda n: dag[n].preds)
         down = cone(instr, lambda n: dag.succs[n])
@@ -2743,7 +2872,12 @@ class LabScreen(ModeScreen):
                 row.append("─" * max(1, lat * cpc),
                            style=palette.op_style(ins.op))
                 row.append(f" {lat}", style=faint)
-                chain_box.mount(InstrLink(i, row, classes="instr-link"))
+                link = InstrLink(i, row, classes="instr-link")
+                # Подсказка дублирует подпись снизу ровно потому, что её
+                # там уже прочитали: у строки пути она должна быть под
+                # рукой, а не через абзац.
+                link.tooltip = f"{ins.name}: латентность {lat} т. — в решётку"
+                chain_box.mount(link)
 
         note = f"{rb} т."
         if rb > cp:
@@ -2962,6 +3096,10 @@ class LabScreen(ModeScreen):
                      style=palette.role_hex("accent_soft") if here else dim)
             t.append("\n     " + _wrapped(f.why, width, 5), style=dim)
             row = FindingItem(i, t, classes="finding-row" + (" here" if here else ""))
+            # Полный «почему» — в подсказке: строка находки уже несёт
+            # заголовок и место, но совет разворачивается только наведением.
+            row.tooltip = (f"{f.title}\n{f.where}\n{f.why}\n"
+                           "клик — курсор решётки на эту клетку")
             scroll.mount(row)
 
     # --- МАШИНА развёрнутая: матрица возможностей ---------------------------

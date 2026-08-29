@@ -40,6 +40,8 @@
     "lab_soft":    { "color": 222 },
     "mind":        { "color": 141, "attrs": ["bold"] },
     "mind_soft":   { "color": 147 },
+    "code":        { "color": 79, "attrs": ["bold"] },
+    "code_soft":   { "color": 115 },
     "hud":         { "color": 245 },
     "dock":        { "color": 253 }
   },

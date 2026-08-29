@@ -28,25 +28,72 @@ ARROW = "▸"
 # --------------------------------------------------------------------------
 
 
-class TopBar(Static):
-    """Полоса режима: марка, имя режима, живой контекст, подсказка справа."""
+class SleepChip(Static):
+    """Один факт спящего режима во второй строке шапки.
+
+    Факт кликабелен целиком: клик открывает тот режим, про который он
+    говорит, — тем же путём, каким мостик журнала переводит человека
+    между режимами (`app.open_mode`). Вид — как у строки состояния в IDE:
+    выглядит текстом, кликабельность проявляется наведением.
+    """
+
+    class Goto(Message):
+        """Открыть режим `mode` (work | mind | code)."""
+
+        def __init__(self, mode: str) -> None:
+            super().__init__()
+            self.mode = mode
+
+    def __init__(self, label: str, body: str, mode: str, **kw) -> None:
+        t = Text()
+        t.append(f"{label}: ", style=f"{palette.mode_hex(mode)} bold")
+        t.append(body, style=palette.role_hex("dim"))
+        super().__init__(t, **kw)
+        self.mode = mode
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Goto(self.mode))
+
+
+class TopBar(Vertical):
+    """Полоса режима: марка, имя режима, живой контекст, подсказка справа.
+
+    Под основной строкой может стоять ВТОРАЯ — факты спящих режимов
+    (`sleepers`): три экрана читают одну сессию, но видеть чужое состояние
+    из РАЗБОРА, никуда не переходя, до сих пор было негде. Пилот живёт
+    только там, кто его наполнит; пустой список — второй строки нет вовсе,
+    и шапка во всех остальных режимах остаётся однорядной.
+    """
 
     context = reactive("", layout=False)
 
+    #: [(метка, текст, режим)] — по одному короткому факту на спящий режим.
+    #: Пусто — строки нет: место не пустует и не стоит прочерком.
+    sleepers = reactive((), layout=False)
+
     def __init__(self, mode: str, title: str, subtitle: str, **kw) -> None:
-        super().__init__("", **kw)
+        super().__init__(**kw)
         self.mode = mode
         self.title_text = title
         self.subtitle = subtitle
+        self._sleep_gen = 0          # поколение фактов: устаревшие не встают
+
+    def compose(self):
+        yield Static("", id="topbar-line")
+        yield Horizontal(id="topbar-sleep")
 
     def watch_context(self) -> None:
+        self.refresh_bar()
+
+    def watch_sleepers(self) -> None:
         self.refresh_bar()
 
     def on_mount(self) -> None:
         self.refresh_bar()
 
     def refresh_bar(self) -> None:
-        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        accent = palette.mode_hex(self.mode)
         dim = palette.role_hex("dim")
         line = Text()
         line.append(f"{MARK} ", style=accent)
@@ -58,7 +105,49 @@ class TopBar(Static):
         if self.context:
             line.append("      ")
             line.append(self.context, style=dim)
-        self.update(line)
+        try:
+            self.query_one("#topbar-line", Static).update(line)
+        except Exception:
+            pass        # watch срабатывает раньше, чем дети смонтированы
+        self._render_sleepers()
+
+    def _render_sleepers(self) -> None:
+        try:
+            row = self.query_one("#topbar-sleep", Horizontal)
+        except Exception:
+            return
+        row.remove_children()
+        row.set_class(bool(self.sleepers), "on")
+        if not self.sleepers:
+            return
+        faint = palette.role_hex("faint")
+        parts = []
+        for i, (label, body, mode) in enumerate(self.sleepers):
+            # Разделитель — только МЕЖДУ показанными фактами: у скрытого
+            # куска не остаётся ни места, ни висячей точки.
+            if i:
+                parts.append(Static(Text("   ·   ", style=faint),
+                                    classes="sleep-sep"))
+            parts.append(SleepChip(label, body, mode, classes="sleep-chip",
+                                   id=f"sleep-{mode}"))
+        # Монтирование — на следующий кадр, не из цепочки монтирования
+        # экрана (on_mount → refresh_context → reactive): синхронный mount()
+        # внутри неё подвешивал учёт сообщений у Textual, и run_test
+        # отваливался по тайм-ауту. Поколение гасит устаревшие кадры:
+        # пока removal предыдущих детей отложен, новый mount с теми же id
+        # не должен успевать за ним.
+        self._sleep_gen += 1
+        gen = self._sleep_gen
+
+        def flush() -> None:
+            if gen != self._sleep_gen:
+                return
+            try:
+                row.mount(*parts)
+            except Exception:
+                pass
+
+        self.call_after_refresh(flush)
 
 
 # --------------------------------------------------------------------------
@@ -103,14 +192,25 @@ class Panel(Vertical):
     class Collapsed(Message):
         """Панель свернули обратно."""
 
+    #: Мягкий разворот: панель НЕ отдаётся встроенному maximize, а только
+    #: сообщает экрану «меня развернули», и он сам решает, как перестроить
+    #: раскладку. Нужно там, где разворот должен ДОБАВЛЯТЬ на экран, а не
+    #: прятать: встроенный maximize показывает ровно один виджет и убирает
+    #: всех соседей (`Screen._arrange`, `get_maximize_widgets` смотрит только
+    #: прямых детей экрана), поэтому у вложенных панелей вместе с соседями
+    #: исчезало и то, чем в этот момент пользуются.
+    soft: bool = False
+
     def __init__(self, *children, title: str = "", accent: str = "",
-                 topic: str = "", has_own_input: bool = False, **kw) -> None:
+                 topic: str = "", has_own_input: bool = False,
+                 soft: bool = False, **kw) -> None:
         super().__init__(*children, **kw)
         self._title = title
         self._accent = accent
         self._last_click = 0.0
         self.topic = topic
         self.has_own_input = has_own_input
+        self.soft = soft
 
     def on_mount(self) -> None:
         if self._title:
@@ -132,6 +232,10 @@ class Panel(Vertical):
         event.stop()
         self._last_click = 0.0        # третий клик подряд не считаем четвёртым
         screen = self.screen
+        if self.soft:
+            # Экран сам знает, что показать шире, а что оставить на месте.
+            self.post_message(self.Expanded(self))
+            return
         if screen.maximized is self:
             screen.minimize()
             self.post_message(self.Collapsed())
@@ -155,13 +259,16 @@ class Console(RichLog):
     списка, поэтому запись идёт всегда, а не только когда журнал открыт.
     """
 
-    def __init__(self, **kw) -> None:
+    def __init__(self, runs: list | None = None, **kw) -> None:
         kw.setdefault("highlight", False)
         kw.setdefault("markup", False)
         kw.setdefault("wrap", False)
         kw.setdefault("auto_scroll", True)
         super().__init__(**kw)
-        self.runs: list[dict] = []
+        # runs — общий журнал сессии (session.journal_runs): один и тот же
+        # список у консолей всех экранов. Свой список остаётся только там,
+        # где консоль вне сессии (тесты, служебные ленты).
+        self.runs: list[dict] = runs if runs is not None else []
 
     def _record(self, line) -> None:
         """Строку — в текущий запуск. Перехватывать `write` нельзя: RichLog
@@ -171,9 +278,17 @@ class Console(RichLog):
             self.runs[-1]["lines"].append(line)
 
     def echo(self, line: str, mode: str = "lab") -> None:
-        """Отметка о поданной команде — чтобы лог не был безадресным."""
-        accent = palette.role_hex(palette.MODE_ROLE.get(mode, "accent"))
-        self.runs.append({"cmd": line, "lines": [], "error": False})
+        """Отметка о поданной команде — чтобы лог не был безадресным.
+
+        Режим и время запоминаются в записи нарочно: журнал общий на всю
+        сессию, и без метки не видно, ГДЕ и КОГДА запущена команда. Метка
+        превращает ленту в летопись сессии — то самое «пойми, что вообще
+        происходило».
+        """
+        accent = palette.mode_hex(mode)
+        self.runs.append({"cmd": line, "lines": [], "error": False,
+                          "mode": mode,
+                          "time": time.strftime("%H:%M")})
         t = Text()
         t.append(f"{ARROW} ", style=accent)
         t.append(line, style=palette.role_hex("title"))
@@ -274,6 +389,12 @@ class ConsoleJournal(Horizontal):
         по команде подставляет её вместе с аргументом;
       — история команд по ↑/↓ и повтор выбранного запуска по ^R;
       — запуски с ошибкой помечены, а не выглядят как удачные;
+      — у каждого запуска метка режима, где он был сделан: журнал общий на
+        сессию, и «где это считалось» — часть записи, а не догадка;
+      — мостик выбранного прогона: в РАЗБОР, АГЕНТУ или ЯДРУ — решает
+        человек, ничто не уезжает само;
+      — поток СОБЫТИЙ отдельно от вывода команд: живой текст планировщика
+        и модели не перемешивается с отчётами (вкладка над выводом);
       — своя строка ввода прямо здесь, а не «где-то внизу экрана».
 
     Колонка слева нарочно узкая: главное здесь — вывод справа, а каталог и
@@ -289,9 +410,9 @@ class ConsoleJournal(Horizontal):
         Binding("ctrl+l", "wipe", "очистить журнал", show=False),
     ]
 
-    #: Ширина левой колонки. 26 — по самой длинной команде с аргументом
-    #: («/load <файл.s>»), а не «на глаз побольше».
-    SIDE_W = 26
+    #: Ширина левой колонки. 32 — по строке коммита истории
+    #: («▸ #12 14:02 к /code run»), а не «на глаз побольше».
+    SIDE_W = 32
 
     class RunRequested(Message):
         """Команда, набранная прямо в развёрнутом журнале — не в общем доке."""
@@ -304,11 +425,13 @@ class ConsoleJournal(Horizontal):
         super().__init__(**kw)
         self.runs: list[dict] = []
         self.commands: list[dict] = []
+        self.events: list = []
         self.pos = -1
         self._seen = 0     # сколько запусков уже показывали (для терминала)
         self.mode = "lab"
         self._filter = ""
         self._hist_pos: int | None = None
+        self._feed = "runs"    # runs | events — что показано в правой колонке
 
     def compose(self):
         with Vertical(id="journal-side"):
@@ -320,24 +443,46 @@ class ConsoleJournal(Horizontal):
         # терминал сам по себе, а не подразумевать, что где-то далеко внизу
         # экрана есть общий док ввода, про который ещё нужно догадаться.
         with Vertical(id="journal-right"):
+            # Мостик выбранного прогона: куда отправить то, что здесь
+            # показано. Решает человек — ничто не уезжает само. Выбор
+            # прогона — клик по строке в истории; кнопки действуют на него.
+            yield BridgeRow(prefix="bridge", id="run-actions")
+            with Horizontal(id="feed-tabs"):
+                yield Tool("поток команд", "feed-runs",
+                           "отчёты выполненных команд", id="feed-runs")
+                yield Tool("события", "feed-events",
+                           "живой поток планировщика и модели — отдельно "
+                           "от отчётов", id="feed-events")
             yield RichLog(id="journal-out", highlight=False, markup=False,
                           wrap=False, auto_scroll=False)
+            yield RichLog(id="events-out", highlight=False, markup=False,
+                          wrap=True, auto_scroll=True)
             with Horizontal(id="journal-field"):
                 yield Static("", id="journal-mark")
                 yield JournalInput(
-                    placeholder="команда — слева каталог, ↑↓ история, "
-                                "^R повтор, ^L очистить",
+                    placeholder="команда — каталог слева   ·   ↑↓ история   "
+                                "·   ^R повтор",
                     id="journal-input")
+
+    def on_tool_picked(self, event) -> None:
+        # Вкладки потока — своё, локальное. Мостик и «вернуть» не
+        # останавливаем — их обрабатывает экран, у журнала нет права
+        # решать, куда прыгать. Повтор перехватил сам BridgeRow.
+        if event.tool in ("feed-runs", "feed-events"):
+            event.stop()
+            self.show_feed("runs" if event.tool == "feed-runs" else "events")
 
     def on_mount(self) -> None:
         self._repaint_mark()
 
     def _repaint_mark(self) -> None:
-        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        accent = palette.mode_hex(self.mode)
+        canvas = palette.SURFACES["canvas"]
+        # Тот же бейдж со шевроном, что у командной строки панели: все
+        # места, где печатают, выглядят одинаково.
         mark = Text()
-        mark.append("nex ", style=f"{accent} bold")
-        mark.append(ARROW, style=palette.role_hex("dim"))
-        mark.append(" ", style="")
+        mark.append(" nex ", style=f"{canvas} on {accent} bold")
+        mark.append(" ❯", style=accent)
         self.query_one("#journal-mark", Static).update(mark)
 
     # --- ввод -------------------------------------------------------------
@@ -411,21 +556,64 @@ class ConsoleJournal(Horizontal):
     # --- отрисовка --------------------------------------------------------
 
     def load(self, runs: list[dict], mode: str = "lab",
-             commands: list[dict] | None = None) -> None:
+             commands: list[dict] | None = None,
+             events: list | None = None) -> None:
         self.runs = runs
         if commands is not None:
             self.commands = commands
+        if events is not None:
+            self.events = events
         if mode != self.mode:
             self.mode = mode
             self._repaint_mark()
         self._draw_commands()
         self._draw_runs()
+        self.show_feed(self._feed)
+
+    # --- поток событий ------------------------------------------------------
+
+    def show_feed(self, feed: str) -> None:
+        """Что показано в правой колонке: отчёты команд или поток событий.
+
+        Две вещи, которые раньше сваливались в одну ленту. Отчёт — ответ на
+        «что вернула команда», события — «что происходило по ходу»: строки
+        модели, пометки планировщика. Перемешанные, они лишали обе ленты
+        смысла: отчёт тонул в потоке, а поток обрывался на таблицах.
+        """
+        self._feed = feed if feed in ("runs", "events") else "runs"
+        self.query_one("#journal-out").display = self._feed == "runs"
+        self.query_one("#events-out").display = self._feed == "events"
+        for key in ("feed-runs", "feed-events"):
+            self.query_one(f"#{key}", Tool).set_on(
+                (key == "feed-runs") == (self._feed == "runs"))
+        head = self.query_one("#feed-events", Tool)
+        n = len(self.events)
+        label = f"события {n}" if n else "события"
+        head.update(label)
+        if self._feed == "events":
+            out = self.query_one("#events-out", RichLog)
+            out.clear()
+            for line in self.events:
+                out.write(line)
+
+    def append_event(self, line) -> None:
+        """Живая строка потока — пишется и в закрытую вкладку: журнал
+        обязан копить всё, что шло мимо, иначе «открыл — а там пусто».
+        """
+        self.events.append(line)
+        if self._feed == "events" and self.is_mounted:
+            self.query_one("#events-out", RichLog).write(line)
+        try:
+            self.query_one("#feed-events", Tool).update(
+                f"события {len(self.events)}")
+        except Exception:
+            pass
 
     def _draw_commands(self) -> None:
         box = self.query_one("#journal-cmds", VerticalScroll)
         head = self.query_one("#journal-cmds-head", Static)
         box.remove_children()
-        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        accent = palette.mode_hex(self.mode)
         dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
         shown = [c for c in self.commands
                  if not self._filter or self._filter in c["name"].lower()]
@@ -456,15 +644,17 @@ class ConsoleJournal(Horizontal):
     def _draw_runs(self) -> None:
         box = self.query_one("#journal-list", VerticalScroll)
         head = self.query_one("#journal-runs-head", Static)
-        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        accent = palette.mode_hex(self.mode)
         faint = palette.role_hex("faint")
         box.remove_children()
         h = Text()
-        h.append("ЗАПУСКИ ", style=f"{accent} bold")
+        h.append("ИСТОРИЯ ", style=f"{accent} bold")
         h.append(f" {len(self.runs)}", style=faint)
         head.update(h)
         if not self.runs:
-            box.mount(Static(Text("  команд ещё не было", style=faint)))
+            box.mount(Static(Text(
+                "  пусто — первая команда\n  станет коммитом #1",
+                style=faint)))
             self.query_one("#journal-out", RichLog).clear()
             self._seen = 0
             return
@@ -477,39 +667,86 @@ class ConsoleJournal(Horizontal):
         if grew or not 0 <= self.pos < len(self.runs):
             self.pos = len(self.runs) - 1
         for i, run in enumerate(self.runs):
-            box.mount(RunItem(i, self._row(i, run),
-                              classes="run-item" + (" on" if i == self.pos
-                                                    else "")))
+            item = RunItem(i, self._row(i, run),
+                           classes="run-item" + (" on" if i == self.pos
+                                                 else ""))
+            # Подсказка — ПОЛНАЯ команда, режим и состояние: в строке списка
+            # имя обрезано, а запись — это коммит, у которого есть что
+            # показать целиком. «Вернуть» — checkout состояния сессии.
+            run_mode = run.get("mode") or "lab"
+            where = {"lab": "РАЗБОР", "work": "ЯДРО", "mind": "АГЕНТ",
+                     "code": "КОД"}.get(run_mode, run_mode)
+            item.tooltip = (f"#{i + 1}  {run.get('time') or '--:--'}  "
+                            f"{run['cmd']}\n{where}"
+                            + (f"  ·  участок {run['scenario']}"
+                               if run.get("scenario") else "")
+                            + f"  ·  {len(run['lines'])} стр. вывода"
+                            + ("  ·  ошибка" if run.get("error") else "")
+                            + "\nклик — показать вывод\n"
+                              "мостик — отправить в другой режим\n"
+                              "«вернуть» — состояние сессии как здесь")
+            box.mount(item)
         self.show(self.pos)
 
+    #: Метка режима в строке запуска: одна буква своим цветом. Журнал общий
+    #: на сессию — без метки «где это считалось» видно только по цвету стрелки,
+    #: а он совпадает с цветом текущего режима и лжёт.
+    MODE_MARKS = {"lab": "р", "work": "я", "mind": "а", "code": "к"}
+
     def _row(self, i: int, run: dict) -> Text:
-        accent = palette.role_hex(palette.MODE_ROLE.get(
-            getattr(self, "mode", "lab"), "accent"))
+        """Запись истории как коммит в git log: две строки и граф.
+
+        Первая — «кто и когда»: точка графа, номер, время, метка режима,
+        команда. Вторая — «что это было за состояние»: участок, число
+        операций, объём вывода; вертикальная линия связывает коммиты в
+        одну ветку. Список из одних команд («/doctor, /run, /doctor»)
+        историей не читается — команды повторяются, состояния нет.
+        """
+        accent = palette.mode_hex(getattr(self, "mode", "lab"))
         here = i == self.pos
         failed = run.get("error")
+        run_mode = run.get("mode") or "lab"
+        faint = palette.role_hex("faint")
         t = Text()
-        t.append("▸ " if here else "  ",
-                 style=accent if here else palette.role_hex("faint"))
-        # Запуск с ошибкой не должен выглядеть как удачный: в списке из
-        # десятка команд иначе не видно, какая из них не отработала.
+        # Точка графа: цвет — режим, где сделан коммит. История читается
+        # как карта сессии: оранжевые коммиты — разбор, мятные — код…
+        t.append("● ", style=palette.mode_hex(run_mode))
+        t.append(f"#{i + 1}".ljust(4),
+                 style=palette.role_hex("title") if here else faint)
+        t.append(f"{run.get('time') or '--:--'}  ", style=faint)
+        mark = self.MODE_MARKS.get(run_mode, "·")
+        t.append(mark + " ", style=palette.mode_hex(run_mode))
         name_style = (palette.role_hex("error") if failed
                       else (palette.role_hex("title") if here
                             else palette.role_hex("dim")))
-        t.append(run["cmd"][:16].ljust(17), style=name_style)
-        n = len(run["lines"])
-        t.append(f"{n:>3}", style=palette.role_hex("faint"))
-        t.append(" ✗" if failed else "  ",
-                 style=palette.role_hex("error"))
+        t.append(run["cmd"][:14], style=name_style)
+        if failed:
+            t.append(" ✗", style=palette.role_hex("error"))
+        # Строка 2: линия графа и состояние, которое несёт запись.
+        dag = run.get("dag")
+        t.append("\n│  ", style=faint)
+        if run.get("scenario"):
+            t.append(str(run["scenario"])[:14],
+                     style=palette.role_hex("dim"))
+            if dag is not None:
+                t.append(f" · {len(dag)} оп.", style=palette.role_hex("dim"))
+        t.append(f" · {len(run['lines'])} стр.", style=faint)
         return t
 
     def show(self, index: int) -> None:
         if not (0 <= index < len(self.runs)):
             return
         self.pos = index
+        rec = self.runs[index]
         out = self.query_one("#journal-out", RichLog)
         out.clear()
-        for line in self.runs[index]["lines"]:
+        for line in rec["lines"]:
             out.write(line)
+        # Мостик: у прогонов, которым есть что отдать, свои кнопки видны.
+        try:
+            self.query_one(BridgeRow).sync(self.runs, self.pos)
+        except Exception:
+            pass
         for item in self.query(RunItem):
             item.set_class(item.index == index, "on")
             item.update(self._row(item.index, self.runs[item.index]))
@@ -517,6 +754,85 @@ class ConsoleJournal(Horizontal):
     def on_run_item_picked(self, event) -> None:
         event.stop()
         self.show(event.index)
+
+
+class BridgeRow(Horizontal):
+    """Ряд переноса прогона между режимами («мостик»).
+
+    ОБЩИЙ для развёрнутого журнала и свёрнутой вкладки ОТЧЁТ: перенос
+    данных — главная функция отчёта, и требовать ради неё разворота
+    значило бы снова спрятать «гит». Кнопки действуют на ВЫБРАННЫЙ
+    в истории прогон (клик по строке), а без выбора — на последний.
+
+    Полная сетка: в разбор / в агента / в ядро / в код / вернуть
+    (checkout состояния на месте) / повторить. Кнопкам нужен префикс id:
+    журнал и вкладка ОТЧЁТА живут на одном экране, и два ряда с одинаковыми
+    id ломали бы query_one.
+    """
+
+    def __init__(self, prefix: str = "bridge", **kw) -> None:
+        super().__init__(**kw)
+        self.prefix = prefix
+        self.runs: list[dict] = []
+        self.pos = -1
+
+    def on_mount(self) -> None:
+        # До первой синхронизации все кнопки видны, а делать им нечего:
+        # пустая история — пустой ряд, иначе кнопки обещают то, чего нет.
+        self.sync([], -1)
+
+    def compose(self):
+        yield Static("мостик ▸", classes="bridge-label")
+        p = self.prefix
+        yield Tool("в разбор", "@lab",
+                   "сделать этот прогон участком РАЗБОРА", id=f"{p}-lab")
+        yield Tool("в агента", "@agent",
+                   "спросить агента про этот прогон", id=f"{p}-agent")
+        yield Tool("в ядро", "@work",
+                   "открыть ЯДРО с этим прогоном в контексте",
+                   id=f"{p}-work")
+        yield Tool("в код", "@code",
+                   "открыть КОД: исходник прогона — в буфер", id=f"{p}-code")
+        yield Tool("вернуть", "@restore",
+                   "вернуть состояние сессии этого прогона "
+                   "(участок, исходник) — без перехода", id=f"{p}-restore")
+        yield Tool("↻ повторить", "@repeat",
+                   "прогнать команду заново", id=f"{p}-repeat")
+
+    def sync(self, runs: list[dict], pos: int) -> None:
+        """Показать кнопки, которым у выбранного прогона есть что делать.
+
+        Без выбора (pos мимо) работает последний прогон: пустой ряд
+        читался бы как сломанный, а «последний» — это то, что человек
+        только что запускал.
+        """
+        self.runs = runs
+        self.pos = pos if 0 <= pos < len(runs) else len(runs) - 1
+        rec = self.runs[self.pos] if self.pos >= 0 else None
+        has_dag = bool(rec and rec.get("dag") is not None)
+        has_src = bool(rec and rec.get("code"))
+        for suffix, need in (
+            ("lab", has_dag),
+            ("agent", has_dag),
+            ("work", rec is not None),
+            ("code", rec is not None),
+            ("restore", has_dag or has_src),
+            ("repeat", rec is not None),
+        ):
+            try:
+                self.query_one(f"#{self.prefix}-{suffix}").display = need
+            except Exception:
+                pass
+
+    def on_tool_picked(self, event) -> None:
+        # Повтор — локальное действие ряда: перезапустить выбранный прогон
+        # тем же путём, что и строка ввода (RunRequested ловит экран).
+        if event.tool != "@repeat":
+            return
+        event.stop()
+        if 0 <= self.pos < len(self.runs):
+            self.post_message(
+                ConsoleJournal.RunRequested(self.runs[self.pos]["cmd"]))
 
 
 # --------------------------------------------------------------------------
@@ -694,10 +1010,13 @@ class PromptBar(Vertical):
         self.query_one("#palette", Palette).display = False
 
     def repaint(self) -> None:
-        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        accent = palette.mode_hex(self.mode)
+        canvas = palette.SURFACES["canvas"]
+        # Марка — бейдж на акцентной плашке и шеврон: приглашение должно
+        # читаться как «сюда печатают», а не как ещё одна строка вывода.
         mark = Text()
-        mark.append("nex ", style=f"{accent} bold")
-        mark.append(ARROW, style=palette.role_hex("dim"))
+        mark.append(" nex ", style=f"{canvas} on {accent} bold")
+        mark.append(" ❯", style=accent)
         self.query_one("#prompt-mark", Static).update(mark)
 
     # --- доступ -----------------------------------------------------------
@@ -982,7 +1301,7 @@ class PanelPrompt(Vertical):
             yield Input(placeholder="спросить про эту панель…", id="pp-input")
 
     def on_mount(self) -> None:
-        accent = palette.role_hex(palette.MODE_ROLE.get(self.mode, "accent"))
+        accent = palette.mode_hex(self.mode)
         self.styles.border_title_color = accent
         head = Text()
         head.append(f"NEX  ·  {self._title}", style=f"{accent} bold")

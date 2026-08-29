@@ -60,7 +60,12 @@ SURFACES = {
     "shadow":  "#080a10",   # подложка дока ввода
 }
 
-MODE_ROLE = {"work": "work", "lab": "lab", "mind": "mind", "code": "accent2"}
+# Режим → роль его акцента. У КОДА до 24.08.2026 стояла роль `accent2`, а она
+# во ВСЕХ четырёх темах задана тем же цветом, что и `lab`: КОД и РАЗБОР
+# светились одним оранжевым, и по цвету рамок было не понять, где ты. Роль
+# `code` добавлена в темы отдельным цветом (мятный / мятно-зелёный /
+# лососевый / cyan) — четвёртому режиму четвёртый цвет.
+MODE_ROLE = {"work": "work", "lab": "lab", "mind": "mind", "code": "code"}
 
 
 def role_hex(role: str, fallback: str = "#c8ccd4") -> str:
@@ -68,6 +73,16 @@ def role_hex(role: str, fallback: str = "#c8ccd4") -> str:
 
     st = render.THEME.roles.get(role)
     return hex_of(st.color) if st else fallback
+
+
+def mode_hex(mode: str) -> str:
+    """Цвет акцента режима. Чужая тема без роли `code` не остаётся серой."""
+    from ..ui import render
+
+    role = MODE_ROLE.get(mode, "accent")
+    if role not in render.THEME.roles:
+        role = "accent2"
+    return role_hex(role)
 
 
 def op_hex(op: str) -> str:
@@ -98,6 +113,10 @@ def variables() -> dict[str, str]:
         "mind", "mind_soft", "banner", "mountain",
     ):
         out[f"nex-{role.replace('_', '-')}"] = role_hex(role)
+    # Роль КОДА молодая: в чужой теме её может не быть — берём вторичный
+    # акцент, а не серый по умолчанию.
+    out["nex-code"] = role_hex("code", role_hex("accent2"))
+    out["nex-code-soft"] = role_hex("code_soft", role_hex("accent2-soft"))
     return out
 
 
@@ -110,7 +129,7 @@ def make_theme(mode: str = "lab") -> "object":
     """
     from textual.theme import Theme
 
-    accent = role_hex(MODE_ROLE.get(mode, "accent"))
+    accent = mode_hex(mode)
     return Theme(
         name=f"nex-{mode}",
         primary=accent,
@@ -131,10 +150,17 @@ def make_theme(mode: str = "lab") -> "object":
             "block-cursor-text-style": "bold",
             "input-selection-background": accent + " 35%",
             "footer-key-foreground": accent,
-            "scrollbar": SURFACES["line"],
-            "scrollbar-hover": role_hex("dim"),
-            "scrollbar-active": accent,
-            "scrollbar-background": SURFACES["canvas"],
+            # Полоса прокрутки — указатель положения, а не отдельный экран.
+            # Фон = панель: полоса не рисует чёрный столб поверх содержимого.
+            # Бегунок полупрозрачный: виден ровно настолько, чтобы его найти,
+            # и не спорит с текстом рядом; ярче становится только под
+            # курсором и при перетаскивании.
+            "scrollbar": SURFACES["line"] + " 18%",
+            "scrollbar-hover": role_hex("dim") + " 45%",
+            "scrollbar-active": accent + " 60%",
+            "scrollbar-background": SURFACES["panel"],
+            "scrollbar-background-hover": SURFACES["panel"],
+            "scrollbar-background-active": SURFACES["panel"],
             "border-blurred": SURFACES["line"],
         },
     )

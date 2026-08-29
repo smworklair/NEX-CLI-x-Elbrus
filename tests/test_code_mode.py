@@ -287,3 +287,57 @@ class TestRealCompilerOutput(unittest.TestCase):
                 parsed = parse_asm(path.read_text(encoding="utf-8"))
                 self.assertEqual(parsed.unknown_mnemonics, {})
                 self.assertTrue(parsed.ops)
+
+
+class TestStandaloneCollectorMatchesCore(unittest.TestCase):
+    """`tools/collect_real_schedule.py` обязан разбирать так же, как ядро.
+
+    Скрипт самодостаточен НАМЕРЕННО: его отдают человеку, у которого
+    репозитория нет. Цена самодостаточности — копия логики разбора, и она
+    уже один раз разошлась молча: скрипт перестал выдавать незнакомую
+    мнемонику за сложение и получил полный список управляющих операций, а
+    ядро осталось со старым поведением. Расхождение обнаружилось только
+    когда его результаты сравнили с результатами проекта на одном файле.
+
+    Тест сравнивает не построчно (копия имеет право быть иначе устроена), а
+    по наблюдаемому итогу: словари, списки и разбор настоящего файла.
+    """
+
+    @staticmethod
+    def _script():
+        import importlib.util
+        import sys
+
+        path = Path(__file__).resolve().parent.parent / "tools" / "collect_real_schedule.py"
+        spec = importlib.util.spec_from_file_location("_collector", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["_collector"] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_mnemonic_tables_agree(self):
+        scr = self._script()
+        self.assertEqual(scr.MNEMONICS, asm_parser.MNEMONICS,
+                         "словарь мнемоник разошёлся со скриптом")
+
+    def test_control_lists_agree(self):
+        scr = self._script()
+        self.assertEqual(set(scr.CONTROL), set(asm_parser.CONTROL),
+                         "список управляющих операций разошёлся со скриптом")
+
+    def test_same_classes_on_the_same_source(self):
+        """Один и тот же текст — один и тот же разбор по классам операций."""
+        import collections
+
+        scr = self._script()
+        src = ("{\n  setwd\twsz = 0xc\n  merges,2,sm\t0x1, %g17, %r9, %pred3\n"
+               "  landp\t~%pred0, ~%pred1, %pred2\n  adds,0\t%r1, %r2, %r3\n"
+               "  ldw,3\t0x0, [ %dr1 ], %r4\n}\n")
+        mine = asm_parser.parse_asm(src)
+        theirs = scr.parse_asm(src)
+        self.assertEqual(
+            collections.Counter(o.op for o in mine.ops),
+            collections.Counter(o.op for o in theirs.ops))
+        self.assertEqual([o.mnemonic for o in mine.ops],
+                         [o.mnemonic for o in theirs.ops])
+        self.assertEqual(mine.control_ops, theirs.control_ops)

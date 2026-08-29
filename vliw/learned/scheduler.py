@@ -60,19 +60,28 @@ class LearnedScheduler:
 
     def __init__(self, adapter=None, backend=None,
                  max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
-                 device: str | None = None, repair: bool = False):
+                 device: str | None = None, repair: bool = False,
+                 temperature: float = 0.0, seed: int | None = None):
         """`backend` можно передать готовым — это точка подмены для тестов.
 
         `repair=True` включает починку каналов (см. repair.py): такты модели
         остаются как есть, незаконный канал переназначается на законный.
         Результат тогда — ГИБРИД, и он подписан как гибрид, а не как чистый
         ответ модели.
+
+        `temperature`/`seed` — сэмплинг для best-of-N (см. bench.py). Это
+        атрибуты, а не аргументы `schedule()`, потому что протокол Scheduler
+        фиксирован, а bench-у удобно менять их между сэмплами. Умолчание —
+        жадный детерминированный ответ, которым сняты все замеры: путь до
+        бэкенда остаётся прежним вызовом байт-в-байт.
         """
         self._adapter = adapter
         self._backend = backend
         self._device = device
         self.max_new_tokens = max_new_tokens
         self.repair = repair
+        self.temperature = temperature
+        self.seed = seed
 
     # --- ленивая загрузка --------------------------------------------------
 
@@ -156,7 +165,9 @@ class LearnedScheduler:
                 out.append(Placed(Placement(i, cycle, channel), live=True))
             return out
 
-        gen = be.generate_events(prompt, self.max_new_tokens)
+        gen = be.generate_events(
+            prompt, self.max_new_tokens,
+            **runtime.sampling_kwargs(self.temperature, self.seed))
         try:
             for chunk in gen:
                 parts.append(chunk)

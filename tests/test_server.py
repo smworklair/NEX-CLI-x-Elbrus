@@ -114,7 +114,17 @@ class TestCompletionStream(unittest.TestCase):
         self.assertEqual(body["prompt"], "мой промпт")
         self.assertEqual(body["n_predict"], 123)
         self.assertEqual(body["temperature"], 0)
+        self.assertNotIn("seed", body)     # без явного seed его нет и в запросе
         self.assertTrue(body["stream"])
+
+    def test_sampling_reaches_the_server(self) -> None:
+        """temperature/seed для best-of доходят до /completion как есть."""
+        fake = FakeServer(_sse([{"content": "x", "stop": True}]))
+        self.addCleanup(fake.close)
+        list(_server_at(fake.path).complete("промпт", 8, temperature=0.7, seed=42))
+        body = json.loads(fake.requests[0].split(b"\r\n\r\n", 1)[1])
+        self.assertEqual(body["temperature"], 0.7)
+        self.assertEqual(body["seed"], 42)
 
     def test_cancel_closes_the_connection(self) -> None:
         """Отмена на середине потока не оставляет соединение висеть."""

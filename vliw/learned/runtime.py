@@ -212,19 +212,46 @@ class Backend:
     была бы про него неправдой.
     """
 
-    def generate_events(self, prompt: str, max_new_tokens: int):
-        """Куски ответа по мере генерации. Сырые: маркеры конца не срезаны."""
+    def generate_events(self, prompt: str, max_new_tokens: int,
+                        temperature: float = 0.0, seed: int | None = None):
+        """Куски ответа по мере генерации. Сырые: маркеры конца не срезаны.
+
+        `temperature`/`seed` — сэмплинг для best-of-N (см. bench.py). Умолчание
+        — жадный детерминированный поиск (`temperature=0`), которым сняты все
+        замеры: при умолчаниях ответ бэкенда обязан совпадать с прежним до
+        строки. `seed` пришпиливает случайность там, где она есть; None — не
+        трогать.
+        """
         raise NotImplementedError
 
     def generate(self, prompt: str, max_new_tokens: int,
-                 on_text=None) -> str:
+                 on_text=None, temperature: float = 0.0,
+                 seed: int | None = None) -> str:
         """Весь ответ целиком. `on_text(chunk)` — по мере поступления."""
         parts: list[str] = []
-        for chunk in self.generate_events(prompt, max_new_tokens):
+        kw = sampling_kwargs(temperature, seed)
+        for chunk in self.generate_events(prompt, max_new_tokens, **kw):
             parts.append(chunk)
             if on_text:
                 on_text(chunk)
         return "".join(parts).split(END_MARKER)[0]
+
+
+def sampling_kwargs(temperature: float, seed: int | None) -> dict:
+    """Аргументы сэмплинга для generate_events() — пустые при умолчаниях.
+
+    Передавать kwargs ТОЛЬКО когда они отличаются от умолчаний. Причина не в
+    эстетике: подменные бэкенды тестов определяют `generate_events(prompt,
+    max_new_tokens)` по старому контракту, и лишний kwarg уронил бы их на
+    ровном месте. Заодно старый путь (temperature=0) остаётся прежним вызовом
+    байт-в-байт.
+    """
+    kw: dict = {}
+    if temperature:
+        kw["temperature"] = float(temperature)
+    if seed is not None:
+        kw["seed"] = int(seed)
+    return kw
 
 
 END_MARKER = "[end of text]"
@@ -244,8 +271,12 @@ class ScriptedBackend(Backend):
     def __init__(self, replies: list[str] | str):
         self._replies = [replies] if isinstance(replies, str) else list(replies)
         self._i = 0
+        self.last_sampling: dict = {}
+        """Что попросили при последней генерации — точка наблюдения для тестов."""
 
-    def generate_events(self, prompt: str, max_new_tokens: int):
+    def generate_events(self, prompt: str, max_new_tokens: int,
+                        temperature: float = 0.0, seed: int | None = None):
+        self.last_sampling = {"temperature": temperature, "seed": seed}
         if not self._replies:
             return
         r = self._replies[min(self._i, len(self._replies) - 1)]
@@ -334,7 +365,8 @@ class TransformersBackend(Backend):
             model.to("cpu")
         self._model = model
 
-    def generate_events(self, prompt: str, max_new_tokens: int):
+    def generate_events(self, prompt: str, max_new_tokens: int,
+                        temperature: float = 0.0, seed: int | None = None):
         """Одним куском: transformers здесь считает без стриминга.
 
         Честно отдаём один `yield` вместо имитации потока. Интерфейс увидит
@@ -345,12 +377,20 @@ class TransformersBackend(Backend):
 
         self._load()
         inputs = self._tok(prompt, return_tensors="pt").to(self._model.device)
+        # Умолчание — детерминированно, как на замерах (do_sample=False).
+        # Сэмплинг включается ТОЛЬКО явной температурой: иначе путь best-of-N
+        # менял бы и обычный прогон.
+        gen_kw: dict = {"do_sample": False}
+        if temperature and temperature > 0:
+            gen_kw = {"do_sample": True, "temperature": float(temperature)}
+            if seed is not None:
+                torch.manual_seed(int(seed))
         with torch.no_grad():
             out = self._model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,           # детерминированно — как на замерах
                 pad_token_id=self._tok.pad_token_id or self._tok.eos_token_id,
+                **gen_kw,
             )
         # Возвращаем ТОЛЬКО продолжение: промпт модель повторяет на входе, и
         # если его не срезать, разбор увидит строки графа как «расписание».
@@ -416,6 +456,35 @@ def make_backend(adapter: Adapter, device: str | None = None,
 _GENERATE_LOCK = threading.Lock()
 
 
+def _llama_cmd(binary, base_gguf, lora_gguf, prompt_file: str,
+               max_new_tokens: int, ctx: int, threads: int,
+               temperature: float = 0.0, seed: int | None = None) -> list[str]:
+    """Командная строка llama-completion. Чистая функция — ради тестов.
+
+    При умолчаниях (`temperature=0`, seed не задан) список совпадает со
+    старым ДО ЭЛЕМЕНТА: `--temp 0` остаётся «0», а не «0.0» — не потому, что
+    llama.cpp различает (не различает), а чтобы диф командной строки при
+    регрессии показывал только настоящие изменения.
+    """
+    temp_arg = "0" if not temperature else f"{temperature:g}"
+    cmd = [
+        str(binary),
+        "-m", str(base_gguf),
+        "-f", prompt_file,
+        "-n", str(max_new_tokens),
+        "-c", str(ctx),
+        "--temp", temp_arg,
+        "-t", str(threads),
+        "-no-cnv",                  # БЕЗ chat-шаблона: обучение шло на сыром промпте
+        "--no-warmup",
+    ]
+    if seed is not None:
+        cmd += ["--seed", str(seed)]
+    if lora_gguf is not None:
+        cmd += ["--lora", str(lora_gguf)]
+    return cmd
+
+
 class LlamaCppBackend(Backend):
     """Локальный запуск через llama.cpp — 4-битная база, CPU, без GPU.
 
@@ -441,7 +510,8 @@ class LlamaCppBackend(Backend):
         self.base_gguf = find_gguf_base()
         self.lora_gguf = gguf_adapter_for(adapter)
 
-    def generate_events(self, prompt: str, max_new_tokens: int):
+    def generate_events(self, prompt: str, max_new_tokens: int,
+                        temperature: float = 0.0, seed: int | None = None):
         """Куски ответа по мере генерации.
 
         Блокировка берётся ДО первого `yield` (см. правило в
@@ -455,11 +525,14 @@ class LlamaCppBackend(Backend):
                 "завершения, повторный запуск запустил бы второй процесс "
                 "рядом с первым и вдвое больше памяти")
         try:
-            yield from self._generate_events_locked(prompt, max_new_tokens)
+            yield from self._generate_events_locked(prompt, max_new_tokens,
+                                                    temperature, seed)
         finally:
             _GENERATE_LOCK.release()
 
-    def _generate_events_locked(self, prompt: str, max_new_tokens: int):
+    def _generate_events_locked(self, prompt: str, max_new_tokens: int,
+                                temperature: float = 0.0,
+                                seed: int | None = None):
         import subprocess
         import tempfile
 
@@ -478,19 +551,9 @@ class LlamaCppBackend(Backend):
         # Обнаружено по факту: OOM-killer убил подпроцесс внутри полноэкранного
         # режима, где памяти и так меньше запаса (кэш расписаний, отрисовка).
         ctx = max(1024, (max_new_tokens + 400) * 2)
-        cmd = [
-            str(self.binary),
-            "-m", str(self.base_gguf),
-            "-f", prompt_file,
-            "-n", str(max_new_tokens),
-            "-c", str(ctx),
-            "--temp", "0",              # детерминированно — как на замерах
-            "-t", str(self.threads),
-            "-no-cnv",                  # БЕЗ chat-шаблона: обучение шло на сыром промпте
-            "--no-warmup",
-        ]
-        if self.lora_gguf is not None:
-            cmd += ["--lora", str(self.lora_gguf)]
+        cmd = _llama_cmd(self.binary, self.base_gguf, self.lora_gguf,
+                         prompt_file, max_new_tokens, ctx, self.threads,
+                         temperature=temperature, seed=seed)
 
         env = _llama_env(self.binary)
 
@@ -607,12 +670,15 @@ class LlamaServerBackend(Backend):
         self.binary = find_llama_server()
         self.base_gguf = find_gguf_base()
 
-    def generate_events(self, prompt: str, max_new_tokens: int):
+    def generate_events(self, prompt: str, max_new_tokens: int,
+                        temperature: float = 0.0, seed: int | None = None):
         # Адаптер передаём в complete(), а не выбираем заранее: он держит
         # режим сервера занятым на всю генерацию, чтобы разговор с базовой
         # моделью не переключил LoRA у нас под руками.
         yield from shared_server().complete(prompt, max_new_tokens,
-                                            adapter=self.adapter.name)
+                                            adapter=self.adapter.name,
+                                            temperature=temperature,
+                                            seed=seed)
 
 
 def shared_server():

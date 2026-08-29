@@ -310,8 +310,13 @@ class LlamaServer:
                 conn.close()
 
     def complete(self, prompt: str, n_predict: int, adapter: str | None = None,
-                 timeout: float = 900.0):
+                 timeout: float = 900.0, temperature: float = 0.0,
+                 seed: int | None = None):
         """Поток кусков ответа. Только продолжение — эха промпта здесь нет.
+
+        `temperature`/`seed` — сэмплинг для best-of-N (см. `bench.py`).
+        Умолчания — та же детерминированная генерация, что на всех замерах:
+        тело запроса отличается от прежнего только при явной температуре.
 
         Отмена: закрыть генератор. Соединение закрывается в `finally`, сервер
         видит обрыв клиента и снимает свою задачу — процесс при этом остаётся
@@ -320,18 +325,23 @@ class LlamaServer:
         чтение 2.1 ГБ весов на следующий запрос.
         """
         with self.using(adapter) if adapter else contextlib.nullcontext():
-            yield from self._complete(prompt, n_predict, timeout)
+            yield from self._complete(prompt, n_predict, timeout,
+                                      temperature=temperature, seed=seed)
 
-    def _complete(self, prompt: str, n_predict: int, timeout: float):
+    def _complete(self, prompt: str, n_predict: int, timeout: float,
+                  temperature: float = 0.0, seed: int | None = None):
         conn = self._connect(timeout)
         try:
-            body = json.dumps({
+            body: dict = {
                 "prompt": prompt,
                 "n_predict": n_predict,
-                "temperature": 0,       # детерминированно — как на замерах
+                "temperature": temperature,   # 0 — детерминированно, как на замерах
                 "stream": True,
                 "cache_prompt": True,   # общий префикс промпта не считается заново
-            })
+            }
+            if seed is not None:
+                body["seed"] = int(seed)
+            body = json.dumps(body)
             conn.request("POST", "/completion", body=body,
                          headers={"Content-Type": "application/json"})
             resp = conn.getresponse()

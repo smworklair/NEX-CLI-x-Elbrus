@@ -102,6 +102,34 @@ class Session:
     code_path: str = ""
     """Последний файл, куда буфер сохраняли / откуда загрузили: Ctrl+S в
     редакторе пишет туда без повторного вопроса."""
+    code_run_text: str = ""
+    """Текст буфера КОДА на момент последнего разбора (`/code run`, F5).
+
+    Ставит `_load_parsed`, когда разобран именно буфер. Нужен индикатору
+    спящих режимов в РАЗБОРЕ: «буфер изменён, не разобран» видно без захода
+    в КОД. У экрана КОДА есть своя метка свежести (run_text), но она живёт
+    только пока открыт экран — а эта переживает смену режимов.
+    """
+    journal_runs: list = field(default_factory=list)
+    """Общий журнал прогонов сессии («гит сессии»).
+
+    Один список на все экраны: ЯДРО, РАЗБОР, АГЕНТ и КОД пишут сюда каждый
+    запуск, и из любого места к нему можно вернуться. У записи после
+    выполнения появляются мостик-поля: сценарий, граф, профиль — по ним
+    журнал отдаёт прогон в РАЗБОР, АГЕНТУ или ЯДРУ одной кнопкой. Ничего
+    не уезжает само: что сделать общим, решает человек.
+    """
+    journal_events: list = field(default_factory=list)
+    """Живой поток сессии отдельно от отчётов команд.
+
+    Строки модели и пометки планировщика во время команды. Тоже один на
+    все экраны: поток не принадлежит ни одному режиму, он принадлежит
+    прогону, а прогон виден из журнала везде.
+    """
+    pending_note: str = ""
+    """Пометка для ЯДРА, ждущая показа (кладёт мостик из журнала)."""
+    pending_question: str = ""
+    """Вопрос, ждущий отправки в АГЕНТ (кладёт мостик из журнала)."""
     _workspace: object = None
     _agent: object = None
     compiler_sched: object = None
@@ -671,6 +699,12 @@ def _load_parsed(session: Session, parsed, label: str) -> bool:
     model = session.model()
     dag = asm_parser.build_dag(parsed, key=f"asm:{label}", title=label)
     session.set_dag(dag, f"asm:{label}")
+    # Метка «разобран ли буфер»: успешный прогон именно БУФЕРА запоминает
+    # его текст. Правка после прогона снова сделает факт «изменён, не
+    # разобран» видимым в РАЗБОРЕ; `/code load` метку не трогает нарочно —
+    # загруженный файл разобран ещё не был.
+    if label == "буфер":
+        session.code_run_text = session.code_text
 
     cs = asm_parser.compiler_schedule(parsed, dag, model)
     comp_cycles = cs.makespan if cs else None
@@ -1017,6 +1051,64 @@ def cmd_report(session: Session, arg: str) -> None:
         return False
 
 
+@dataclass
+class _LearnedArgs:
+    """Разобранные аргументы /learned. Чистая функция — ради тестов.
+
+    Раньше парсинг жил внутри `cmd_learned`, и проверить его можно было
+    только подняв модель. А ломается он тихо: «--temperature 0.7» —
+    «0.7» не isdigit(), и его принимали за имя адаптера.
+    """
+
+    name: str | None = None
+    bench: int = 0
+    best_of: int = 0
+    temperature: float = 0.0
+    seed: int = 1
+    raw: bool = False
+    status: bool = False
+    repair: bool = True
+
+
+def _parse_learned(toks: list[str]) -> _LearnedArgs:
+    """`--flag N` и `--flag=N` для всех флагов со значением."""
+    a = _LearnedArgs()
+    a.raw = "--raw" in toks
+    a.status = "--status" in toks
+    # Починка каналов включена по умолчанию: модель ошибается почти
+    # исключительно в канале, а такты ставит верно. --pure выключает и
+    # показывает сырой ответ модели как есть.
+    a.repair = "--pure" not in toks
+    # Токены-значения флагов (`--temperature 0.7`) не должны попасть в имя
+    # адаптера: «0.7» не isdigit(), и прежняя проверка принимала его за имя.
+    flag_values: set[int] = set()
+    for i, t in enumerate(toks):
+        if t == "--bench":
+            a.bench = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 15
+            flag_values.add(i + 1)
+        elif t.startswith("--bench="):
+            a.bench = int(t.split("=", 1)[1] or 15)
+        elif t == "--best-of":
+            a.best_of = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 4
+            flag_values.add(i + 1)
+        elif t.startswith("--best-of="):
+            a.best_of = int(t.split("=", 1)[1] or 4)
+        elif t == "--temperature":
+            a.temperature = float(toks[i + 1]) if i + 1 < len(toks) else 0.0
+            flag_values.add(i + 1)
+        elif t.startswith("--temperature="):
+            a.temperature = float(t.split("=", 1)[1] or 0.0)
+        elif t == "--seed":
+            a.seed = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 1
+            flag_values.add(i + 1)
+        elif t.startswith("--seed="):
+            a.seed = int(t.split("=", 1)[1] or 1)
+    a.name = next((t for i, t in enumerate(toks)
+                   if not t.startswith("--") and not t.isdigit()
+                   and i not in flag_values), None)
+    return a
+
+
 def cmd_learned(session: Session, arg: str) -> None:
     """Запустить обученный адаптер на текущем графе — локально, без Kaggle.
 
@@ -1026,21 +1118,10 @@ def cmd_learned(session: Session, arg: str) -> None:
     from .learned import runtime
     from .ui import learned_view
 
-    toks = arg.split()
-    want_raw = "--raw" in toks
-    want_status = "--status" in toks
-    # Починка каналов включена по умолчанию: модель ошибается почти
-    # исключительно в канале, а такты ставит верно. --pure выключает и
-    # показывает сырой ответ модели как есть.
-    want_repair = "--pure" not in toks
-    n_bench = 0
-    for i, t in enumerate(toks):
-        if t == "--bench":
-            n_bench = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 15
-        elif t.startswith("--bench="):
-            n_bench = int(t.split("=", 1)[1] or 15)
-    name = next((t for t in toks
-                 if not t.startswith("--") and not t.isdigit()), None)
+    a = _parse_learned(arg.split())
+    want_raw, want_status, want_repair = a.raw, a.status, a.repair
+    n_bench, best_of_n, temperature, seed = a.bench, a.best_of, a.temperature, a.seed
+    name = a.name
 
     ready, lines = runtime.status(name)
     if want_status or not ready:
@@ -1064,23 +1145,41 @@ def cmd_learned(session: Session, arg: str) -> None:
         if not data.exists():
             print(paint("error", f"нет файла эвала {data} — замер не на чем гонять"))
             return False
-        print(rule(f"замер · {adapter.name} · {n_bench} примеров"))
-        print(Style.dim(f"  локально, без Kaggle. Порядка 30 с на граф — "
-                        f"ожидаемо {n_bench * 30 // 60} мин."))
+        if best_of_n and temperature <= 0:
+            print(paint("error",
+                        "best-of имеет смысл только при --temperature > 0: "
+                        "при жадной генерации все N ответов одинаковы"))
+            return False
+        # Температура без --best-of — тоже законный замер: один сэмплированный
+        # ответ. Классифицируется как best-of-1.
+        if temperature > 0 and not best_of_n:
+            best_of_n = 1
+        bo = None
+        if best_of_n:
+            from .learned.bench import BestOf
+
+            bo = BestOf(n=best_of_n, temperature=temperature, seed=seed)
+        gens = n_bench * max(1, best_of_n)
+        print(rule(f"замер · {adapter.name} · {n_bench} примеров"
+                   + (f" · best-of {best_of_n} · t={temperature:g}" if bo else "")))
+        print(Style.dim(f"  локально, без Kaggle. Порядка 30 с на генерацию — "
+                        f"ожидаемо {gens * 30 // 60} мин."))
         print()
         sys.stdout.flush()
         from .learned import bench as _bench
 
         def _tick(k, row):
             mark = paint("success", "ok  ") if row.kind == "валидно" else paint("error", "….  ")
-            print(f"  [{k:>3}/{n_bench}] {mark} n={row.n:<3} {row.kind:<9} "
+            extra = (f"сэмплы {row.valid_samples}/{len(row.samples)}  "
+                     if row.samples else "")
+            print(f"  [{k:>3}/{n_bench}] {mark} n={row.n:<3} {row.kind:<9} {extra}"
                   + Style.dim(row.first_error[:46]))
             sys.stdout.flush()
 
         try:
             res = _bench.run_bench(data, n_bench,
                                    _LS(adapter=adapter, repair=want_repair),
-                                   machine, _tick)
+                                   machine, _tick, best_of=bo)
         except (RuntimeError, OSError, ImportError) as e:
             print(paint("error", f"замер прерван: {e}"))
             return False

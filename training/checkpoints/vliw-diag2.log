@@ -1,0 +1,62 @@
+[{"stream_name":"stdout","time":6.989062796,"data":"GPU: Tesla T4, compute capability 7.5\n"}
+,{"stream_name":"stdout","time":7.440008143,"data":"GPU: базовая CUDA-операция прошла — совместимость подтверждена\n"}
+,{"stream_name":"stdout","time":10.945275468,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.7/11.7 MB 95.0 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":10.984693896,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 775.8/775.8 kB 39.0 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":11.426027683,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 41.0/41.0 MB 45.2 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":11.45780026,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 389.2/389.2 kB 27.2 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":11.56096192,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 516.0/516.0 kB 6.0 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":26.976736362,"data":"адаптер: /kaggle/input/datasets/shokhruhmir/vliw-run2-lora\n"}
+,{"stream_name":"stdout","time":26.976782194,"data":"\n"}
+,{"stream_name":"stdout","time":26.976787373,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":26.976790691,"data":"ЗАМЕР: обычная генерация\n"}
+,{"stream_name":"stdout","time":26.976794183,"data":"======================================================================\n"}
+,{"stream_name":"stderr","time":56.030575207,"data":"Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stderr","time":56.132022106,"data":"[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n"}
+,{"stream_name":"stderr","time":78.83160484,"data":"\rFetching 2 files:   0%|          | 0/2 [00:00\u003c?, ?it/s]\rFetching 2 files:  50%|█████     | 1/2 [00:22\u003c00:22, 22.35s/it]\rFetching 2 files: 100%|██████████| 2/2 [00:22\u003c00:00, 11.17s/it]\n"}
+,{"stream_name":"stderr","time":83.517652052,"data":"\rLoading weights:   0%|          | 0/434 [00:00\u003c?, ?it/s]\rLoading weights:   0%|          | 1/434 [00:00\u003c06:51,  1.05it/s]\rLoading weights:  17%|█▋        | 75/434 [00:01\u003c00:03, 93.53it/s]\rLoading weights:  25%|██▍       | 108/434 [00:01\u003c00:02, 112.49it/s]\rLoading weights:  31%|███       | 134/434 [00:01\u003c00:02, 107.26it/s]\rLoading weights:  35%|███▌      | 154/434 [00:01\u003c00:02, 105.00it/s]\rLoading weights:  39%|███▉      | 170/434 [00:01\u003c00:02, 113.20it/s]\rLoading weights:  43%|████▎     | 186/434 [00:02\u003c00:02, 102.48it/s]\rLoading weights:  46%|████▌     | 200/434 [00:02\u003c00:02, 108.25it/s]\rLoading weights:  51%|█████     | 220/434 [00:02\u003c00:01, 125.16it/s]\rLoading weights:  54%|█████▍    | 235/434 [00:02\u003c00:01, 121.24it/s]\rLoading weights:  57%|█████▋    | 249/434 [00:02\u003c00:01, 119.73it/s]\rLoading weights:  62%|██████▏   | 267/434 [00:02\u003c00:01, 113.22it/s]\rLoading weights:  67%|██████▋   | 291/434 [00:02\u003c00:01, 124.05it/s]\rLoading weights:  70%|███████   | 304/434 [00:02\u003c00:01, 117.66it/s]\rLoading weights:  73%|███████▎  | 317/434 [00:03\u003c00:00, 119.42it/s]\rLoading weights:  78%|███████▊  | 339/434 [00:03\u003c00:00, 123.92it/s]\rLoading weights:  81%|████████  | 352/434 [00:03\u003c00:00, 122.75it/s]\rLoading weights:  84%|████████▍ | 365/434 [00:03\u003c00:00, 121.61it/s]\rLoading weights:  89%|████████▉ | 387/434 [00:03\u003c00:00, 126.34it/s]\rLoading weights:  92%|█████████▏| 400/434 [00:03\u003c00:00, 118.41it/s]\rLoading weights:  95%|█████████▌| 413/434 [00:03\u003c00:00, 112.06it/s]\rLoading weights: 100%|██████████| 434/434 [00:03\u003c00:00, 109.38it/s]\n"}
+,{"stream_name":"stdout","time":86.946860322,"data":"оценка 20 примеров\n"}
+,{"stream_name":"stdout","time":98.17226578,"data":"[1] галлюцинация: ['не размещены инструкции: [0]']\n"}
+,{"stream_name":"stdout","time":132.17658096,"data":"[3] мусор: ['не размещены инструкции: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]']\n"}
+,{"stream_name":"stdout","time":179.705313905,"data":"[4] мусор: ['не размещены инструкции: [0, 1, 2, 3, 4, 5]']\n"}
+,{"stream_name":"stdout","time":189.259392624,"data":"[5] галлюцинация: ['не размещены инструкции: [0]']\n"}
+,{"stream_name":"stdout","time":264.170416004,"data":"  ...10/20  как есть 2  хвост 0  сдвиг 0  дыры 4\n"}
+,{"stream_name":"stdout","time":412.611756545,"data":"[19] хвост: лишние id [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]\n"}
+,{"stream_name":"stdout","time":424.26049056,"data":"  ...20/20  как есть 3  хвост 1  сдвиг 0  дыры 9\n"}
+,{"stream_name":"stdout","time":424.305225953,"data":"\n"}
+,{"stream_name":"stdout","time":424.305257982,"data":"как есть (без хвоста):     3/20 (15%)\n"}
+,{"stream_name":"stdout","time":424.30526566,"data":"префикс 0..n-1 законный:   4/20 (20%)\n"}
+,{"stream_name":"stdout","time":424.305270337,"data":"состав:\n"}
+,{"stream_name":"stdout","time":424.305275395,"data":"  валидно           3  (15% всех)  валидно: ровно id графа, расписание законно\n"}
+,{"stream_name":"stdout","time":424.305281384,"data":"  хвост             1  (5% всех)  хвост: префикс 0..n-1 законный, модель не остановилась\n"}
+,{"stream_name":"stdout","time":424.305286779,"data":"  галлюцинация      9  (45% всех)  мимо: дыры в настоящих id\n"}
+,{"stream_name":"stdout","time":424.305292535,"data":"  мусор             7  (35% всех)  мимо: ни одной разобранной строки расписания\n"}
+,{"stream_name":"stdout","time":424.305297919,"data":"\n"}
+,{"stream_name":"stdout","time":424.305302746,"data":"среди сломанных префиксов (16): почти 0 (0%), мимо 16 (100%)\n"}
+,{"stream_name":"stdout","time":424.3053077,"data":"по составу — мимо (дыры/мусор): смотреть смену базы\n"}
+,{"stream_name":"stdout","time":424.305313489,"data":"среди законных префиксов — средний разрыв до оптимума: 0.00 такта, точно оптимальных: 4/4\n"}
+,{"stream_name":"stdout","time":427.268659729,"data":"\n"}
+,{"stream_name":"stdout","time":427.268707732,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":427.268714086,"data":"ЗАМЕР: ограниченная генерация\n"}
+,{"stream_name":"stdout","time":427.268719418,"data":"======================================================================\n"}
+,{"stream_name":"stderr","time":438.435460183,"data":"Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stderr","time":438.455967569,"data":"[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n"}
+,{"stream_name":"stderr","time":442.912282587,"data":"\rLoading weights:   0%|          | 0/434 [00:00\u003c?, ?it/s]\rLoading weights:   0%|          | 1/434 [00:00\u003c06:19,  1.14it/s]\rLoading weights:  17%|█▋        | 75/434 [00:01\u003c00:03, 99.36it/s]\rLoading weights:  25%|██▍       | 107/434 [00:01\u003c00:02, 120.19it/s]\rLoading weights:  31%|███       | 133/434 [00:01\u003c00:02, 125.42it/s]\rLoading weights:  35%|███▌      | 154/434 [00:01\u003c00:02, 118.19it/s]\rLoading weights:  40%|███▉      | 172/434 [00:01\u003c00:02, 121.06it/s]\rLoading weights:  43%|████▎     | 188/434 [00:01\u003c00:02, 116.60it/s]\rLoading weights:  48%|████▊     | 207/434 [00:02\u003c00:01, 114.35it/s]\rLoading weights:  53%|█████▎    | 231/434 [00:02\u003c00:01, 123.60it/s]\rLoading weights:  59%|█████▉    | 255/434 [00:02\u003c00:01, 116.95it/s]\rLoading weights:  64%|██████▍   | 279/434 [00:02\u003c00:01, 132.24it/s]\rLoading weights:  68%|██████▊   | 294/434 [00:02\u003c00:01, 121.36it/s]\rLoading weights:  73%|███████▎  | 315/434 [00:02\u003c00:00, 125.49it/s]\rLoading weights:  78%|███████▊  | 339/434 [00:03\u003c00:00, 126.83it/s]\rLoading weights:  84%|████████▎ | 363/434 [00:03\u003c00:00, 137.22it/s]\rLoading weights:  87%|████████▋ | 378/434 [00:03\u003c00:00, 139.69it/s]\rLoading weights:  91%|█████████ | 393/434 [00:03\u003c00:00, 133.74it/s]\rLoading weights:  95%|█████████▍| 411/434 [00:03\u003c00:00, 122.86it/s]\rLoading weights: 100%|██████████| 434/434 [00:03\u003c00:00, 117.60it/s]\n"}
+,{"stream_name":"stdout","time":444.405267728,"data":"ограниченная генерация: скелет ответа подставляется, модель выбирает такт и канал (канал — только из исполнимых)\n"}
+,{"stream_name":"stdout","time":444.407337247,"data":"оценка 20 примеров\n"}
+,{"stream_name":"stdout","time":505.98540374,"data":"  ...10/20  как есть 10  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":562.347745301,"data":"  ...20/20  как есть 20  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":562.394801148,"data":"\n"}
+,{"stream_name":"stdout","time":562.394832252,"data":"как есть (без хвоста):     20/20 (100%)\n"}
+,{"stream_name":"stdout","time":562.394837671,"data":"префикс 0..n-1 законный:   20/20 (100%)\n"}
+,{"stream_name":"stdout","time":562.394841715,"data":"состав:\n"}
+,{"stream_name":"stdout","time":562.394845546,"data":"  валидно          20  (100% всех)  валидно: ровно id графа, расписание законно\n"}
+,{"stream_name":"stdout","time":562.394849677,"data":"\n"}
+,{"stream_name":"stdout","time":562.394853157,"data":"префиксы все законные. Если хвост \u003e 0 — стоп (EOS / ещё эпохи), не смена базы\n"}
+,{"stream_name":"stdout","time":562.394857623,"data":"среди законных префиксов — средний разрыв до оптимума: 0.00 такта, точно оптимальных: 20/20\n"}
+,{"stream_name":"stderr","time":566.686015024,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":566.686050398,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":566.942906669,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":566.942945083,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":567.635834366,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":568.939442455,"data":"[NbConvertApp] Writing 289018 bytes to __results__.html\n"}
+]

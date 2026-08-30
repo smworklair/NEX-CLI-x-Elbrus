@@ -508,10 +508,32 @@ Panel.-maximized #grid-side { display: block; }
     внутри панели, а не распирают её и не уносят МАШИНУ за нижний край.
     ДИАГНОЗ забирает остаток. Разворот снимает потолки: -maximized идёт
     с !important. */
+/* Правая колонка РАЗБОРА делит высоту, а не занимает сколько выросло.
+   Раньше `#p-detail` был `auto` без потолка: разбор длинный — и панели под
+   ним уезжали за нижний край вместе с матрицей портов. Теперь остаток
+   забирает он (внутри у него свой VerticalScroll, так что содержимое не
+   теряется), а нижние панели держат свои размеры. */
 #p-numbers  { height: auto; max-height: 12; }
-#p-detail   { height: auto; }
-#p-diag     { height: 1fr; min-height: 4; }
+#p-detail   { height: 1fr; min-height: 6; }
+#p-diag     { height: auto; min-height: 4; max-height: 8; }
 #p-machine  { height: auto; min-height: 6; max-height: 9; }
+
+/* Невысокий терминал: ужимаем нижние панели, разбор ужимается сам как 1fr. */
+ModeScreen.low #p-numbers { max-height: 8; }
+ModeScreen.low #p-diag    { min-height: 3; max-height: 5; }
+ModeScreen.low #p-machine { min-height: 4; max-height: 6; }
+ModeScreen.low #p-detail  { min-height: 4; }
+
+ModeScreen.very-low #p-numbers { max-height: 6; }
+ModeScreen.very-low #p-diag    { min-height: 3; max-height: 4; }
+ModeScreen.very-low #p-machine { min-height: 3; max-height: 4; }
+
+/* Содержимое панели МАШИНА — сводка профиля. У неё нет своей прокрутки, и
+   на очень низком терминале она вылезала из панели, которую сама же и
+   переросла. Потолок по месту в панели: строки, которые не влезли, читаются
+   через `/model`, о чём в панели и написано. */
+#machine { height: auto; max-height: 100%; overflow-y: hidden; }
+ModeScreen.very-low #p-detail  { min-height: 3; }
 
 #detail-scroll {
     height: auto;
@@ -887,6 +909,20 @@ ModeScreen.tight.drawer #p-drawer { height: 45%; }
     margin-top: 1;
 }
 
+/* Тесно по высоте — ужимаемся, а не уезжаем за край. Порядок жертв: сперва
+   знак NEX (он украшение), потом отступы, потом подпись. Карточки режимов
+   не прячем никогда: без них экран теряет смысл. */
+PickerScreen.short #picker-logo { display: none; }
+PickerScreen.short #picker-tagline { margin-bottom: 1; }
+PickerScreen.short .mode-card { height: 5; margin-bottom: 0; }
+PickerScreen.short #picker-hint { margin-top: 0; }
+
+PickerScreen.very-short #picker-tagline { display: none; }
+PickerScreen.very-short .mode-card {
+    height: 3;
+    padding: 0 2;
+}
+
 /* --- развёрнутые панели РАЗБОРА: у каждой свой слой --------------------- */
 /* Слои живут в тех же панелях и включаются только на разворот: рисование
    зависит от режима, а не от размера, поэтому переключает их код. */
@@ -1002,6 +1038,16 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
 }
 
 #journal-mark { width: 8; height: 1; content-align: left middle; }
+
+/* Правая часть строки журнала — постоянная подсказка. Раньше здесь было
+   пусто, а подсказки жили в placeholder и пропадали при первом же символе. */
+#journal-side {
+    width: auto;
+    height: 1;
+    padding: 0 1;
+    color: $nex-faint;
+    content-align: right middle;
+}
 
 #journal-input {
     width: 1fr;

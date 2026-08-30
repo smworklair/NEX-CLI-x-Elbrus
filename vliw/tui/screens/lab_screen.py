@@ -168,7 +168,8 @@ class LabScreen(ModeScreen):
     mode = "lab"
     mode_title = "РАЗБОР"
     mode_subtitle = "исследование"
-    placeholder = "команда   ·   «/» каталог   ·   ↑ история"
+    placeholder = "команда или вопрос"
+    hint = "«/» каталог   ·   ↑ история"
     SIDE_ID = "#lab-right"
     TIPS_ID = "#p-scen"
 
@@ -322,7 +323,7 @@ class LabScreen(ModeScreen):
                     # у терминала своя строка, две одинаковых рядом — шум.
                     PromptBar(self.mode, self.placeholder,
                               list(self.app.commands) + self.extra_commands(),
-                              id="prompt"),
+                              hint=self.hint, id="prompt"),
                     ConsoleJournal(id="journal"),
                     title="GIT",
                     id="p-console", topic="console",

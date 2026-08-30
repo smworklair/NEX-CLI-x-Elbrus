@@ -906,7 +906,30 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
             return list(sc._matrix_ops)
 
         ops = self._screen(body)
-        self.assertEqual(ops, ["DIV"])
+        # «div» находит ОБА делителя — целочисленный и с плавающей точкой.
+        # Раньше ждали ровно ["DIV"], потому что второго в модели не было;
+        # измерение 30.08.2026 показало, что fdivd исполняется на том же
+        # единственном порту ,5. Фильтр не сломался — он честно показывает
+        # обоих претендентов на монопольный порт, а это ровно то, ради чего
+        # на матрицу и смотрят.
+        self.assertEqual(ops, ["DIV", "FDIV"])
+
+    def test_filter_narrows_to_a_single_row(self) -> None:
+        """Фильтр обязан уметь и до одной строки — иначе он не фильтр."""
+        from vliw.tui.widgets import Panel
+
+        async def body(sc, pilot):
+            panel = sc.query_one("#p-machine", Panel)
+            sc.maximize(panel, container=False)
+            panel.post_message(Panel.Expanded(panel))
+            await pilot.pause()
+            inp = sc.query_one("#machine-filter")
+            inp.focus()
+            inp.value = "store"
+            await pilot.pause()
+            return list(sc._matrix_ops)
+
+        self.assertEqual(self._screen(body), ["STORE"])
 
 
 class TestDialogIsAWorkspace(unittest.TestCase):
@@ -2035,3 +2058,70 @@ class TestLabSleepBar(unittest.TestCase):
         for start, (sleepers, shown) in asyncio.run(go()).items():
             self.assertEqual(sleepers, [], f"{start}: строка пришла без спроса")
             self.assertFalse(shown, f"{start}: строка не должна рисоваться")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
+class TestNothingFallsBelowTheFold(unittest.TestCase):
+    """Ни один виджет не должен уезжать за нижний край экрана.
+
+    Ширину раскладка учитывала с самого начала (классы `narrow`/`tight`),
+    высоту — нет. На невысоком терминале правая колонка РАЗБОРА уходила за
+    край: `#p-detail` рос по содержимому без потолка, а у панелей под ним
+    стоял min-height, которому уже негде было поместиться. Панель МАШИНА
+    вместе с матрицей портов просто оказывалась за экраном — молча, без
+    полосы прокрутки и без единого признака, что там что-то есть.
+
+    Стартовый экран страдал тем же: знак, подпись и четыре карточки по
+    шесть строк требуют 41 строку, и на терминале ниже четвёртая карточка
+    (КОД) не показывалась вовсе.
+    """
+
+    SIZES = ((150, 46), (120, 40), (100, 32), (90, 30), (80, 24))
+
+    @staticmethod
+    def _overflow(mode, w, h):
+        async def go():
+            app, _session = _make_app(mode)
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(w, h)) as pilot:
+                    await pilot.pause()
+                    bad = []
+                    for node in app.screen.query("*"):
+                        r = node.region
+                        # +1 — терпимость к рамке в один символ.
+                        if r.height and r.y + r.height > h + 1:
+                            bad.append(node.id or node.__class__.__name__)
+                    return bad
+
+        return asyncio.run(go())
+
+    def test_screens_fit_at_every_size(self):
+        for mode in ("core", "lab", "mind", "code"):
+            for w, h in self.SIZES:
+                with self.subTest(режим=mode, размер=f"{w}x{h}"):
+                    bad = self._overflow(mode, w, h)
+                    self.assertEqual(bad, [], f"за краем: {bad}")
+
+    def test_all_mode_cards_are_visible_on_a_short_screen(self):
+        """Стартовый экран показывает ВСЕ режимы, даже когда места мало."""
+        from vliw.tui.screens.picker import PickerScreen
+
+        async def go(h):
+            app, _session = _make_app(None)
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, h)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    if not isinstance(sc, PickerScreen):
+                        self.skipTest("экран выбора не показан")
+                    cards = sc.query(".mode-card")
+                    fit = [c for c in cards
+                           if c.region.height
+                           and c.region.y + c.region.height <= h]
+                    return len(cards), len(fit)
+
+        for h in (46, 36, 30, 24):
+            with self.subTest(высота=h):
+                total, fit = asyncio.run(go(h))
+                self.assertEqual(fit, total,
+                                 f"на высоте {h} видно {fit} из {total} карточек")

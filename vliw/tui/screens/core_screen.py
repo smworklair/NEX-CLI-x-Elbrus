@@ -62,7 +62,8 @@ class CoreScreen(ModeScreen):
     mode = "work"
     mode_title = "ЯДРО"
     mode_subtitle = "интерпретатор"
-    placeholder = "считайте:  2+2  ·  a=10  ·  sum 8  ·  go     или  /команда"
+    placeholder = "2+2   ·   a=10   ·   sum 8   ·   go"
+    hint = "«/» команда   ·   ↑ история"
     SIDE_ID = "#core-right"
     TIPS_ID = "#p-kernels"
 

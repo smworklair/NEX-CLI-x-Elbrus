@@ -30,6 +30,7 @@ class ModeScreen(Screen):
     mode_title = ""
     mode_subtitle = ""
     placeholder = ""
+    hint = ""
 
     # Что можно убрать с экрана, когда мешает. Боковая колонка полезна, но
     # постоянно занимает треть ширины; полоса подсказок нужна, пока не выучил
@@ -68,7 +69,7 @@ class ModeScreen(Screen):
         with Vertical(id="dock"):
             yield PromptBar(self.mode, self.placeholder,
                             list(self.app.commands) + self.extra_commands(),
-                            id="prompt")
+                            hint=self.hint, id="prompt")
             yield HintBar(id="hints")
 
     def extra_commands(self) -> list[dict]:
@@ -125,12 +126,26 @@ class ModeScreen(Screen):
     NARROW = 124
     TIGHT = 100
 
+    # Пороги по ВЫСОТЕ. Ширину экран учитывал с самого начала, высоту — нет,
+    # и правая колонка РАЗБОРА на невысоком терминале уезжала за нижний край:
+    # `#p-detail` рос по содержимому без потолка, а у панелей под ним стоял
+    # min-height, которому уже негде было поместиться. Панель МАШИНА просто
+    # оказывалась за экраном — вместе с матрицей портов, ради которой всё и
+    # затевалось.
+    LOW = 34
+    VERY_LOW = 28
+
     def on_resize(self, event) -> None:
         self._apply_width(event.size.width)
+        self._apply_height(event.size.height)
 
     def _apply_width(self, width: int) -> None:
         self.set_class(width < self.NARROW, "narrow")
         self.set_class(width < self.TIGHT, "tight")
+
+    def _apply_height(self, height: int) -> None:
+        self.set_class(height < self.LOW, "low")
+        self.set_class(height < self.VERY_LOW, "very-low")
 
     # --- шапка и подсказки ------------------------------------------------
 

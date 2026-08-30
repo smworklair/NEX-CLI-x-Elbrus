@@ -44,8 +44,8 @@ class AgentScreen(ModeScreen):
     mode = "mind"
     mode_title = "АГЕНТ"
     mode_subtitle = "диалог"
-    placeholder = ("спросите обычным языком   ·   /clear — очистить диалог   ·   "
-                   "/ai — состояние модели")
+    placeholder = "спросите обычным языком"
+    hint = "/clear — очистить   ·   /ai — модель"
     SIDE_ID = "#mind-right"
     TIPS_ID = "#p-questions"
 

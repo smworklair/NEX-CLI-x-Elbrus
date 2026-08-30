@@ -139,9 +139,25 @@ class PickerScreen(Screen):
         ("escape", "quit_app", "выход"),
     ]
 
+    # Пороги высоты. Стартовый экран складывается из фиксированных кусков:
+    # знак (8 строк), подпись с отступом (3), четыре карточки по 6 плюс
+    # отступ (28), подсказка (2) — минимум 41 строка. На терминале ниже
+    # нижняя карточка уезжала за край, и человек не видел, что режимов
+    # четыре: карточка КОД просто отсутствовала. Ужимаемся по высоте, а не
+    # надеемся на большое окно.
+    SHORT = 40          # прячем знак NEX, ужимаем карточки
+    VERY_SHORT = 28     # прячем и подпись, карточки в одну строку
+
     def __init__(self, selected: int = 1, **kw) -> None:
         super().__init__(**kw)
         self.selected = selected
+
+    def on_resize(self, event) -> None:
+        self._apply_height(event.size.height)
+
+    def _apply_height(self, height: int) -> None:
+        self.set_class(height < self.SHORT, "short")
+        self.set_class(height < self.VERY_SHORT, "very-short")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-wrap"):
@@ -157,6 +173,8 @@ class PickerScreen(Screen):
                 yield Static(id="picker-hint")
 
     def on_mount(self) -> None:
+        self._apply_height(self.app.size.height)
+
         from ...ui import logo
 
         mark = Text()

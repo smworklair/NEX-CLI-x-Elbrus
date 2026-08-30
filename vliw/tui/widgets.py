@@ -459,10 +459,11 @@ class ConsoleJournal(Horizontal):
                           wrap=True, auto_scroll=True)
             with Horizontal(id="journal-field"):
                 yield Static("", id="journal-mark")
-                yield JournalInput(
-                    placeholder="команда — каталог слева   ·   ↑↓ история   "
-                                "·   ^R повтор",
-                    id="journal-input")
+                yield JournalInput(placeholder="команда", id="journal-input")
+                # Подсказка справа, а не в placeholder: в placeholder она
+                # исчезала ровно тогда, когда человек начинал печатать.
+                yield Static("каталог слева   ·   ↑↓ история   ·   ^R повтор",
+                             id="journal-side")
 
     def on_tool_picked(self, event) -> None:
         # Вкладки потока — своё, локальное. Мостик и «вернуть» не
@@ -987,10 +988,18 @@ class PromptBar(Vertical):
         """Esc при закрытой палитре — экран решает, что это значит."""
 
     def __init__(self, mode: str, placeholder: str, commands: list[dict],
-                 **kw) -> None:
+                 hint: str = "", **kw) -> None:
         super().__init__(**kw)
         self.mode = mode
         self.placeholder = placeholder
+        self.hint = hint
+        """Подсказка справа, живёт постоянно.
+
+        Раньше подсказки жили в placeholder — и исчезали ровно в тот момент,
+        когда человек начинал печатать, то есть когда они и нужны. Справа же
+        было пусто: `#prompt-side` заполнялся только словом «считаю…» на
+        время работы. Половина строки простаивала, вторая врала.
+        """
         self.commands = commands
         self.history: list[str] = []
         self._hist_pos: int | None = None
@@ -1007,6 +1016,7 @@ class PromptBar(Vertical):
 
     def on_mount(self) -> None:
         self.repaint()
+        self.set_side("")
         self.query_one("#palette", Palette).display = False
 
     def repaint(self) -> None:
@@ -1033,6 +1043,13 @@ class PromptBar(Vertical):
         self.input.focus()
 
     def set_side(self, text: str | Text) -> None:
+        """Правая часть строки. Пустое значение возвращает подсказку.
+
+        Так «считаю…» временно перекрывает подсказку, а по окончании она
+        сама встаёт обратно — вызывающим не нужно помнить, что там было.
+        """
+        if not text and self.hint:
+            text = Text(self.hint, style=palette.role_hex("faint"))
         self.query_one("#prompt-side", Static).update(text)
 
     def set_value(self, value: str) -> None:

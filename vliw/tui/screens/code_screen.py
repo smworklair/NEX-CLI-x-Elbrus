@@ -498,8 +498,8 @@ class CodeScreen(ModeScreen):
     mode = "code"
     mode_title = "КОД"
     mode_subtitle = "редактор"
-    placeholder = ("команда со слэша: /doctor   ·   /code save my.s   ·   "
-                   "/example   ·   ↑ история")
+    placeholder = "/doctor   ·   /code save my.s   ·   /example"
+    hint = "«/» каталог   ·   ↑ история"
     SIDE_ID = ""        # боковой колонки нет: рабочая область одна
     TIPS_ID = ""
 
@@ -687,7 +687,7 @@ class CodeScreen(ModeScreen):
                  ConsoleJournal(id="journal"),
                  PromptBar(self.mode, self.placeholder,
                            list(self.app.commands) + self.extra_commands(),
-                           id="prompt"),
+                           hint=self.hint, id="prompt"),
                  id="drawer-term-box"),
             Vertical(
                 Static(id="code-line-info"),

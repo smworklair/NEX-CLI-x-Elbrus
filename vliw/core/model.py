@@ -253,6 +253,44 @@ _OPS: dict[str, OpClass] = {
     # Чинится не подкруткой этих чисел, а пополнением MNEMONICS настоящими
     # классами (плавающая точка, предикаты, SIMD) с замером портов.
     "UNKNOWN": OpClass("UNKNOWN", latency=1, latency_source=ASSUMED),
+
+    # --- Классы, снятые 30.08.2026 на настоящем коде -------------------------
+    #
+    # Появились потому, что на выводе `lcc -O3` обычной программы 37% операций
+    # не попадали ни в один класс и получали заглушку UNKNOWN. Мерены тем же
+    # способом, что и целочисленные: каналы — опросом ассемблера («cannot be
+    # encoded in ALC0»), латентность — шагом цепочки зависимых операций в
+    # выводе `lcc -O3`, занятость — шагом потока независимых.
+    #
+    # Существующие восемь классов НЕ ТРОГАЛИСЬ ни на бит: обучающие данные и
+    # все три прогона используют только их, и добавление новых классов их не
+    # обесценивает.
+
+    # Сложение и умножение плавающей точки. Латентность 4 у обоих — цепочка
+    # из восьми операций разложилась ровно с шагом 4 (семь совпавших шагов),
+    # и одинарная точность не быстрее двойной. Поток независимых умножений
+    # идёт по одному в такт: устройство конвейеризовано.
+    "FADD": OpClass("FADD", latency=4, occupancy=1,
+                    latency_source=CHAIN, occupancy_source=BURST),
+    "FMUL": OpClass("FMUL", latency=4, occupancy=1,
+                    latency_source=CHAIN, occupancy_source=BURST),
+
+    # Деление плавающей точки. ОДИНАРНАЯ точность быстрее двойной: цепочка
+    # fdivs дала шаг 11, fdivd — 14. Здесь взято 14 (худшее), чтобы
+    # планировщик не обещал того, чего машина не сделает; разделить на два
+    # класса можно, когда это начнёт стоить тактов.
+    # Поток независимых делений идёт с шагом 2 — делитель держит свой порт
+    # два такта, ровно как целочисленный.
+    "FDIV": OpClass("FDIV", latency=14, occupancy=2,
+                    latency_source=CHAIN, occupancy_source=BURST),
+
+    # Вычисление предикатов — основа if-conversion, самый частый класс в
+    # настоящем коде после арифметики. Латентность не мерена цепочкой
+    # (предикат не подставишь операндом сам себе), взята за 1.
+    "PRED": OpClass("PRED", latency=1, latency_source=ASSUMED),
+
+    # Упакованные операции (SIMD). Латентность не мерена — допущение.
+    "PACK": OpClass("PACK", latency=1, latency_source=ASSUMED),
     "ADD": OpClass("ADD", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "SUB": OpClass("SUB", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "AND": OpClass("AND", latency=1, latency_source=ASSUMED),
@@ -301,8 +339,22 @@ DIV_PORTS = (5,)                    # делитель действительн�
 LOAD_PORTS = (0, 2, 3, 5)
 STORE_PORTS = (2, 5)
 
+# Каналы новых классов — СНЯТЫ У АССЕМБЛЕРА, не предположены. Способ тот же,
+# которым получена основная матрица: собрать операцию в каждом канале по
+# очереди и посмотреть, что он отвергнет («cannot be encoded in ALCn»).
+FADD_PORTS = (0, 1, 2, 3, 4, 5)     # сложение/умножение ПТ — во всех каналах
+FDIV_PORTS = (5,)                   # делитель ПТ — тот же единственный порт,
+                                    # что у целочисленного деления
+PRED_PORTS = (0, 1, 3, 4)           # предикаты: НЕ на ,2 и ,5
+PACK_PORTS = (0, 3)                 # упакованные: только два канала
+
 _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
     "UNKNOWN": _ALU_PORTS,          # заглушка: где стоит, там и считаем
+    "FADD": FADD_PORTS,
+    "FMUL": FADD_PORTS,
+    "FDIV": FDIV_PORTS,
+    "PRED": PRED_PORTS,
+    "PACK": PACK_PORTS,
     "ADD": _ALU_PORTS,
     "SUB": _ALU_PORTS,
     "AND": _ALU_PORTS,
@@ -401,7 +453,8 @@ _FIRSTPROBE_OPS: dict[str, OpClass] = dict(_OPS) | {
 
 
 def _firstprobe_ports() -> tuple[Port, ...]:
-    universal = {"UNKNOWN", "ADD", "SUB", "AND", "SHL", "LOAD", "STORE"}
+    universal = {"UNKNOWN", "ADD", "SUB", "AND", "SHL", "LOAD", "STORE",
+                 "FADD", "FMUL", "FDIV", "PRED", "PACK"}
     ports = []
     for idx in range(6):
         ops = set(universal)

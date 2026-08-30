@@ -130,7 +130,12 @@ class TestMachineFacts(unittest.TestCase):
     def test_divider_named_as_the_only_monopoly(self):
         facts = "\n".join(context.machine_facts(session().model()))
         self.assertIn("DIV", facts)
-        self.assertRegex(facts, r"Порт ,5 — ЕДИНСТВЕННЫЙ исполнитель DIV")
+        # С 30.08.2026 монополистов на ,5 двое: целочисленный делитель и
+        # делитель плавающей точки — ассемблер отвергает fdivd во всех
+        # остальных каналах. Проверяем сам факт монополии и что DIV в ней
+        # назван, а не точную формулировку перечисления.
+        self.assertRegex(facts, r"Порт ,5 — ЕДИНСТВЕННЫЙ исполнитель [\w/]*DIV")
+        self.assertIn("монопольный", facts)
         self.assertNotRegex(facts, r"ЕДИНСТВЕННЫЙ исполнитель MUL")
 
     def test_narrow_ops_are_listed_with_their_ports(self):

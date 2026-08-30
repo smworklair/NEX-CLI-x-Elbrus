@@ -56,6 +56,32 @@ MNEMONICS: dict[str, str] = {
     # одном скомпилированном файле она не встречается — опечатка с первого
     # коммита, занимавшая место настоящей операции.
     "movts": "ADD", "movtd": "ADD", "sxt": "ADD",
+
+    # --- Плавающая точка, предикаты, упакованные (30.08.2026) ----------------
+    # Каналы и латентности этих классов сняты у ассемблера и компилятора, а не
+    # предположены — см. model.py. До этого все они попадали в UNKNOWN, и на
+    # выводе `lcc -O3` таких операций было 37%.
+    "fadds": "FADD", "faddd": "FADD", "fsubs": "FADD", "fsubd": "FADD",
+    "fmuls": "FMUL", "fmuld": "FMUL",
+    "fdivs": "FDIV", "fdivd": "FDIV",
+
+    # Сравнения, кладущие результат в предикат. Их много и они разные по
+    # ширине операнда (`b` — байтовая форма записи, `d` — двойное слово);
+    # для планирования это один класс: канал и латентность у них общие.
+    "cmpesb": "PRED", "cmpedb": "PRED", "cmplsb": "PRED", "cmpldb": "PRED",
+    "cmplesb": "PRED", "cmpledb": "PRED", "cmpbsb": "PRED", "cmpbdb": "PRED",
+    "cmpandesb": "PRED", "cmpandedb": "PRED",
+    "cmpandsb": "PRED", "cmpanddb": "PRED",
+
+    # Упакованные: `p*` — 64-битные, `qp*` — 128-битные. Оба класса живут в
+    # тех же двух каналах, поэтому различать их для планирования нечем.
+    "paddw": "PACK", "paddb": "PACK", "paddh": "PACK", "paddd": "PACK",
+    "psubw": "PACK", "psubb": "PACK", "psubh": "PACK", "psubd": "PACK",
+    "pcmpgtw": "PACK", "pcmpeqw": "PACK", "pminsw": "PACK", "pmaxsw": "PACK",
+    "qpaddw": "PACK", "qpaddb": "PACK", "qpaddh": "PACK", "qpaddd": "PACK",
+    "qpsubw": "PACK", "qpsllw": "PACK", "qpsrlw": "PACK",
+    "qpminsw": "PACK", "qpmaxsw": "PACK", "qpcmpgtw": "PACK",
+    "qppackdl": "PACK", "qpswitchd": "PACK",
 }
 
 # `adds,0 %r1, %r2, %r3` — мнемоника, необязательный канал, операнды.

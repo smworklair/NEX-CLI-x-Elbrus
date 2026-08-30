@@ -221,11 +221,14 @@ class TestRealCompilerOutput(unittest.TestCase):
         """
         from vliw.core.asm_parser import parse_asm
 
-        parsed = parse_asm("{\n  fdivd,5\t%dr1, %dr2, %dr3\n}\n")
+        # `fdivd` здесь стояло раньше и перестало годиться: класс FDIV
+        # измерен и добавлен. Берём мнемонику, которой в словаре нет и не
+        # планируется — устройство доступа к массивам.
+        parsed = parse_asm("{\n  aaurwd,5\t%dr9, %aaind1\n}\n")
         self.assertEqual(len(parsed.ops), 1)
         self.assertEqual(parsed.ops[0].op, "UNKNOWN")
         self.assertFalse(parsed.ops[0].known)
-        self.assertEqual(parsed.unknown_mnemonics, {"fdivd": 1})
+        self.assertEqual(parsed.unknown_mnemonics, {"aaurwd": 1})
 
     def test_unknown_without_channel_is_not_an_alc_operation(self):
         """Незнакомое БЕЗ канала в граф вычислений не идёт.

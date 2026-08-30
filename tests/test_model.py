@@ -54,14 +54,26 @@ class TestMeasuredProfile(unittest.TestCase):
         self.assertEqual(M.latency("LOAD"), 5)
         for op in ("ADD", "SUB", "AND", "SHL", "STORE"):
             self.assertEqual(M.latency(op), 1, op)
-        # Делитель — единственное устройство, которое держит порт дольше такта.
+        # Делители — единственные устройства, которые держат порт дольше такта.
+        # С 30.08.2026 их два: целочисленный и с плавающей точкой, и оба
+        # сидят на одном и том же ,5 — измерено потоком независимых делений.
         self.assertEqual(M.occupancy("DIV"), 2)
+        self.assertEqual(M.occupancy("FDIV"), 2)
         for op in M.ops:
-            if op != "DIV":
+            if op not in ("DIV", "FDIV"):
                 self.assertEqual(M.occupancy(op), 1, op)
 
-    def test_divider_is_the_only_monopoly(self):
-        self.assertEqual(M.sole_host_ops(), {5: ["DIV"]})
+    def test_only_the_dividers_monopolise_a_port(self):
+        """Порт ,5 — единственный монопольный, и держат его оба делителя.
+
+        Раньше здесь стояло `{5: ["DIV"]}`. Деление с плавающей точкой,
+        добавленное измерением, встало на тот же канал: ассемблер отвергает
+        `fdivd` во всех остальных («cannot be encoded in ALCn»). То есть
+        монополия не размылась, а стала плотнее — за один порт борются два
+        разных устройства.
+        """
+        self.assertEqual(set(M.sole_host_ops()), {5})
+        self.assertEqual(set(M.sole_host_ops()[5]), {"DIV", "FDIV"})
 
     def test_multiplier_is_not_a_monopoly(self):
         """Опровергнутая версия модели не должна вернуться."""

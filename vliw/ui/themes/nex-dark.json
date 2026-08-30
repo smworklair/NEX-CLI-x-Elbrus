@@ -1,59 +1,240 @@
 {
   "name": "nex-dark",
   "description": "Чёрный фон, синий акцент, амбра — вторичный. Операции разного цвета: это данные.",
-
   "roles": {
-    "text":        { "color": 253 },
-    "dim":         { "color": 245 },
-    "faint":       { "color": 239 },
-
-    "accent":      { "color": 75,  "attrs": ["bold"] },
-    "accent_soft": { "color": 111 },
-    "accent2":     { "color": 215, "attrs": ["bold"] },
-    "accent2_soft":{ "color": 222 },
-
-    "success":     { "color": 114 },
-    "warning":     { "color": 215 },
-    "error":       { "color": 203, "attrs": ["bold"] },
-
-    "banner":      { "color": 81,  "attrs": ["bold"] },
-    "banner_alt":  { "color": 215, "attrs": ["bold"] },
-    "mountain":    { "color": 110 },
-    "snow":        { "color": 255, "attrs": ["bold"] },
-
-    "border":      { "color": 67 },
-    "border_hi":   { "color": 75 },
-    "title":       { "color": 255, "attrs": ["bold"] },
-    "prompt":      { "color": 75,  "attrs": ["bold"] },
-    "selection":   { "color": 75,  "attrs": ["reverse"] },
-
-    "sidebar_head": { "color": 75,  "attrs": ["bold"] },
-    "sidebar_key":  { "color": 245 },
-    "sidebar_val":  { "color": 253 },
-
-    "crit":        { "color": 221, "attrs": ["bold", "underline"] },
-    "diverge":     { "color": 203, "attrs": ["bold"] },
-
-    "work":        { "color": 75,  "attrs": ["bold"] },
-    "work_soft":   { "color": 111 },
-    "lab":         { "color": 215, "attrs": ["bold"] },
-    "lab_soft":    { "color": 222 },
-    "mind":        { "color": 141, "attrs": ["bold"] },
-    "mind_soft":   { "color": 147 },
-    "code":        { "color": 79, "attrs": ["bold"] },
-    "code_soft":   { "color": 115 },
-    "hud":         { "color": 245 },
-    "dock":        { "color": 253 }
+    "text": {
+      "color": 253
+    },
+    "dim": {
+      "color": 245
+    },
+    "faint": {
+      "color": 239
+    },
+    "accent": {
+      "color": 75,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "accent_soft": {
+      "color": 111
+    },
+    "accent2": {
+      "color": 215,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "accent2_soft": {
+      "color": 222
+    },
+    "success": {
+      "color": 114
+    },
+    "warning": {
+      "color": 215
+    },
+    "error": {
+      "color": 203,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "banner": {
+      "color": 81,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "banner_alt": {
+      "color": 215,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "mountain": {
+      "color": 110
+    },
+    "snow": {
+      "color": 255,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "border": {
+      "color": 67
+    },
+    "border_hi": {
+      "color": 75
+    },
+    "title": {
+      "color": 255,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "prompt": {
+      "color": 75,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "selection": {
+      "color": 75,
+      "attrs": [
+        "reverse"
+      ]
+    },
+    "sidebar_head": {
+      "color": 75,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "sidebar_key": {
+      "color": 245
+    },
+    "sidebar_val": {
+      "color": 253
+    },
+    "crit": {
+      "color": 221,
+      "attrs": [
+        "bold",
+        "underline"
+      ]
+    },
+    "diverge": {
+      "color": 203,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "work": {
+      "color": 75,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "work_soft": {
+      "color": 111
+    },
+    "lab": {
+      "color": 215,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "lab_soft": {
+      "color": 222
+    },
+    "mind": {
+      "color": 141,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "mind_soft": {
+      "color": 147
+    },
+    "code": {
+      "color": 79,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "code_soft": {
+      "color": 115
+    },
+    "hud": {
+      "color": 245
+    },
+    "dock": {
+      "color": 253
+    }
   },
-
   "ops": {
-    "DIV":   { "color": 213, "attrs": ["bold"] },
-    "MUL":   { "color": 87,  "attrs": ["bold"] },
-    "ADD":   { "color": 114 },
-    "SUB":   { "color": 114 },
-    "LOAD":  { "color": 215 },
-    "STORE": { "color": 215 },
-    "AND":   { "color": 109 },
-    "SHL":   { "color": 109 }
+    "DIV": {
+      "color": 213,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "MUL": {
+      "color": 87,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "ADD": {
+      "color": 114
+    },
+    "SUB": {
+      "color": 114
+    },
+    "LOAD": {
+      "color": 215
+    },
+    "STORE": {
+      "color": 215
+    },
+    "AND": {
+      "color": 109
+    },
+    "SHL": {
+      "color": 109
+    },
+    "FDIV": {
+      "color": 213,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "RW": {
+      "color": 213,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "FADD": {
+      "color": 87,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "FMUL": {
+      "color": 87,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "PACK": {
+      "color": 87,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "AAU": {
+      "color": 215
+    },
+    "PACKLOG": {
+      "color": 109
+    },
+    "PRED": {
+      "color": 109
+    },
+    "INSF": {
+      "color": 109
+    },
+    "MERGE": {
+      "color": 109
+    },
+    "COMBO": {
+      "color": 109
+    },
+    "UNKNOWN": {
+      "color": 239
+    }
   }
 }

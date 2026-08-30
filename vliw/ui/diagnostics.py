@@ -199,25 +199,68 @@ def sidebar_rows(d: Diagnosis, width: int) -> list[str]:
 
 
 def render_parsed(parsed, dag, compiler_cycles: int | None,
-                  oracle_cycles: int | None, lower_bound: int | None) -> list[str]:
+                  oracle_cycles: int | None, lower_bound: int | None,
+                  compiler_problem: tuple[str, str] | None = None,
+                  problems=None) -> list[str]:
+    """Разбор загруженного `.s`.
+
+    `compiler_problem` — пара (заголовок, подробность): почему расписания
+    компилятора нет. Раньше причина была одна на все случаи («раскладка по
+    каналам не сходится»), и на настоящем `-O3` она врала: каналы сходились,
+    а разъезжалась одна зависимость из-за программной конвейеризации,
+    которой линейный разбор файла не видит. Сказать «не сошлись каналы»
+    там, где не сошлась зависимость, — отправить человека искать не в том
+    месте.
+    """
     out: list[str] = []
+
+    # СКОЛЬКО ОПЕРАЦИЙ МАШИНЕ НЕИЗВЕСТНО. От этого зависит, можно ли вообще
+    # называть разницу с компилятором «резервом». У класса UNKNOWN латентность
+    # 1 и любой канал — это заглушка, а не измерение (см. model.py). Оракул
+    # планирует такие операции как однотактовые и обыгрывает компилятор просто
+    # потому, что не знает их настоящей цены: на выводе `lcc -O3` обычного
+    # цикла так получался «резерв 71%», хотя половина операций там — упакованный
+    # SIMD и плавающая точка, которых модель не описывает вовсе. Показать такое
+    # число как достижение — соврать, поэтому при заметной доле UNKNOWN
+    # сравнение подписывается как несостоятельное, а не как выигрыш.
+    unknown_ops = sum(1 for o in parsed.ops if o.op == "UNKNOWN")
+    unknown_share = unknown_ops / len(parsed.ops) if parsed.ops else 0.0
 
     if compiler_cycles is not None and oracle_cycles is not None:
         gap = compiler_cycles - oracle_cycles
-        if gap > 0:
-            pct = 100.0 * gap / compiler_cycles
-            head = paint("success", f"■ резерв {gap} т. ({pct:.0f}%)")
-        elif gap == 0:
-            head = paint("dim", "■ резерва нет")
+        if unknown_share >= 0.05:
+            out.append("  " + paint("warning", "■ сравнение с компилятором несостоятельно"))
+            out += wrap(Style.dim(
+                f"{unknown_ops} из {len(parsed.ops)} операций "
+                f"({unknown_share:.0%}) машине неизвестны — их латентность "
+                f"взята за 1 такт как заглушка. Точный поиск обыгрывает "
+                f"компилятор здесь потому, что не знает настоящей цены этих "
+                f"операций, а не потому, что нашёл лучший план"), render.W, "  ")
+            out.append("  " + Style.dim(
+                f"lcc {compiler_cycles} т.  →  поиск {oracle_cycles} т. "
+                f"(число справочное, сравнивать нельзя)"))
         else:
-            head = paint("warning", f"■ компилятор быстрее на {-gap} т.")
-        out.append(f"  {head}")
-        out.append("  " + Style.dim(
-            f"lcc {compiler_cycles} т.  →  поиск {oracle_cycles} т."
-            + (f"  →  предел {lower_bound} т." if lower_bound else "")))
+            if gap > 0:
+                pct = 100.0 * gap / compiler_cycles
+                head = paint("success", f"■ резерв {gap} т. ({pct:.0f}%)")
+            elif gap == 0:
+                head = paint("dim", "■ резерва нет")
+            else:
+                head = paint("warning", f"■ компилятор быстрее на {-gap} т.")
+            out.append(f"  {head}")
+            out.append("  " + Style.dim(
+                f"lcc {compiler_cycles} т.  →  поиск {oracle_cycles} т."
+                + (f"  →  предел {lower_bound} т." if lower_bound else "")))
+            if unknown_ops:
+                out += wrap(Style.dim(
+                    f"(с оговоркой: {unknown_ops} операц. машине неизвестны, "
+                    f"их латентность взята за 1 такт)"), render.W, "  ")
     else:
-        out.append("  " + paint("warning", "■ расписание компилятора не восстановлено"))
-        out.append("  " + Style.dim("раскладка по каналам не сходится с моделью"))
+        head, detail = compiler_problem or (
+            "расписание компилятора не восстановлено",
+            "раскладка по каналам не сходится с моделью")
+        out.append("  " + paint("warning", "■ " + head))
+        out += wrap(Style.dim(detail), render.W, "  ")
     out.append("")
 
     out += wrap(Style.dim(
@@ -230,10 +273,39 @@ def render_parsed(parsed, dag, compiler_cycles: int | None,
         unk = ", ".join(f"{k}×{v}" for k, v in
                         sorted(parsed.unknown_mnemonics.items(),
                                key=lambda kv: -kv[1])[:6])
-        out += wrap(paint("warning", f"нераспознано (считано как арифметика): {unk}"),
+        # НЕ «считано как арифметика»: с версии 0.9 незнакомая мнемоника
+        # получает класс UNKNOWN (латентность 1, любой канал) и видна как
+        # UNKNOWN в разбивке выше, а не прячется в ADD. Формулировка про
+        # арифметику осталась от прежнего поведения и уже неверна.
+        out += wrap(paint("warning",
+                          f"нераспознано (класс UNKNOWN, латентность 1): {unk}"),
                     render.W, "  ")
     if parsed.skipped_lines:
         out.append("  " + Style.dim(f"пропущено строк: {parsed.skipped_lines}"))
+
+    # Замечания линтера. Раньше их видел только полноэкранный режим КОД, а
+    # `/load` о них молчал — один и тот же файл получал два разных вердикта,
+    # и в построчном режиме незаконный ассемблер (`adds,9` на шестиканальной
+    # машине) проходил без единого слова.
+    errors = [pr for pr in problems or () if pr.severity == "error"]
+    warns = [pr for pr in problems or () if pr.severity == "warn"]
+    if errors or warns:
+        out.append("")
+        if errors:
+            out.append("  " + paint("error",
+                                    f"■ ошибок: {len(errors)}"))
+            for pr in errors[:5]:
+                out += wrap(paint("error", f"строка {pr.line}: {pr.text}"),
+                            render.W, "    ")
+            if len(errors) > 5:
+                out.append("    " + Style.dim(f"…и ещё {len(errors) - 5}"))
+        if warns:
+            out.append("  " + Style.dim(f"замечаний: {len(warns)}"))
+            for pr in warns[:3]:
+                out += wrap(Style.dim(f"строка {pr.line}: {pr.text}"),
+                            render.W, "    ")
+            if len(warns) > 3:
+                out.append("    " + Style.dim(f"…и ещё {len(warns) - 3}"))
 
     out.append("")
     out.append("  " + Style.dim("Дальше: /doctor — где теряются такты · /compare · /asm"))

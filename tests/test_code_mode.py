@@ -341,3 +341,160 @@ class TestStandaloneCollectorMatchesCore(unittest.TestCase):
         self.assertEqual([o.mnemonic for o in mine.ops],
                          [o.mnemonic for o in theirs.ops])
         self.assertEqual(mine.control_ops, theirs.control_ops)
+
+
+class TestWideInstructionSemantics(unittest.TestCase):
+    """Внутри широкой команды все читают ДО того, как ляжет любая запись.
+
+    Найдено на настоящем выводе lcc: расписание самого компилятора не
+    проходило `Schedule.validate()` — инструмент объявлял вывод lcc
+    незаконным. Причина была не в модели машины, а в разборе: зависимости
+    строились по порядку строк внутри `{ … }`, и соседи по одному такту
+    получали выдуманное ребро «запись → чтение».
+    """
+
+    def test_same_bundle_read_sees_the_old_value(self):
+        """Загрузка и потребитель в одном такте — НЕ зависимость.
+
+        Пара из probe.s: `ldw` пишет %r5, соседний `sdivs` читает %r5. Это
+        СТАРЫЙ %r5 — загрузка готовит регистр следующему потребителю. Ребро
+        здесь завышало критический путь и ломало проверку расписания.
+        """
+        src = ("{\n  ldw,0\t0x0, [ %dr1 ], %r5\n"
+               "  sdivs,5\t%r5, %r6, %r4\n}\n")
+        parsed = asm_parser.parse_asm(src)
+        dag = asm_parser.build_dag(parsed)
+        self.assertEqual(len(dag.instrs), 2)
+        self.assertEqual(dag.instrs[1].preds, (),
+                         "сосед по такту не может быть производителем")
+
+    def test_next_bundle_does_depend(self):
+        """А через такт зависимость настоящая и обязана быть."""
+        src = ("{\n  ldw,0\t0x0, [ %dr1 ], %r5\n}\n"
+               "{\n  adds,1\t%r5, %r6, %r7\n}\n")
+        parsed = asm_parser.parse_asm(src)
+        dag = asm_parser.build_dag(parsed)
+        self.assertEqual(dag.instrs[1].preds, (0,),
+                         "зависимость между тактами потерялась")
+
+    def test_compiler_schedule_of_real_probes_validates(self):
+        """Расписание lcc из проб обязано проходить нашу же проверку.
+
+        Прямая страховка от возврата бага: если разбор снова начнёт выдумывать
+        рёбра, `validate()` на выводе компилятора это увидит.
+        """
+        from vliw.core.model import get_profile
+
+        model = get_profile(DEFAULT_PROFILE)
+        root = Path(__file__).resolve().parent.parent / "examples" / "probes"
+        checked = 0
+        for path in sorted(root.glob("*.s")):
+            parsed = asm_parser.parse_asm(path.read_text(encoding="utf-8"))
+            dag = asm_parser.build_dag(parsed)
+            sched = asm_parser.compiler_schedule(parsed, dag, model)
+            if sched is None:
+                continue          # раскладка по каналам не сошлась — другой случай
+            checked += 1
+            with self.subTest(проба=path.name):
+                self.assertEqual(sched.validate(), [],
+                                 "расписание компилятора объявлено незаконным")
+        self.assertTrue(checked, "ни одной пробы не проверено")
+
+
+class TestHonestCompilerComparison(unittest.TestCase):
+    """Разницу с компилятором нельзя называть резервом, если модель не знает
+    половины операций.
+
+    На выводе `lcc -O3` обычного цикла инструмент показывал «резерв 71%»:
+    63 из 132 операций получили класс UNKNOWN с латентностью-заглушкой 1,
+    и точный поиск обыгрывал компилятор просто потому, что не знал их
+    настоящей цены. Такое число, показанное как достижение, — неправда.
+    """
+
+    @staticmethod
+    def _render(ops_unknown: int, ops_known: int, comp: int, orc: int):
+        from types import SimpleNamespace
+
+        from vliw.ui import diagnostics
+
+        ops = ([SimpleNamespace(op="UNKNOWN")] * ops_unknown
+               + [SimpleNamespace(op="ADD")] * ops_known)
+        parsed = SimpleNamespace(ops=ops, bundles=1, nop_cycles=0,
+                                 skipped_lines=0, unknown_mnemonics={},
+                                 problems=[], source="t",
+                                 op_counts=lambda: {"ADD": ops_known})
+        return "\n".join(diagnostics.render_parsed(
+            parsed, None, comp, orc, None))
+
+    def test_large_unknown_share_blocks_the_claim(self):
+        text = self._render(63, 69, comp=77, orc=22)
+        self.assertIn("несостоятельно", text)
+        self.assertNotIn("резерв 55", text)
+
+    def test_clean_graph_still_reports_the_reserve(self):
+        text = self._render(0, 36, comp=35, orc=26)
+        self.assertIn("резерв 9", text)
+        self.assertNotIn("несостоятельно", text)
+
+
+class TestSingleBundleFile(unittest.TestCase):
+    """Файл из ОДНОЙ широкой команды не должен растаскиваться по тактам.
+
+    Запасная ветка разбора («файл без фигурных скобок — каждая операция свой
+    такт») смотрела на то, находимся ли мы ВНУТРИ команды в конце файла. После
+    закрывающей `}` флаг снят, а такты у всех операций нулевые — и ветка
+    срабатывала на совершенно обычном файле, разнося соседей по такту на
+    разные такты. На многотактных файлах не проявлялось: там такты разные.
+    """
+
+    ONE = "{\n  ldw,0\t0x0, [ %dr1 ], %r5\n  adds,1\t%r6, %r7, %r8\n}\n"
+
+    def test_one_bundle_stays_one(self):
+        parsed = asm_parser.parse_asm(self.ONE)
+        self.assertEqual(parsed.bundles, 1)
+        self.assertEqual([o.cycle for o in parsed.ops], [0, 0])
+
+    def test_file_without_braces_still_splits(self):
+        """А настоящий файл без скобок по-прежнему считается по операции в такт."""
+        src = "  ldw,0\t0x0, [ %dr1 ], %r5\n  adds,1\t%r6, %r7, %r8\n"
+        parsed = asm_parser.parse_asm(src)
+        self.assertEqual([o.cycle for o in parsed.ops], [0, 1])
+        self.assertEqual(parsed.bundles, 2)
+
+
+class TestLinterDoesNotBlameTheCompiler(unittest.TestCase):
+    """Линтер не должен объявлять вывод настоящего lcc незаконным.
+
+    Проверка «результат ещё не готов» шла по порядку строк и не знала, что
+    внутри широкой команды все читают ДО записей. На probe.s это давало три
+    ошибки на ровном месте — инструмент говорил, что компилятор Эльбруса
+    выдал неверный код. Та же ошибка была в build_dag; здесь отдельная копия
+    логики, и она отстала.
+    """
+
+    def test_real_probes_have_no_dependency_errors(self):
+        from vliw.core.model import get_profile
+
+        model = get_profile(DEFAULT_PROFILE)
+        root = Path(__file__).resolve().parent.parent / "examples" / "probes"
+        for path in sorted(root.glob("*.s")):
+            parsed = asm_parser.parse_asm(path.read_text(encoding="utf-8"))
+            errs = [p for p in asm_parser.lint(parsed, model)
+                    if p.severity == "error" and p.kind == "ready"]
+            with self.subTest(проба=path.name):
+                self.assertEqual(
+                    errs, [], "вывод lcc объявлен незаконным: "
+                    + "; ".join(e.text for e in errs[:2]))
+
+    def test_real_violation_across_bundles_is_still_caught(self):
+        """А настоящее нарушение — через такт — линтер обязан находить."""
+        from vliw.core.model import get_profile
+
+        # LOAD отдаёт результат через 5 тактов; читаем через один.
+        src = ("{\n  ldw,0\t0x0, [ %dr1 ], %r5\n}\n"
+               "{\n  adds,1\t%r5, %r6, %r7\n}\n")
+        parsed = asm_parser.parse_asm(src)
+        errs = [p for p in asm_parser.lint(parsed, get_profile(DEFAULT_PROFILE))
+                if p.kind == "ready"]
+        self.assertEqual(len(errs), 1, "нарушение между тактами пропущено")
+        self.assertIn("%r5", errs[0].text)

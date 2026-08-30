@@ -177,6 +177,7 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
     bundle = -1
     cycle = 0
     in_bundle = False
+    saw_bundle = False
     pending_nop = 0
 
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -186,6 +187,7 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
 
         if line.startswith("{"):
             in_bundle = True
+            saw_bundle = True
             bundle += 1
             cycle += pending_nop
             pending_nop = 0
@@ -246,8 +248,8 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
             near = difflib.get_close_matches(mn, MNEMONICS, n=3, cutoff=0.72)
             res.problems.append(AsmProblem(
                 line=lineno, kind="mnemonic", severity="warn", op=len(res.ops),
-                text=f"мнемоника `{mn}` незнакомая — считаю как арифметику "
-                     f"(латентность 1, любой канал)",
+                text=f"мнемоника `{mn}` незнакомая — класс UNKNOWN "
+                     f"(латентность 1, любой канал: заглушка, не измерение)",
                 hint=("может быть: " + "  ".join(near)) if near else
                      "список известных — в MNEMONICS (core/asm_parser.py)"))
 
@@ -266,8 +268,15 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
         ))
 
     res.bundles = bundle + 1
-    if not in_bundle and res.ops and all(o.cycle == 0 for o in res.ops):
+    if not saw_bundle and res.ops:
         # Файл без фигурных скобок: считаем, что каждая операция — свой такт.
+        #
+        # Условие смотрит на то, ВСТРЕЧАЛАСЬ ли хоть одна `{`, а не на
+        # `in_bundle`. Прежняя проверка (`not in_bundle` и все такты нулевые)
+        # ошибалась на файле из ОДНОЙ широкой команды: после закрывающей `}`
+        # флаг снят, такты у всех операций нулевые — и разбор растаскивал
+        # соседей по такту на разные такты, ровно теряя то, ради чего файл и
+        # читается. На многотактных файлах не проявлялось: там такты разные.
         for i, o in enumerate(res.ops):
             o.cycle = i
             o.bundle = i
@@ -276,25 +285,62 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
 
 
 def build_dag(parsed: ParsedAsm, key: str = "asm", title: str = "") -> DAG:
-    """Построить граф зависимостей по чтению/записи регистров (RAW)."""
+    """Построить граф зависимостей по чтению/записи регистров (RAW).
+
+    СЕМАНТИКА ШИРОКОЙ КОМАНДЫ. Все операции одного такта читают операнды
+    ОДНОВРЕМЕННО, прежде чем ляжет хоть одна запись этого же такта. Поэтому
+    текстовый порядок внутри `{ … }` ничего не значит, и вот эта пара из
+    probe.s — НЕ зависимость по данным:
+
+        {  ldw,0    0x0, [ a+16 ], %r5      ← пишет %r5
+           sdivs,5  %r5, %r6, %r4           ← читает СТАРЫЙ %r5
+        }
+
+    Деление берёт значение, загруженное раньше, а загрузка готовит %r5 для
+    следующего потребителя: обычное переиспользование регистра при
+    программной конвейеризации.
+
+    Прежняя версия шла по операциям подряд и такие пары читала как «запись →
+    чтение» по номеру строки. Последствия не косметические: выдуманные рёбра
+    завышали критический путь, а расписание самого компилятора переставало
+    проходить `Schedule.validate()` — инструмент объявлял вывод lcc
+    незаконным на ровном месте. Здесь такт обрабатывается целиком: сначала
+    все читают состояние ПРЕДЫДУЩИХ тактов, потом все пишут.
+    """
     last_writer: dict[str, int] = {}
     instrs: list[Instr] = []
 
-    for o in parsed.ops:
-        preds = []
-        for s in o.srcs:
-            w = last_writer.get(s)
-            if w is not None and w not in preds:
-                preds.append(w)
-        instrs.append(Instr(
-            id=o.index,
-            name=(o.dst or f"i{o.index}"),
-            op=o.op,
-            preds=tuple(sorted(preds)),
-            text=o.text,
-        ))
-        if o.dst:
-            last_writer[o.dst] = o.index
+    def group_key(o: AsmOp) -> int:
+        # Такт неизвестен (файл без фигурных скобок) — операция сама по себе,
+        # иначе весь файл слипся бы в один «такт» и зависимости исчезли бы.
+        return o.cycle if o.cycle >= 0 else -(o.index + 1)
+
+    i = 0
+    ops = parsed.ops
+    while i < len(ops):
+        j = i
+        while j < len(ops) and group_key(ops[j]) == group_key(ops[i]):
+            j += 1
+
+        # Такт целиком: сперва ЧИТАЮТ все операции такта — по состоянию,
+        # сложившемуся к его началу, — и только потом применяются записи.
+        for o in ops[i:j]:
+            preds = []
+            for src in o.srcs:
+                w = last_writer.get(src)
+                if w is not None and w not in preds:
+                    preds.append(w)
+            instrs.append(Instr(
+                id=o.index,
+                name=(o.dst or f"i{o.index}"),
+                op=o.op,
+                preds=tuple(sorted(preds)),
+                text=o.text,
+            ))
+        for o in ops[i:j]:
+            if o.dst:
+                last_writer[o.dst] = o.index
+        i = j
 
     return DAG(
         key=key,
@@ -398,22 +444,39 @@ def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
             held.setdefault((o.cycle + k, port), o)
 
     # 3. Результат ещё не готов: чтение раньше латентности.
+    #
+    # ТАКТ ЦЕЛИКОМ, а не построчно. Все операции широкой команды читают
+    # операнды одновременно, до того как ляжет хоть одна запись этого же
+    # такта, — поэтому сосед по такту производителем быть не может. Проверка
+    # шла по порядку строк и объявляла НЕЗАКОННЫМ вывод самого lcc: в
+    # probe.s соседние `ldw` и `sdivs` внутри одной `{ … }` давали три
+    # «ошибки» на ровном месте. То же самое чинилось в build_dag — здесь
+    # отдельная копия логики, и она отстала.
     last_writer: dict[str, AsmOp] = {}
-    for o in parsed.ops:
-        for src in o.srcs:
-            w = last_writer.get(src)
-            if w is None:
-                continue
-            ready = w.cycle + model.latency(w.op)
-            if o.cycle < ready:
-                out.append(AsmProblem(
-                    line=o.line, kind="ready", severity="error", op=o.index,
-                    text=f"%{src} читается в такте {o.cycle}, а {w.mnemonic} "
-                         f"из строки {w.line} отдаст его только в такте {ready}",
-                    hint=f"латентность {w.op} — {model.latency(w.op)} т.; "
-                         f"нужен разрыв в {ready - w.cycle} т."))
-        if o.dst:
-            last_writer[o.dst] = o
+    ops = parsed.ops
+    i = 0
+    while i < len(ops):
+        j = i
+        while j < len(ops) and ops[j].cycle == ops[i].cycle:
+            j += 1
+        for o in ops[i:j]:
+            for src in o.srcs:
+                w = last_writer.get(src)
+                if w is None:
+                    continue
+                ready = w.cycle + model.latency(w.op)
+                if o.cycle < ready:
+                    out.append(AsmProblem(
+                        line=o.line, kind="ready", severity="error", op=o.index,
+                        text=f"%{src} читается в такте {o.cycle}, а "
+                             f"{w.mnemonic} из строки {w.line} отдаст его "
+                             f"только в такте {ready}",
+                        hint=f"латентность {w.op} — {model.latency(w.op)} т.; "
+                             f"нужен разрыв в {ready - w.cycle} т."))
+        for o in ops[i:j]:
+            if o.dst:
+                last_writer[o.dst] = o
+        i = j
 
     # 4. Каналы вообще не проставлены: расписание компилятора мы тогда не
     #    восстанавливаем, а раскладываем сами — и это надо сказать вслух,

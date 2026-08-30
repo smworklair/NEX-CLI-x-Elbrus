@@ -706,15 +706,41 @@ def _load_parsed(session: Session, parsed, label: str) -> bool:
     if label == "буфер":
         session.code_run_text = session.code_text
 
+    # Две РАЗНЫЕ причины, по которым расписания компилятора может не быть, и
+    # путать их нельзя: либо раскладку не удалось восстановить вовсе (каналы
+    # противоречат матрице портов), либо она восстановилась, но не проходит
+    # нашу же проверку. Второе на настоящем `-O3` — обычное дело и почти
+    # всегда одна ложная зависимость: компилятор конвейеризует цикл и
+    # потребляет значение из ПРЕДЫДУЩЕЙ итерации, а разбор читает файл
+    # линейно и видит «операнд ещё не готов». Раньше обе причины показывались
+    # одним текстом про каналы — человек шёл искать не туда.
     cs = asm_parser.compiler_schedule(parsed, dag, model)
     comp_cycles = cs.makespan if cs else None
-    if cs and cs.validate():
-        comp_cycles = None      # раскладка не сходится с моделью — не врём
+    comp_problem = None
+    if cs is None:
+        comp_problem = ("расписание компилятора не восстановлено",
+                        "раскладка по каналам не сходится с моделью")
+    else:
+        errs = cs.validate()
+        if errs:
+            comp_cycles = None      # не врём: makespan такого расписания не факт
+            comp_problem = (
+                "расписание компилятора не принято проверкой",
+                (f"{errs[0]}"
+                 if len(errs) == 1 else
+                 f"{len(errs)} замечаний, первое: {errs[0]}")
+                + ". Частая причина на настоящем -O3 — конвейеризованный "
+                  "цикл: значение берётся из предыдущей итерации, а разбор "
+                  "читает файл линейно")
     base, orc, met = session.results()
 
     print(rule("загружен · " + label))
+    # Линтер зовём и здесь: до 0.9 его видел только полноэкранный КОД, и
+    # `/load` на том же файле молчал про незаконные каналы.
+    problems = list(parsed.problems) + asm_parser.lint(parsed, model)
     _out(diagnostics.render_parsed(parsed, dag, comp_cycles,
-                                   orc.schedule.makespan, met.lower_bound))
+                                   orc.schedule.makespan, met.lower_bound,
+                                   comp_problem, problems))
     session.compiler_sched = cs if comp_cycles is not None else None
     return True
 

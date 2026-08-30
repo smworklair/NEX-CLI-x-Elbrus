@@ -86,16 +86,24 @@ PromptBar {
     width: 100%;
 }
 
+/* Строка ввода в нижнем доке. Боковые отступы убраны: плашка шириной во
+   весь экран читается как край окна, а не как всплывшая карточка. Отделяет
+   её от вывода волосок сверху — той же толщины, что и всюду в раскладке. */
 #prompt-field {
-    height: 3;
+    /* 4 = волосок сверху + отступ + строка + отступ. При height: 3 волосок
+       съедал ряд у содержимого, и в АГЕНТЕ строка ввода пропадала целиком:
+       оставались линия и две пустые полосы. */
+    height: 4;
     width: 100%;
-    margin: 0 1;
+    margin: 0;
     padding: 1 1;
     background: $nex-raised;
+    border-top: solid $nex-line 30%;
 }
 
 #prompt-field:focus-within {
-    background: $primary 18%;
+    background: $primary 12%;
+    border-top: solid $primary 40%;
 }
 
 /* Дети — по одной строке: центрирует их сам паддинг поля, и текст с
@@ -400,17 +408,26 @@ Panel.-maximized #grid-side { display: block; }
     палитра по «/», история, «считаю…». */
 #p-console #prompt { height: auto; width: 100%; }
 
+/* Строка ввода ВНУТРИ панели — часть панели, а не карточка на ней.
+   Была коробка: своя подложка плюс `border: round`, и всё это внутри
+   панели, у которой рамка уже есть. Две вложенные рамки читаются как
+   «интерфейс из отдельных кусков», особенно когда внешняя подсвечена
+   фокусом. Теперь поле лежит на той же поверхности и отделено сверху
+   волоском; фокус меняет ТОН волоска и подложку на едва заметную, а не
+   обводит вторую рамку. */
 #p-console #prompt-field {
     height: 3;
     margin: 0;
     padding: 0 1;
-    background: $nex-raised;
-    border: round $nex-panel;
+    background: transparent;
+    border: none;
+    border-top: solid $nex-line 30%;
 }
 
 #p-console #prompt-field:focus-within {
-    background: $primary 12%;
-    border: round $primary 45%;
+    background: $primary 8%;
+    border: none;
+    border-top: solid $primary 45%;
 }
 
 #p-console #prompt-side { padding: 0 1; }

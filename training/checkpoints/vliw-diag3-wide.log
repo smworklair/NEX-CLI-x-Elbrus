@@ -1,0 +1,185 @@
+[{"stream_name":"stdout","time":7.92737174,"data":"GPU: Tesla T4, compute capability 7.5\n"}
+,{"stream_name":"stdout","time":8.406047734,"data":"GPU: базовая CUDA-операция прошла — совместимость подтверждена\n"}
+,{"stream_name":"stdout","time":12.606876879,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.1/12.1 MB 94.0 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":12.64347455,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 775.8/775.8 kB 40.7 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":13.066360597,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 43.1/43.1 MB 43.7 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":13.097758876,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 389.2/389.2 kB 27.6 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":13.130173079,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 516.0/516.0 kB 32.9 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":13.187509474,"data":"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 85.1 MB/s eta 0:00:00\n"}
+,{"stream_name":"stdout","time":29.414673745,"data":"прогон 1: /kaggle/input/datasets/shokhruhmir/vliw-eos-run/lora-eos\n"}
+,{"stream_name":"stdout","time":29.414717168,"data":"прогон 2: /kaggle/input/datasets/shokhruhmir/vliw-run2-lora\n"}
+,{"stream_name":"stdout","time":29.414730975,"data":"\n"}
+,{"stream_name":"stdout","time":29.414736159,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":29.414741001,"data":"АДАПТЕР run1 / ограниченная генерация\n"}
+,{"stream_name":"stdout","time":29.414745781,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":58.008727402,"data":"токенизатора нет рядом с адаптером (ValueError), беру у базовой модели Qwen/Qwen2.5-3B-Instruct\n"}
+,{"stream_name":"stderr","time":58.151586516,"data":"Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stderr","time":59.424398889,"data":"[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n"}
+,{"stream_name":"stderr","time":82.806653646,"data":"\rFetching 2 files:   0%|          | 0/2 [00:00\u003c?, ?it/s]\rFetching 2 files:  50%|█████     | 1/2 [00:23\u003c00:23, 23.12s/it]\rFetching 2 files: 100%|██████████| 2/2 [00:23\u003c00:00, 11.56s/it]\n"}
+,{"stream_name":"stderr","time":87.387573969,"data":"\rLoading weights:   0%|          | 0/434 [00:00\u003c?, ?it/s]\rLoading weights:   0%|          | 1/434 [00:00\u003c06:24,  1.13it/s]\rLoading weights:  17%|█▋        | 75/434 [00:00\u003c00:03, 102.65it/s]\rLoading weights:  27%|██▋       | 116/434 [00:01\u003c00:02, 112.97it/s]\rLoading weights:  33%|███▎      | 145/434 [00:01\u003c00:02, 123.93it/s]\rLoading weights:  39%|███▉      | 169/434 [00:01\u003c00:02, 121.50it/s]\rLoading weights:  44%|████▎     | 189/434 [00:01\u003c00:01, 122.73it/s]\rLoading weights:  47%|████▋     | 206/434 [00:02\u003c00:01, 120.90it/s]\rLoading weights:  51%|█████     | 222/434 [00:02\u003c00:01, 108.19it/s]\rLoading weights:  56%|█████▌    | 243/434 [00:02\u003c00:01, 107.82it/s]\rLoading weights:  62%|██████▏   | 267/434 [00:02\u003c00:01, 127.45it/s]\rLoading weights:  65%|██████▍   | 282/434 [00:02\u003c00:01, 123.35it/s]\rLoading weights:  68%|██████▊   | 296/434 [00:02\u003c00:01, 118.09it/s]\rLoading weights:  73%|███████▎  | 315/434 [00:02\u003c00:00, 129.18it/s]\rLoading weights:  76%|███████▌  | 329/434 [00:03\u003c00:00, 112.16it/s]\rLoading weights:  81%|████████  | 351/434 [00:03\u003c00:00, 124.17it/s]\rLoading weights:  84%|████████▍ | 365/434 [00:03\u003c00:00, 124.14it/s]\rLoading weights:  87%|████████▋ | 378/434 [00:03\u003c00:00, 116.71it/s]\rLoading weights:  92%|█████████▏| 399/434 [00:03\u003c00:00, 121.70it/s]\rLoading weights:  95%|█████████▍| 412/434 [00:03\u003c00:00, 109.44it/s]\rLoading weights: 100%|██████████| 434/434 [00:03\u003c00:00, 112.95it/s]\n"}
+,{"stream_name":"stdout","time":90.190238519,"data":"ограниченная генерация: скелет ответа подставляется, модель выбирает такт и канал (канал — только из исполнимых)\n"}
+,{"stream_name":"stdout","time":90.194729609,"data":"оценка 300 примеров\n"}
+,{"stream_name":"stdout","time":111.681462723,"data":"[2] ресурс: ['конфликт на канале 1 в такте 0: 1 и 17', 'конфликт на канале 5 в такте 0: 7 и 12']\n"}
+,{"stream_name":"stdout","time":169.481979213,"data":"[10] ресурс: ['конфликт на канале 0 в такте 0: 0 и 19', 'конфликт на канале 5 в такте 0: 12 и 16']\n"}
+,{"stream_name":"stdout","time":249.954029626,"data":"  ...20/300  как есть 16  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":286.342472097,"data":"[24] сдвиг: ['14 выдана в 24, операнд 13 готов к 32']\n"}
+,{"stream_name":"stdout","time":329.109621074,"data":"[31] сдвиг: ['13 выдана в 1, операнд 1 готов к 6', 'конфликт на канале 1 в такте 0: 0 и 18']\n"}
+,{"stream_name":"stdout","time":405.424866791,"data":"  ...40/300  как есть 29  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":535.196688129,"data":"  ...60/300  как есть 43  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":656.009480509,"data":"  ...80/300  как есть 56  хвост 0  сдвиг 3  дыры 0\n"}
+,{"stream_name":"stdout","time":806.96253079,"data":"  ...100/300  как есть 69  хвост 0  сдвиг 5  дыры 0\n"}
+,{"stream_name":"stdout","time":934.606188419,"data":"  ...120/300  как есть 81  хвост 0  сдвиг 6  дыры 0\n"}
+,{"stream_name":"stdout","time":1082.200728657,"data":"  ...140/300  как есть 97  хвост 0  сдвиг 8  дыры 0\n"}
+,{"stream_name":"stdout","time":1272.649817971,"data":"  ...160/300  как есть 103  хвост 0  сдвиг 14  дыры 0\n"}
+,{"stream_name":"stdout","time":1467.984164905,"data":"  ...180/300  как есть 112  хвост 0  сдвиг 18  дыры 0\n"}
+,{"stream_name":"stdout","time":1645.782638958,"data":"  ...200/300  как есть 120  хвост 0  сдвиг 21  дыры 0\n"}
+,{"stream_name":"stdout","time":1866.808976395,"data":"  ...220/300  как есть 132  хвост 0  сдвиг 23  дыры 0\n"}
+,{"stream_name":"stdout","time":2016.984596965,"data":"  ...240/300  как есть 146  хвост 0  сдвиг 25  дыры 0\n"}
+,{"stream_name":"stdout","time":2086.193473764,"data":"  ...260/300  как есть 164  хвост 0  сдвиг 25  дыры 0\n"}
+,{"stream_name":"stdout","time":2161.587874774,"data":"  ...280/300  как есть 183  хвост 0  сдвиг 25  дыры 0\n"}
+,{"stream_name":"stdout","time":2235.15152351,"data":"  ...300/300  как есть 202  хвост 0  сдвиг 25  дыры 0\n"}
+,{"stream_name":"stdout","time":2235.199032573,"data":"\n"}
+,{"stream_name":"stdout","time":2235.199070007,"data":"как есть (без хвоста):     202/300 (67%)\n"}
+,{"stream_name":"stdout","time":2235.199078145,"data":"префикс 0..n-1 законный:   202/300 (67%)\n"}
+,{"stream_name":"stdout","time":2235.19908366,"data":"состав:\n"}
+,{"stream_name":"stdout","time":2235.19908882,"data":"  валидно         202  (67% всех)  валидно: ровно id графа, расписание законно\n"}
+,{"stream_name":"stdout","time":2235.199095253,"data":"  сдвиг            25  (8% всех)  почти: верные id, операнд ещё не готов\n"}
+,{"stream_name":"stdout","time":2235.199101381,"data":"  ресурс           73  (24% всех)  почти: верные id, канал / конфликт / ширина\n"}
+,{"stream_name":"stdout","time":2235.199107263,"data":"\n"}
+,{"stream_name":"stdout","time":2235.199112772,"data":"среди сломанных префиксов (98): почти 98 (100%), мимо 0 (0%)\n"}
+,{"stream_name":"stdout","time":2235.199118468,"data":"по составу — почти (порядок/ресурсы): та же база, ещё эпохи\n"}
+,{"stream_name":"stdout","time":2235.199125026,"data":"среди законных префиксов — средний разрыв до оптимума: 1.15 такта, точно оптимальных: 146/202\n"}
+,{"stream_name":"stdout","time":2238.92640219,"data":"\n"}
+,{"stream_name":"stdout","time":2238.92645743,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":2238.926466794,"data":"АДАПТЕР run1 / обычная генерация\n"}
+,{"stream_name":"stdout","time":2238.926472854,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":2249.648573152,"data":"токенизатора нет рядом с адаптером (ValueError), беру у базовой модели Qwen/Qwen2.5-3B-Instruct\n"}
+,{"stream_name":"stderr","time":2249.789261554,"data":"Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stderr","time":2250.558277299,"data":"[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n"}
+,{"stream_name":"stderr","time":2255.142089868,"data":"\rLoading weights:   0%|          | 0/434 [00:00\u003c?, ?it/s]\rLoading weights:   0%|          | 1/434 [00:01\u003c07:23,  1.03s/it]\rLoading weights:  20%|██        | 87/434 [00:01\u003c00:03, 103.67it/s]\rLoading weights:  30%|██▉       | 130/434 [00:01\u003c00:02, 115.61it/s]\rLoading weights:  37%|███▋      | 160/434 [00:01\u003c00:02, 115.89it/s]\rLoading weights:  42%|████▏     | 183/434 [00:01\u003c00:02, 115.56it/s]\rLoading weights:  47%|████▋     | 202/434 [00:02\u003c00:01, 120.23it/s]\rLoading weights:  50%|█████     | 219/434 [00:02\u003c00:01, 115.56it/s]\rLoading weights:  56%|█████▌    | 243/434 [00:02\u003c00:01, 126.26it/s]\rLoading weights:  60%|█████▉    | 259/434 [00:02\u003c00:01, 126.58it/s]\rLoading weights:  63%|██████▎   | 274/434 [00:02\u003c00:01, 123.47it/s]\rLoading weights:  67%|██████▋   | 291/434 [00:02\u003c00:01, 124.68it/s]\rLoading weights:  70%|███████   | 305/434 [00:02\u003c00:01, 121.53it/s]\rLoading weights:  73%|███████▎  | 318/434 [00:02\u003c00:00, 121.02it/s]\rLoading weights:  78%|███████▊  | 339/434 [00:03\u003c00:00, 120.02it/s]\rLoading weights:  81%|████████▏ | 353/434 [00:03\u003c00:00, 120.61it/s]\rLoading weights:  86%|████████▋ | 375/434 [00:03\u003c00:00, 119.81it/s]\rLoading weights:  92%|█████████▏| 399/434 [00:03\u003c00:00, 135.38it/s]\rLoading weights:  95%|█████████▌| 413/434 [00:03\u003c00:00, 122.81it/s]\rLoading weights: 100%|██████████| 434/434 [00:03\u003c00:00, 113.71it/s]\n"}
+,{"stream_name":"stdout","time":2256.71619166,"data":"оценка 300 примеров\n"}
+,{"stream_name":"stdout","time":2284.814981339,"data":"[1] ресурс: ['13 (STORE) на канале 0, который её не исполняет']\n"}
+,{"stream_name":"stdout","time":2312.136870681,"data":"[2] ресурс: ['7 (STORE) на канале 3, который её не исполняет', '13 (STORE) на канале 0, который её не исполняет']\n"}
+,{"stream_name":"stdout","time":2468.00314063,"data":"[10] галлюцинация: ['не размещены инструкции: [19]']\n"}
+,{"stream_name":"stdout","time":2682.085068944,"data":"  ...20/300  как есть 6  хвост 0  сдвиг 0  дыры 1\n"}
+,{"stream_name":"stdout","time":2776.027822043,"data":"[24] сдвиг: ['14 выдана в 25, операнд 13 готов к 32', '0 (STORE) на канале 0, который её не исполняет']\n"}
+,{"stream_name":"stdout","time":2890.245924209,"data":"[31] сдвиг: ['13 выдана в 1, операнд 1 готов к 6', '7 (STORE) на канале 0, который её не исполняет']\n"}
+,{"stream_name":"stdout","time":3094.409671544,"data":"  ...40/300  как есть 11  хвост 0  сдвиг 2  дыры 1\n"}
+,{"stream_name":"stdout","time":3436.499537158,"data":"  ...60/300  как есть 19  хвост 0  сдвиг 2  дыры 1\n"}
+,{"stream_name":"stdout","time":3754.520241755,"data":"  ...80/300  как есть 26  хвост 0  сдвиг 3  дыры 1\n"}
+,{"stream_name":"stdout","time":4154.148228601,"data":"  ...100/300  как есть 30  хвост 0  сдвиг 5  дыры 1\n"}
+,{"stream_name":"stdout","time":4487.519132929,"data":"  ...120/300  как есть 37  хвост 0  сдвиг 6  дыры 1\n"}
+,{"stream_name":"stdout","time":4873.965748254,"data":"  ...140/300  как есть 43  хвост 0  сдвиг 8  дыры 1\n"}
+,{"stream_name":"stdout","time":5397.35981603,"data":"  ...160/300  как есть 46  хвост 0  сдвиг 14  дыры 1\n"}
+,{"stream_name":"stdout","time":5938.884193937,"data":"  ...180/300  как есть 49  хвост 0  сдвиг 18  дыры 1\n"}
+,{"stream_name":"stdout","time":6425.105691934,"data":"  ...200/300  как есть 53  хвост 0  сдвиг 21  дыры 1\n"}
+,{"stream_name":"stdout","time":7007.268797594,"data":"  ...220/300  как есть 54  хвост 0  сдвиг 23  дыры 1\n"}
+,{"stream_name":"stdout","time":7394.558029969,"data":"  ...240/300  как есть 60  хвост 0  сдвиг 25  дыры 1\n"}
+,{"stream_name":"stdout","time":7569.227304321,"data":"  ...260/300  как есть 74  хвост 0  сдвиг 25  дыры 1\n"}
+,{"stream_name":"stdout","time":7757.312628975,"data":"  ...280/300  как есть 87  хвост 0  сдвиг 25  дыры 1\n"}
+,{"stream_name":"stdout","time":7946.534567442,"data":"  ...300/300  как есть 98  хвост 0  сдвиг 25  дыры 1\n"}
+,{"stream_name":"stdout","time":7946.58823615,"data":"\n"}
+,{"stream_name":"stdout","time":7946.588278935,"data":"как есть (без хвоста):     98/300 (33%)\n"}
+,{"stream_name":"stdout","time":7946.588301975,"data":"префикс 0..n-1 законный:   98/300 (33%)\n"}
+,{"stream_name":"stdout","time":7946.58832722,"data":"состав:\n"}
+,{"stream_name":"stdout","time":7946.588331782,"data":"  валидно          98  (33% всех)  валидно: ровно id графа, расписание законно\n"}
+,{"stream_name":"stdout","time":7946.588336335,"data":"  сдвиг            25  (8% всех)  почти: верные id, операнд ещё не готов\n"}
+,{"stream_name":"stdout","time":7946.588340722,"data":"  ресурс          176  (59% всех)  почти: верные id, канал / конфликт / ширина\n"}
+,{"stream_name":"stdout","time":7946.588345021,"data":"  галлюцинация      1  (0% всех)  мимо: дыры в настоящих id\n"}
+,{"stream_name":"stdout","time":7946.588349436,"data":"\n"}
+,{"stream_name":"stdout","time":7946.588355202,"data":"среди сломанных префиксов (202): почти 201 (100%), мимо 1 (0%)\n"}
+,{"stream_name":"stdout","time":7946.588362545,"data":"по составу — почти (порядок/ресурсы): та же база, ещё эпохи\n"}
+,{"stream_name":"stdout","time":7946.588365753,"data":"среди законных префиксов — средний разрыв до оптимума: 0.01 такта, точно оптимальных: 97/98\n"}
+,{"stream_name":"stdout","time":7948.355417566,"data":"\n"}
+,{"stream_name":"stdout","time":7948.355477973,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":7948.355483982,"data":"АДАПТЕР run2 / ограниченная генерация\n"}
+,{"stream_name":"stdout","time":7948.355490196,"data":"======================================================================\n"}
+,{"stream_name":"stderr","time":7960.864411197,"data":"[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n"}
+,{"stream_name":"stderr","time":7965.55618567,"data":"\rLoading weights:   0%|          | 0/434 [00:00\u003c?, ?it/s]\rLoading weights:   0%|          | 1/434 [00:00\u003c06:27,  1.12it/s]\rLoading weights:  17%|█▋        | 75/434 [00:01\u003c00:03, 102.01it/s]\rLoading weights:  27%|██▋       | 117/434 [00:01\u003c00:02, 109.54it/s]\rLoading weights:  33%|███▎      | 145/434 [00:01\u003c00:02, 122.47it/s]\rLoading weights:  39%|███▉      | 169/434 [00:01\u003c00:02, 123.48it/s]\rLoading weights:  44%|████▎     | 189/434 [00:01\u003c00:02, 116.16it/s]\rLoading weights:  47%|████▋     | 206/434 [00:02\u003c00:01, 119.50it/s]\rLoading weights:  51%|█████     | 222/434 [00:02\u003c00:01, 114.81it/s]\rLoading weights:  54%|█████▍    | 236/434 [00:02\u003c00:01, 112.84it/s]\rLoading weights:  59%|█████▉    | 255/434 [00:02\u003c00:01, 109.63it/s]\rLoading weights:  64%|██████▍   | 279/434 [00:02\u003c00:01, 117.66it/s]\rLoading weights:  70%|██████▉   | 303/434 [00:02\u003c00:01, 122.44it/s]\rLoading weights:  73%|███████▎  | 317/434 [00:02\u003c00:00, 118.90it/s]\rLoading weights:  76%|███████▌  | 330/434 [00:03\u003c00:00, 116.40it/s]\rLoading weights:  79%|███████▉  | 342/434 [00:03\u003c00:00, 115.15it/s]\rLoading weights:  84%|████████▎ | 363/434 [00:03\u003c00:00, 126.29it/s]\rLoading weights:  87%|████████▋ | 376/434 [00:03\u003c00:00, 113.76it/s]\rLoading weights:  92%|█████████▏| 399/434 [00:03\u003c00:00, 131.23it/s]\rLoading weights:  95%|█████████▌| 413/434 [00:03\u003c00:00, 124.66it/s]\rLoading weights:  98%|█████████▊| 426/434 [00:03\u003c00:00, 123.33it/s]\rLoading weights: 100%|██████████| 434/434 [00:03\u003c00:00, 111.77it/s]\n"}
+,{"stream_name":"stderr","time":7965.849868881,"data":"Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stdout","time":7968.053748713,"data":"ограниченная генерация: скелет ответа подставляется, модель выбирает такт и канал (канал — только из исполнимых)\n"}
+,{"stream_name":"stdout","time":7968.057335985,"data":"оценка 300 примеров\n"}
+,{"stream_name":"stdout","time":7989.939288589,"data":"[2] ресурс: ['конфликт на канале 1 в такте 1: 9 и 17', 'такт 1: 7 операций при ширине 6']\n"}
+,{"stream_name":"stdout","time":8034.78271867,"data":"[8] ресурс: ['конфликт на канале 5 в такте 3: 7 и 4']\n"}
+,{"stream_name":"stdout","time":8139.930788662,"data":"  ...20/300  как есть 16  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":8306.537216181,"data":"  ...40/300  как есть 32  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":8441.039135825,"data":"  ...60/300  как есть 51  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":8567.521710805,"data":"  ...80/300  как есть 68  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":8726.676284998,"data":"  ...100/300  как есть 84  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":8862.647988944,"data":"  ...120/300  как есть 101  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":9020.56567154,"data":"  ...140/300  как есть 118  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":9229.034625485,"data":"  ...160/300  как есть 136  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":9437.108795869,"data":"  ...180/300  как есть 151  хвост 0  сдвиг 0  дыры 0\n"}
+,{"stream_name":"stdout","time":9511.743683909,"data":"[189] сдвиг: ['21 выдана в 20, операнд 10 готов к 31']\n"}
+,{"stream_name":"stdout","time":9538.134153951,"data":"[191] сдвиг: ['22 выдана в 34, операнд 19 готов к 45']\n"}
+,{"stream_name":"stdout","time":9626.891484195,"data":"  ...200/300  как есть 164  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":9856.9111074,"data":"  ...220/300  как есть 179  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":10006.37519795,"data":"  ...240/300  как есть 196  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":10075.131194915,"data":"  ...260/300  как есть 215  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":10149.323411475,"data":"  ...280/300  как есть 233  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":10223.411129522,"data":"  ...300/300  как есть 253  хвост 0  сдвиг 2  дыры 0\n"}
+,{"stream_name":"stdout","time":10223.46204033,"data":"\n"}
+,{"stream_name":"stdout","time":10223.462081275,"data":"как есть (без хвоста):     253/300 (84%)\n"}
+,{"stream_name":"stdout","time":10223.462090105,"data":"префикс 0..n-1 законный:   253/300 (84%)\n"}
+,{"stream_name":"stdout","time":10223.462096395,"data":"состав:\n"}
+,{"stream_name":"stdout","time":10223.462102014,"data":"  валидно         253  (84% всех)  валидно: ровно id графа, расписание законно\n"}
+,{"stream_name":"stdout","time":10223.462109229,"data":"  сдвиг             2  (1% всех)  почти: верные id, операнд ещё не готов\n"}
+,{"stream_name":"stdout","time":10223.462137206,"data":"  ресурс           45  (15% всех)  почти: верные id, канал / конфликт / ширина\n"}
+,{"stream_name":"stdout","time":10223.462142424,"data":"\n"}
+,{"stream_name":"stdout","time":10223.462146431,"data":"среди сломанных префиксов (47): почти 47 (100%), мимо 0 (0%)\n"}
+,{"stream_name":"stdout","time":10223.462150918,"data":"по составу — почти (порядок/ресурсы): та же база, ещё эпохи\n"}
+,{"stream_name":"stdout","time":10223.46215587,"data":"среди законных префиксов — средний разрыв до оптимума: 0.30 такта, точно оптимальных: 221/253\n"}
+,{"stream_name":"stdout","time":10225.124327357,"data":"\n"}
+,{"stream_name":"stdout","time":10225.124367292,"data":"======================================================================\n"}
+,{"stream_name":"stdout","time":10225.124373186,"data":"АДАПТЕР run2 / обычная генерация\n"}
+,{"stream_name":"stdout","time":10225.12437848,"data":"======================================================================\n"}
+,{"stream_name":"stderr","time":10236.849539957,"data":"Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stderr","time":10236.869161685,"data":"[transformers] `torch_dtype` is deprecated! Use `dtype` instead!\n"}
+,{"stream_name":"stderr","time":10241.419383236,"data":"\rLoading weights:   0%|          | 0/434 [00:00\u003c?, ?it/s]\rLoading weights:   0%|          | 1/434 [00:00\u003c05:35,  1.29it/s]\rLoading weights:  18%|█▊        | 76/434 [00:00\u003c00:03, 110.19it/s]\rLoading weights:  25%|██▍       | 107/434 [00:01\u003c00:02, 123.04it/s]\rLoading weights:  30%|███       | 131/434 [00:01\u003c00:02, 126.05it/s]\rLoading weights:  35%|███▍      | 151/434 [00:01\u003c00:02, 127.08it/s]\rLoading weights:  39%|███▉      | 169/434 [00:01\u003c00:02, 129.09it/s]\rLoading weights:  43%|████▎     | 185/434 [00:01\u003c00:02, 111.28it/s]\rLoading weights:  48%|████▊     | 207/434 [00:01\u003c00:01, 120.58it/s]\rLoading weights:  51%|█████     | 221/434 [00:02\u003c00:01, 119.82it/s]\rLoading weights:  56%|█████▌    | 243/434 [00:02\u003c00:01, 121.82it/s]\rLoading weights:  59%|█████▉    | 257/434 [00:02\u003c00:01, 123.81it/s]\rLoading weights:  62%|██████▏   | 270/434 [00:02\u003c00:01, 121.55it/s]\rLoading weights:  67%|██████▋   | 291/434 [00:02\u003c00:01, 119.85it/s]\rLoading weights:  71%|███████   | 306/434 [00:02\u003c00:01, 126.54it/s]\rLoading weights:  75%|███████▌  | 327/434 [00:02\u003c00:00, 129.83it/s]\rLoading weights:  79%|███████▊  | 341/434 [00:03\u003c00:00, 126.30it/s]\rLoading weights:  82%|████████▏ | 354/434 [00:03\u003c00:00, 123.88it/s]\rLoading weights:  86%|████████▋ | 375/434 [00:03\u003c00:00, 125.87it/s]\rLoading weights:  92%|█████████▏| 399/434 [00:03\u003c00:00, 122.90it/s]\rLoading weights:  97%|█████████▋| 423/434 [00:03\u003c00:00, 126.91it/s]\rLoading weights: 100%|██████████| 434/434 [00:03\u003c00:00, 117.69it/s]\n"}
+,{"stream_name":"stdout","time":10242.624174527,"data":"оценка 300 примеров\n"}
+,{"stream_name":"stdout","time":10270.731269608,"data":"[1] мусор: ['не размещены инструкции: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]']\n"}
+,{"stream_name":"stdout","time":10296.224806549,"data":"[2] галлюцинация: ['не размещены инструкции: [0, 1]']\n"}
+,{"stream_name":"stdout","time":10353.606219113,"data":"[4] хвост: лишние id [13, 14, 15, 16, 17, 18, 19, 20, 21]\n"}
+,{"stream_name":"stdout","time":10403.830321742,"data":"[5] мусор: ['не размещены инструкции: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]']\n"}
+,{"stream_name":"stdout","time":10453.824515958,"data":"[6] хвост: лишние id [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]\n"}
+,{"stream_name":"stdout","time":10497.537401374,"data":"[8] галлюцинация: ['не размещены инструкции: [0]']\n"}
+,{"stream_name":"stdout","time":10865.327170093,"data":"  ...20/300  как есть 5  хвост 4  сдвиг 0  дыры 7\n"}
+,{"stream_name":"stdout","time":11430.293861168,"data":"  ...40/300  как есть 8  хвост 6  сдвиг 0  дыры 15\n"}
+,{"stream_name":"stdout","time":11870.700250065,"data":"  ...60/300  как есть 12  хвост 9  сдвиг 0  дыры 23\n"}
+,{"stream_name":"stdout","time":12440.575509928,"data":"  ...80/300  как есть 14  хвост 14  сдвиг 0  дыры 31\n"}
+,{"stream_name":"stdout","time":12632.039300357,"data":"[87] ресурс: ['14 (DIV) на канале 0, который её не исполняет']\n"}
+,{"stream_name":"stdout","time":13077.293531377,"data":"  ...100/300  как есть 15  хвост 18  сдвиг 0  дыры 40\n"}
+,{"stream_name":"stdout","time":13655.815969415,"data":"  ...120/300  как есть 18  хвост 22  сдвиг 0  дыры 48\n"}
+,{"stream_name":"stdout","time":13944.207491592,"data":"[129] ресурс: ['конфликт на канале 5 в такте 11: 22 и 14']\n"}
+,{"stream_name":"stdout","time":14212.890862965,"data":"  ...140/300  как есть 21  хвост 26  сдвиг 0  дыры 55\n"}
+,{"stream_name":"stdout","time":14844.278938728,"data":"  ...160/300  как есть 24  хвост 27  сдвиг 0  дыры 61\n"}
+,{"stream_name":"stdout","time":15475.720194306,"data":"  ...180/300  как есть 25  хвост 29  сдвиг 0  дыры 71\n"}
+,{"stream_name":"stdout","time":15700.269136625,"data":"[189] сдвиг: ['21 выдана в 22, операнд 10 готов к 32', '22 выдана в 33, операнд 17 готов к 43']\n"}
+,{"stream_name":"stdout","time":15783.684120378,"data":"[191] сдвиг: ['22 выдана в 34, операнд 19 готов к 45']\n"}
+,{"stream_name":"stdout","time":16030.129999897,"data":"  ...200/300  как есть 28  хвост 30  сдвиг 2  дыры 79\n"}
+,{"stream_name":"stdout","time":16666.524284001,"data":"  ...220/300  как есть 34  хвост 30  сдвиг 2  дыры 87\n"}
+,{"stream_name":"stdout","time":17202.852822612,"data":"  ...240/300  как есть 37  хвост 32  сдвиг 2  дыры 95\n"}
+,{"stream_name":"stdout","time":17834.203222069,"data":"  ...260/300  как есть 40  хвост 39  сдвиг 2  дыры 101\n"}
+,{"stream_name":"stdout","time":18254.510327317,"data":"  ...280/300  как есть 42  хвост 42  сдвиг 2  дыры 113\n"}
+,{"stream_name":"stdout","time":18759.289071316,"data":"  ...300/300  как есть 44  хвост 50  сдвиг 2  дыры 122\n"}
+,{"stream_name":"stdout","time":18759.338702272,"data":"\n"}
+,{"stream_name":"stdout","time":18759.33873853,"data":"как есть (без хвоста):     44/300 (15%)\n"}
+,{"stream_name":"stdout","time":18759.338744965,"data":"префикс 0..n-1 законный:   94/300 (31%)\n"}
+,{"stream_name":"stdout","time":18759.338750282,"data":"состав:\n"}
+,{"stream_name":"stdout","time":18759.338756158,"data":"  валидно          44  (15% всех)  валидно: ровно id графа, расписание законно\n"}
+,{"stream_name":"stdout","time":18759.338778002,"data":"  хвост            50  (17% всех)  хвост: префикс 0..n-1 законный, модель не остановилась\n"}
+,{"stream_name":"stdout","time":18759.338782426,"data":"  сдвиг             2  (1% всех)  почти: верные id, операнд ещё не готов\n"}
+,{"stream_name":"stdout","time":18759.33878661,"data":"  ресурс            3  (1% всех)  почти: верные id, канал / конфликт / ширина\n"}
+,{"stream_name":"stdout","time":18759.338790866,"data":"  галлюцинация    122  (41% всех)  мимо: дыры в настоящих id\n"}
+,{"stream_name":"stdout","time":18759.3387952,"data":"  мусор            79  (26% всех)  мимо: ни одной разобранной строки расписания\n"}
+,{"stream_name":"stdout","time":18759.338799003,"data":"\n"}
+,{"stream_name":"stdout","time":18759.338802378,"data":"среди сломанных префиксов (206): почти 5 (2%), мимо 201 (98%)\n"}
+,{"stream_name":"stdout","time":18759.338806032,"data":"по составу — мимо (дыры/мусор): смотреть смену базы\n"}
+,{"stream_name":"stdout","time":18759.338810464,"data":"среди законных префиксов — средний разрыв до оптимума: 0.14 такта, точно оптимальных: 85/94\n"}
+,{"stream_name":"stderr","time":18763.773726986,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":18763.773759462,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":18764.054646915,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":18764.054673455,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":18764.730915017,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":18766.122723232,"data":"[NbConvertApp] Writing 291078 bytes to __results__.html\n"}
+]

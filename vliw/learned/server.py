@@ -311,7 +311,7 @@ class LlamaServer:
 
     def complete(self, prompt: str, n_predict: int, adapter: str | None = None,
                  timeout: float = 900.0, temperature: float = 0.0,
-                 seed: int | None = None):
+                 seed: int | None = None, grammar: str | None = None):
         """Поток кусков ответа. Только продолжение — эха промпта здесь нет.
 
         `temperature`/`seed` — сэмплинг для best-of-N (см. `bench.py`).
@@ -326,10 +326,12 @@ class LlamaServer:
         """
         with self.using(adapter) if adapter else contextlib.nullcontext():
             yield from self._complete(prompt, n_predict, timeout,
-                                      temperature=temperature, seed=seed)
+                                      temperature=temperature, seed=seed,
+                                      grammar=grammar)
 
     def _complete(self, prompt: str, n_predict: int, timeout: float,
-                  temperature: float = 0.0, seed: int | None = None):
+                  temperature: float = 0.0, seed: int | None = None,
+                  grammar: str | None = None):
         conn = self._connect(timeout)
         try:
             body: dict = {
@@ -341,6 +343,11 @@ class LlamaServer:
             }
             if seed is not None:
                 body["seed"] = int(seed)
+            if grammar:
+                # Структурная гарантия вместо надежды: сервер не даст модели
+                # выйти за грамматику, поэтому нелегальный канал и поломанный
+                # формат становятся невозможны, а не маловероятны.
+                body["grammar"] = grammar
             body = json.dumps(body)
             conn.request("POST", "/completion", body=body,
                          headers={"Content-Type": "application/json"})

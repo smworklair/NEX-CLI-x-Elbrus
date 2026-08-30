@@ -237,7 +237,8 @@ class Backend:
         return "".join(parts).split(END_MARKER)[0]
 
 
-def sampling_kwargs(temperature: float, seed: int | None) -> dict:
+def sampling_kwargs(temperature: float, seed: int | None,
+                    grammar: str | None = None) -> dict:
     """Аргументы сэмплинга для generate_events() — пустые при умолчаниях.
 
     Передавать kwargs ТОЛЬКО когда они отличаются от умолчаний. Причина не в
@@ -251,6 +252,8 @@ def sampling_kwargs(temperature: float, seed: int | None) -> dict:
         kw["temperature"] = float(temperature)
     if seed is not None:
         kw["seed"] = int(seed)
+    if grammar:
+        kw["grammar"] = grammar
     return kw
 
 
@@ -671,14 +674,15 @@ class LlamaServerBackend(Backend):
         self.base_gguf = find_gguf_base()
 
     def generate_events(self, prompt: str, max_new_tokens: int,
-                        temperature: float = 0.0, seed: int | None = None):
+                        temperature: float = 0.0, seed: int | None = None,
+                        grammar: str | None = None):
         # Адаптер передаём в complete(), а не выбираем заранее: он держит
         # режим сервера занятым на всю генерацию, чтобы разговор с базовой
         # моделью не переключил LoRA у нас под руками.
         yield from shared_server().complete(prompt, max_new_tokens,
                                             adapter=self.adapter.name,
                                             temperature=temperature,
-                                            seed=seed)
+                                            seed=seed, grammar=grammar)
 
 
 def shared_server():

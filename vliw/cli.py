@@ -1095,6 +1095,7 @@ class _LearnedArgs:
     best_of: int = 0
     temperature: float = 0.0
     seed: int = 1
+    constrained: bool = False
     bad_value: tuple[str, str] | None = None
     """Числовой флаг с нечисловым значением: (флаг, что написали)."""
     raw: bool = False
@@ -1133,6 +1134,8 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
             flag_values.add(i + 1)
         elif t.startswith("--temperature="):
             a.temperature = _as_float(t.split("=", 1)[1])
+        elif t in ("--constrained", "--grammar"):
+            a.constrained = True
         elif t == "--seed":
             a.seed = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 1
             flag_values.add(i + 1)
@@ -1248,7 +1251,13 @@ def cmd_learned(session: Session, arg: str) -> None:
     print()
     sys.stdout.flush()
 
-    sch = LearnedScheduler(adapter=adapter, repair=want_repair)
+    sch = LearnedScheduler(adapter=adapter, repair=want_repair,
+                           constrained=a.constrained)
+    if a.constrained:
+        print("  " + Style.dim(
+            "ограниченная генерация: формат и канал заданы грамматикой, "
+            "такты по-прежнему выбирает модель"))
+        print()
     renderer = learned_view.PlainRenderer()
     res = None
     failed = None
@@ -1355,7 +1364,7 @@ COMMANDS = [
     # --- агент · обучение ---------------------------------------------------
     {"group": "agent", "name": "ask", "arg": "<вопрос>", "help": "спросить агента", "fn": cmd_ask},
     {"group": "agent", "name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
-    {"group": "agent", "name": "learned", "arg": "[--bench N] [--pure] [--raw]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
+    {"group": "agent", "name": "learned", "arg": "[--constrained] [--bench N] [--pure]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
     {"group": "agent", "name": "agent", "arg": "", "help": "куда встраивается обученная модель", "fn": cmd_agent},
     # --- данные ---------------------------------------------------------------
     {"group": "data", "name": "code", "arg": "[run|show|save|load|clear]", "help": "буфер исходника e2k: редактор КОД (клавиша 4), прогон, файлы", "fn": cmd_code},

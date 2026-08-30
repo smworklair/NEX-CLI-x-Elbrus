@@ -886,3 +886,87 @@ class TestLearnedArgErrors(unittest.TestCase):
         a = self._parse("lora-eos --bench 2")
         self.assertIsNone(a.bad_value)
         self.assertEqual(a.name, "lora-eos")
+
+
+class TestScheduleGrammar(unittest.TestCase):
+    """Грамматика ответа: структурная гарантия вместо надежды.
+
+    На Kaggle то же самое сделано маскированием логитов, но локально
+    работает llama.cpp через сокет, где логитов наружу нет. GBNF даёт ту же
+    гарантию другим механизмом — сервер сам не выпускает модель за
+    грамматику.
+    """
+
+    @staticmethod
+    def _grammar(key="slotclash"):
+        from vliw.core import get_profile, get_scenario
+        from vliw.learned.grammar import schedule_grammar
+
+        return schedule_grammar(get_scenario(key), get_profile("e2k-v6-measured"))
+
+    def test_newline_is_escaped_not_raw(self):
+        """Сырой перевод строки в литерале GBNF не принимается.
+
+        Сервер отвергает ТАКУЮ грамматику целиком и отвечает ошибкой разбора,
+        а не подсказкой — то есть ломается всё, а выглядит как «модель молчит».
+        """
+        g = self._grammar()
+        self.assertIn("\\n", g)
+        for line in g.splitlines():
+            self.assertTrue(line.strip(), "пустая строка в грамматике")
+        self.assertNotIn('"\n', g, "перевод строки уехал сырым")
+
+    def test_channels_come_from_the_machine_not_from_a_common_set(self):
+        """У каждой операции свои каналы — иначе всё затевалось зря."""
+        from vliw.core import get_profile, get_scenario
+
+        model = get_profile("e2k-v6-measured")
+        dag = get_scenario("slotclash")
+        g = self._grammar()
+        for idx, ins in enumerate(dag.instrs):
+            rule = next(l for l in g.splitlines() if l.startswith(f"op{idx} ::="))
+            allowed = model.channels_for(ins.op)
+            with self.subTest(операция=ins.name, класс=ins.op):
+                for c in range(model.width):
+                    present = f'"{c}"' in rule.split("канал=")[1]
+                    self.assertEqual(present, c in allowed,
+                                     f"канал {c} у {ins.op}")
+
+    def test_store_cannot_be_put_on_an_illegal_channel(self):
+        """Ровно тот отказ, ради которого всё делалось: STORE только ,2 ,5."""
+        from vliw.core import get_scenario
+
+        dag = get_scenario("slotclash")
+        g = self._grammar()
+        idx = next(i for i, ins in enumerate(dag.instrs) if ins.op == "STORE")
+        rule = next(l for l in g.splitlines() if l.startswith(f"op{idx} ::="))
+        tail = rule.split("канал=")[1]
+        self.assertIn('"2"', tail)
+        self.assertIn('"5"', tail)
+        self.assertNotIn('"0"', tail)
+
+    def test_every_instruction_is_in_the_root(self):
+        """Скелет обязан покрывать граф целиком, иначе часть ответа свободна."""
+        from vliw.core import get_scenario
+
+        dag = get_scenario("mixed18")
+        from vliw.core import get_profile
+        from vliw.learned.grammar import schedule_grammar
+
+        g = schedule_grammar(dag, get_profile("e2k-v6-measured"))
+        root = next(l for l in g.splitlines() if l.startswith("root ::="))
+        for idx in range(len(dag.instrs)):
+            self.assertIn(f"op{idx}", root.split())
+
+    def test_grammar_is_off_by_default(self):
+        """Прежние замеры сняты свободной генерацией — менять их молча нельзя."""
+        from vliw.learned.scheduler import LearnedScheduler
+
+        self.assertFalse(LearnedScheduler().constrained)
+
+    def test_sampling_kwargs_carry_the_grammar_only_when_asked(self):
+        from vliw.learned.runtime import sampling_kwargs
+
+        self.assertEqual(sampling_kwargs(0.0, None), {})
+        self.assertEqual(sampling_kwargs(0.0, None, "root ::= \"x\""),
+                         {"grammar": 'root ::= "x"'})

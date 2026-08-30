@@ -61,7 +61,8 @@ class LearnedScheduler:
     def __init__(self, adapter=None, backend=None,
                  max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
                  device: str | None = None, repair: bool = False,
-                 temperature: float = 0.0, seed: int | None = None):
+                 temperature: float = 0.0, seed: int | None = None,
+                 constrained: bool = False):
         """`backend` можно передать готовым — это точка подмены для тестов.
 
         `repair=True` включает починку каналов (см. repair.py): такты модели
@@ -82,6 +83,17 @@ class LearnedScheduler:
         self.repair = repair
         self.temperature = temperature
         self.seed = seed
+        self.constrained = constrained
+        """Ограничить ответ грамматикой: формат и законность канала.
+
+        Замер docs/DIAG3.md: 84% законных против 15% на том же адаптере, из
+        них 74% в точном оптимуме CP-SAT. Модель при этом та же — грамматика
+        не планирует, она лишь убирает два способа провалиться, к
+        планированию отношения не имеющих.
+
+        По умолчанию ВЫКЛЮЧЕНО: все прежние замеры сняты свободной
+        генерацией, и менять их смысл молча нельзя.
+        """
 
     # --- ленивая загрузка --------------------------------------------------
 
@@ -165,9 +177,13 @@ class LearnedScheduler:
                 out.append(Placed(Placement(i, cycle, channel), live=True))
             return out
 
+        gram = None
+        if self.constrained:
+            from .grammar import schedule_grammar
+            gram = schedule_grammar(dag, model)
         gen = be.generate_events(
             prompt, self.max_new_tokens,
-            **runtime.sampling_kwargs(self.temperature, self.seed))
+            **runtime.sampling_kwargs(self.temperature, self.seed, gram))
         try:
             for chunk in gen:
                 parts.append(chunk)

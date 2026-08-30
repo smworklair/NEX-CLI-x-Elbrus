@@ -584,7 +584,12 @@ KERNELS = [
     # Квадрат 2x2 на широком эвале. Как и diag2, в `all` не входит и берёт
     # адаптер прогона 2 отдельным датасетом; адаптер прогона 1 едет в
     # основном датасете папкой lora-eos.
-    ("vliw-diag3", "diag3.py", DIAG3, "vliw diag3 wide",
+    # ВНИМАНИЕ НА ИМЯ. Kaggle делает слаг ядра из ЗАГОЛОВКА, а не из id:
+    # заголовок «vliw diag3 wide» создал ядро vliw-diag3-wide, а не
+    # vliw-diag3, и `pull` (он ходит по именам папок в build/kaggle) искал бы
+    # результат не там. У остальных ядер заголовок и id совпадают случайно —
+    # здесь совпадение сломало лишнее слово. Держим их одинаковыми явно.
+    ("vliw-diag3-wide", "diag3.py", DIAG3, "vliw diag3 wide",
      {"dataset_sources": [f"USERNAME/{DATASET_SLUG}",
                           f"USERNAME/vliw-run2-lora"]}),
 ]

@@ -52,6 +52,13 @@ PAYLOAD = [
 ADAPTER_SRC = "training/checkpoints/qwen-vliw-lora"
 ADAPTER_DST = "qwen-vliw-lora"
 
+# Адаптер прогона 1 — тот, что дал 97.7%/32.7%. Едет в датасет вторым, чтобы
+# сравнивать режимы генерации на ОБОИХ адаптерах в одном ядре: иначе адаптер
+# прогона 1 доступен только как вывод ядра vliw-run1-eos, и сравнение
+# оказывается «между ядрами», где легко перепутать причину и следствие.
+EOS_ADAPTER_SRC = "training/checkpoints/lora-eos"
+EOS_ADAPTER_DST = "lora-eos"
+
 DATASET_SLUG = "vliw-eos-run"
 
 # Файлы адаптера, нужные для инференса и продолжения обучения. Чекпоинты
@@ -492,6 +499,69 @@ for extra, dump in (([], "diag2_free.jsonl"),
                     f"{BASE}/eval.jsonl"] + extra, check=True)
 '''
 
+# Квадрат 2x2 на широком эвале: два адаптера x два режима генерации.
+#
+# Зачем после diag2. Тот показал главное — под ограниченной генерацией
+# адаптер прогона 2 даёт 20/20 валидных и все двадцать точно оптимальны
+# (docs/DIAG2.md). Но мерено на eval.jsonl, где графы 6..14 и НОЛЬ операций
+# STORE, а именно STORE — доминирующий класс ошибок на широком эвале: 85%
+# всех «ресурсов» (docs/ROADMAP.md). То есть решающий класс ошибок diag2 не
+# видел в принципе.
+#
+# Проверяемое предсказание. Ограниченная генерация выбирает канал ТОЛЬКО из
+# исполнимых, значит STORE на канале ,0 невозможен по построению — эти
+# ошибки обязаны обнулиться, а не уменьшиться. Если не обнулятся, диагноз
+# неверен, и это тоже ответ.
+#
+# Почему оба адаптера и оба режима, а не только недостающая клетка. Прежние
+# числа (32.7% и 14.7%) сняты в разное время разными запусками; сравнивать с
+# ними новое измерение — значит смешивать «эффект ограничения» с «эффектом
+# другого запуска». Квадрат считается одним ядром на одних примерах, поэтому
+# разность строк означает ровно то, что написано на строках.
+#
+# Весь eval_wide (300 примеров), а не подвыборка: квота позволяет, а на 20
+# примерах разница между 70% и 80% статистически неразличима.
+DIAG3 = '''\
+"""Ограниченная генерация против обычной на широком эвале, два адаптера."""
+import glob, os, subprocess, sys
+
+''' + FIND_DATASET + CHECK_GPU + '''
+BASE = _find_dataset("validate_kaggle.py")
+_check_gpu()
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
+                "transformers", "peft", "bitsandbytes", "accelerate"], check=True)
+
+# Адаптер прогона 2 приезжает отдельным датасетом (vliw-run2-lora) и лежит
+# рядом с train_meta.json; адаптер прогона 1 — внутри основного датасета
+# папкой lora-eos. Ищем оба по содержимому, а не по имени папки: имя после
+# распаковки zip негарантированно, содержимое — гарантировано.
+hits = glob.glob("/kaggle/input/**/train_meta.json", recursive=True)
+if not hits:
+    raise SystemExit("адаптер прогона 2 не найден (искал train_meta.json)")
+RUN2 = os.path.dirname(hits[0])
+
+eos = [d for d in glob.glob("/kaggle/input/**/lora-eos", recursive=True)
+       if os.path.isdir(d)]
+if not eos:
+    raise SystemExit("адаптер прогона 1 не найден (искал папку lora-eos)")
+RUN1 = eos[0]
+
+print("прогон 1:", RUN1, flush=True)
+print("прогон 2:", RUN2, flush=True)
+
+for tag, model in (("run1", RUN1), ("run2", RUN2)):
+    for extra, mode in ((["--constrained"], "ограниченная"), ([], "обычная")):
+        print("\\n" + "=" * 70, flush=True)
+        print(f"АДАПТЕР {tag} / {mode} генерация", flush=True)
+        print("=" * 70, flush=True)
+        subprocess.run([sys.executable, f"{BASE}/validate_kaggle.py",
+                        "--model", model,
+                        "--dump", f"/kaggle/working/diag3_{tag}_"
+                                  + ("con" if extra else "free") + ".jsonl",
+                        f"{BASE}/eval_wide.jsonl"] + extra, check=True)
+'''
+
 KERNELS = [
     ("vliw-step0-baseline", "step0.py", STEP0, "vliw step0 baseline"),
     ("vliw-run1-eos", "run1_eos.py", RUN1, "vliw run1 eos"),
@@ -511,6 +581,12 @@ KERNELS = [
     ("vliw-diag2", "diag2.py", DIAG2, "vliw diag2",
      {"dataset_sources": [f"USERNAME/{DATASET_SLUG}",
                           f"USERNAME/vliw-run2-lora"]}),
+    # Квадрат 2x2 на широком эвале. Как и diag2, в `all` не входит и берёт
+    # адаптер прогона 2 отдельным датасетом; адаптер прогона 1 едет в
+    # основном датасете папкой lora-eos.
+    ("vliw-diag3", "diag3.py", DIAG3, "vliw diag3 wide",
+     {"dataset_sources": [f"USERNAME/{DATASET_SLUG}",
+                          f"USERNAME/vliw-run2-lora"]}),
 ]
 
 
@@ -528,6 +604,11 @@ def main() -> None:
     missing = [src for src, _ in PAYLOAD if not (ROOT / src).exists()]
     missing += [f"{ADAPTER_SRC}/{name}" for name in ADAPTER_FILES
                if not (ROOT / ADAPTER_SRC / name).exists()]
+    # У lora-eos проверяем только сам адаптер: токенизатора рядом нет и быть
+    # не должно (обучение сохранило только веса поправки).
+    missing += [f"{EOS_ADAPTER_SRC}/{name}"
+                for name in ("adapter_config.json", "adapter_model.safetensors")
+                if not (ROOT / EOS_ADAPTER_SRC / name).exists()]
     if missing:
         raise SystemExit("нет файлов: " + ", ".join(missing))
 
@@ -545,12 +626,20 @@ def main() -> None:
         shutil.copy2(s, d)
         total += d.stat().st_size
 
-    adir = DATA / ADAPTER_DST
-    adir.mkdir(exist_ok=True)
-    for name in ADAPTER_FILES:
-        s, d = ROOT / ADAPTER_SRC / name, adir / name
-        shutil.copy2(s, d)
-        total += d.stat().st_size
+    for src_dir, dst_dir in ((ADAPTER_SRC, ADAPTER_DST),
+                             (EOS_ADAPTER_SRC, EOS_ADAPTER_DST)):
+        adir = DATA / dst_dir
+        adir.mkdir(exist_ok=True)
+        for name in ADAPTER_FILES:
+            src_file = ROOT / src_dir / name
+            if not src_file.exists():
+                # У lora-eos рядом нет файлов токенизатора: обучение сохранило
+                # только адаптер. Это не поломка — загрузчик берёт токенизатор
+                # у базовой модели (см. docs/LEARNED.md).
+                continue
+            d = adir / name
+            shutil.copy2(src_file, d)
+            total += d.stat().st_size
 
     # Слаг дописывается при заливке: username берётся из kaggle.json, чтобы
     # здесь не было заглушки, которую легко забыть заменить.

@@ -392,7 +392,18 @@ def main() -> None:
     import peft.tuners.lora.torchao as _torchao_mod
     _torchao_mod.is_torchao_available = lambda: False
 
-    tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    # Токенизатор берём из папки адаптера, а если его там нет — у базовой
+    # модели. Это не перестраховка: у адаптера прогона 1 (`lora-eos`) файлов
+    # токенизатора рядом НЕТ, обучение сохранило только веса поправки. Копия
+    # базового токенизатора здесь верна по определению — LoRA не меняет
+    # словарь, она меняет веса. Локальный загрузчик поступает так же, см.
+    # docs/LEARNED.md.
+    try:
+        tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    except (OSError, ValueError) as exc:
+        print(f"токенизатора нет рядом с адаптером ({exc.__class__.__name__}), "
+              f"беру у базовой модели {base_name}", flush=True)
+        tok = AutoTokenizer.from_pretrained(base_name, trust_remote_code=True)
     base = AutoModelForCausalLM.from_pretrained(
         base_name, torch_dtype=torch.float16, device_map="auto",
         trust_remote_code=True)

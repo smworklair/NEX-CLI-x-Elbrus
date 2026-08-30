@@ -139,8 +139,8 @@ case "$MODE" in
     done
     exit 0
     ;;
-  step0|run1|run2|resume|diag|all) ;;
-  *) echo "неизвестный режим: $MODE (step0 | run1 | run2 | resume | diag | all | pull | status)" >&2; exit 2 ;;
+  step0|run1|run2|resume|diag|diag3|all) ;;
+  *) echo "неизвестный режим: $MODE (step0 | run1 | run2 | resume | diag | diag3 | all | pull | status)" >&2; exit 2 ;;
 esac
 
 # --- датасет ---------------------------------------------------------------
@@ -229,7 +229,10 @@ case "$MODE" in
   resume) push_kernel "$(pick_kernel resume)" ;;
   # diag — только инференс на 20 примерах с сырым текстом ответа в дампе:
   # разводит «модель молчит» / «адаптер не тот» / «обрыв». Минуты GPU.
-  diag)  push_kernel "$(pick_kernel diag)" ;;
+  diag)  push_kernel "$(pick_kernel diag2)" ;;
+  # diag3 — квадрат 2x2 на широком эвале: два адаптера x два режима
+  # генерации, все 300 примеров. Часы, не минуты; см. docs/DIAG2.md.
+  diag3) push_kernel "$(pick_kernel diag3)" ;;
   # `all` — только дешёвые ядра; дорогой run2 и его доводка запускаются
   # явно (см. шапку).
   all)   for k in "${KERNEL_SLUGS[@]}"; do

@@ -131,3 +131,60 @@ class TestScenarios(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMeasuredClassScenarios(unittest.TestCase):
+    """Сценарии на классы, измеренные 30.08.2026.
+
+    До них модель знала плавающую точку, предикаты и упакованные операции,
+    но показать их было нечем: одиннадцать классов из девятнадцати не
+    встречались ни в одном сценарии. Увидеть их можно было только загрузив
+    настоящий `.s`.
+    """
+
+    NEW = ("twodividers", "packnarrow", "predchain")
+
+    def test_they_exist_and_are_schedulable(self):
+        from vliw.core import SCENARIOS, get_profile, get_scenario
+        from vliw.core.baseline import GreedyListScheduler
+
+        model = get_profile("e2k-v6-measured")
+        for key in self.NEW:
+            with self.subTest(сценарий=key):
+                self.assertIn(key, SCENARIOS)
+                dag = get_scenario(key)
+                res = GreedyListScheduler().schedule(dag, model)
+                self.assertEqual(res.schedule.validate(), [],
+                                 "сценарий не раскладывается законно")
+
+    def test_new_classes_are_actually_exercised(self):
+        """Смысл сценариев — покрыть классы, которых раньше не было нигде."""
+        from vliw.core import SCENARIOS, get_scenario
+
+        covered = set()
+        for key in SCENARIOS:
+            covered |= {i.op for i in get_scenario(key).instrs}
+        for op in ("FDIV", "FADD", "FMUL", "PACK", "PACKLOG", "PRED",
+                   "MERGE", "INSF", "COMBO"):
+            with self.subTest(класс=op):
+                self.assertIn(op, covered, "класс не встречается ни в одном "
+                                           "сценарии — показать его нечем")
+
+    def test_every_class_used_in_a_scenario_can_be_written(self):
+        """Класс, встречающийся в сценарии, должен иметь знак для записи.
+
+        Без него `DagBuilder.op()` падает KeyError при первой же попытке
+        собрать граф — именно так и обнаружилось при добавлении FDIV.
+        Проверяются классы, реально используемые в сценариях: LOAD и STORE
+        знака не имеют и не должны — они пишутся не как «a = b ⊕ c», а
+        отдельной формой, и в _SYMBOL их не было никогда.
+        """
+        from vliw.core import SCENARIOS, get_scenario
+        from vliw.core.dag import _SYMBOL
+
+        used = set()
+        for key in SCENARIOS:
+            used |= {i.op for i in get_scenario(key).instrs}
+        for op in sorted(used - {"LOAD", "STORE"}):
+            with self.subTest(класс=op):
+                self.assertIn(op, _SYMBOL)

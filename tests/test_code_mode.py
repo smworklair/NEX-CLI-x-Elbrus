@@ -221,14 +221,15 @@ class TestRealCompilerOutput(unittest.TestCase):
         """
         from vliw.core.asm_parser import parse_asm
 
-        # `fdivd` здесь стояло раньше и перестало годиться: класс FDIV
-        # измерен и добавлен. Берём мнемонику, которой в словаре нет и не
-        # планируется — устройство доступа к массивам.
-        parsed = parse_asm("{\n  aaurwd,5\t%dr9, %aaind1\n}\n")
+        # Мнемоника ВЫМЫШЛЕННАЯ намеренно. Здесь дважды стояли настоящие
+        # (`fdivd`, потом `aaurwd`), и дважды тест ломался — не потому что
+        # сломалось поведение, а потому что словарь дорос до них. Проверяем
+        # обработку неизвестного, а не то, чего в словаре пока нет.
+        parsed = parse_asm("{\n  zzqwrt,1\t%r1, %r2, %r3\n}\n")
         self.assertEqual(len(parsed.ops), 1)
         self.assertEqual(parsed.ops[0].op, "UNKNOWN")
         self.assertFalse(parsed.ops[0].known)
-        self.assertEqual(parsed.unknown_mnemonics, {"aaurwd": 1})
+        self.assertEqual(parsed.unknown_mnemonics, {"zzqwrt": 1})
 
     def test_unknown_without_channel_is_not_an_alc_operation(self):
         """Незнакомое БЕЗ канала в граф вычислений не идёт.

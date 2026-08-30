@@ -289,8 +289,36 @@ _OPS: dict[str, OpClass] = {
     # (предикат не подставишь операндом сам себе), взята за 1.
     "PRED": OpClass("PRED", latency=1, latency_source=ASSUMED),
 
-    # Упакованные операции (SIMD). Латентность не мерена — допущение.
+    # Упакованные операции (SIMD), АРИФМЕТИКА: сложение, вычитание,
+    # сравнение, min/max. Всего два канала — самый узкий класс после
+    # делителя. Латентность не мерена, допущение.
     "PACK": OpClass("PACK", latency=1, latency_source=ASSUMED),
+
+    # Упакованные ЛОГИКА И СДВИГИ. Отдельный класс не из педантизма:
+    # ассемблер принимает `qpor`/`qpsllw` в четырёх каналах, а `qpaddw` —
+    # в двух. Считать их одним классом значило бы запретить планировщику
+    # половину законных мест.
+    "PACKLOG": OpClass("PACKLOG", latency=1, latency_source=ASSUMED),
+
+    # Устройство доступа к массивам (AAU) — аппаратная предподкачка цикла,
+    # фирменная черта e2k: `aaurw`/`aaurr` (обмен с регистрами устройства),
+    # `staa*` (запись через него). Живёт на ,2 и ,5 — ТЕХ ЖЕ каналах, что и
+    # обычная запись в память, и это не совпадение: устройство одно.
+    "AAU": OpClass("AAU", latency=1, latency_source=ASSUMED),
+
+    # Сращённые операции вида `shl_adds`, `getf_adds` — сдвиг и сложение за
+    # один такт. Только ,1 и ,4: их умеют не все арифметические устройства.
+    "COMBO": OpClass("COMBO", latency=1, latency_source=ASSUMED),
+
+    # Работа с битовыми полями: `insf*` вставляет поле (четыре канала),
+    # `getf*`/`merge*` читают и выбирают (все шесть). Разные каналы —
+    # разные классы.
+    "INSF": OpClass("INSF", latency=1, latency_source=ASSUMED),
+    "MERGE": OpClass("MERGE", latency=1, latency_source=ASSUMED),
+
+    # Запись в регистры состояния (`rwd`/`rws`, например %lsr — счётчик
+    # цикла). Единственный канал ,0.
+    "RW": OpClass("RW", latency=1, latency_source=ASSUMED),
     "ADD": OpClass("ADD", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "SUB": OpClass("SUB", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "AND": OpClass("AND", latency=1, latency_source=ASSUMED),
@@ -346,7 +374,13 @@ FADD_PORTS = (0, 1, 2, 3, 4, 5)     # сложение/умножение ПТ �
 FDIV_PORTS = (5,)                   # делитель ПТ — тот же единственный порт,
                                     # что у целочисленного деления
 PRED_PORTS = (0, 1, 3, 4)           # предикаты: НЕ на ,2 и ,5
-PACK_PORTS = (0, 3)                 # упакованные: только два канала
+PACK_PORTS = (0, 3)                 # упакованная арифметика: два канала
+PACKLOG_PORTS = (0, 1, 3, 4)        # упакованные логика и сдвиги — шире
+AAU_PORTS = (2, 5)                  # доступ к массивам: как у записи в память
+COMBO_PORTS = (1, 4)                # сращённые shl_adds / getf_adds
+INSF_PORTS = (0, 1, 3, 4)           # вставка битового поля
+MERGE_PORTS = (0, 1, 2, 3, 4, 5)    # выбор по предикату и чтение поля
+RW_PORTS = (0,)                     # запись в регистры состояния
 
 _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
     "UNKNOWN": _ALU_PORTS,          # заглушка: где стоит, там и считаем
@@ -355,6 +389,12 @@ _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
     "FDIV": FDIV_PORTS,
     "PRED": PRED_PORTS,
     "PACK": PACK_PORTS,
+    "PACKLOG": PACKLOG_PORTS,
+    "AAU": AAU_PORTS,
+    "COMBO": COMBO_PORTS,
+    "INSF": INSF_PORTS,
+    "MERGE": MERGE_PORTS,
+    "RW": RW_PORTS,
     "ADD": _ALU_PORTS,
     "SUB": _ALU_PORTS,
     "AND": _ALU_PORTS,
@@ -454,7 +494,8 @@ _FIRSTPROBE_OPS: dict[str, OpClass] = dict(_OPS) | {
 
 def _firstprobe_ports() -> tuple[Port, ...]:
     universal = {"UNKNOWN", "ADD", "SUB", "AND", "SHL", "LOAD", "STORE",
-                 "FADD", "FMUL", "FDIV", "PRED", "PACK"}
+                 "FADD", "FMUL", "FDIV", "PRED", "PACK", "PACKLOG", "AAU",
+                 "COMBO", "INSF", "MERGE", "RW"}
     ports = []
     for idx in range(6):
         ops = set(universal)

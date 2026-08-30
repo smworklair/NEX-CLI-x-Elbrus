@@ -82,6 +82,40 @@ MNEMONICS: dict[str, str] = {
     "qpsubw": "PACK", "qpsllw": "PACK", "qpsrlw": "PACK",
     "qpminsw": "PACK", "qpmaxsw": "PACK", "qpcmpgtw": "PACK",
     "qppackdl": "PACK", "qpswitchd": "PACK",
+
+    # Упакованная ЛОГИКА и сдвиги — шире арифметики по каналам (,0 ,1 ,3 ,4
+    # против ,0 ,3), проверено ассемблером.
+    "qpor": "PACKLOG", "qpand": "PACKLOG", "qpxor": "PACKLOG",
+    "qpsllw": "PACKLOG", "qpsrlw": "PACKLOG", "qpsraw": "PACKLOG",
+    "por": "PACKLOG", "pand": "PACKLOG", "pxor": "PACKLOG",
+    "psllw": "PACKLOG", "psrlw": "PACKLOG",
+
+    # Упакованная плавающая точка — те же каналы и та же цена, что у
+    # скалярной: отдельного класса не заводим.
+    "pfadds": "FADD", "pfaddd": "FADD", "pfsubs": "FADD",
+    "pfmuls": "FMUL", "pfmuld": "FMUL",
+
+    # Устройство доступа к массивам: обмен с его регистрами и запись через
+    # него. Каналы ,2 и ,5 — те же, что у обычной записи в память.
+    "aaurw": "AAU", "aaurwd": "AAU", "aaurr": "AAU", "aaurrd": "AAU",
+    "staaw": "AAU", "staad": "AAU", "staah": "AAU", "staab": "AAU",
+    "staaq": "AAU", "mmurw": "AAU", "mmurr": "AAU",
+
+    # Сращённые операции: сдвиг со сложением за такт. Только ,1 и ,4.
+    "shl_adds": "COMBO", "shl_addd": "COMBO",
+    "shr_adds": "COMBO", "shr_addd": "COMBO",
+    "getf_adds": "COMBO", "getf_addd": "COMBO",
+
+    # Битовые поля: вставка уже, чтение и выбор шире.
+    "insfs": "INSF", "insfd": "INSF",
+    "getfs": "MERGE", "getfd": "MERGE",
+    "merges": "MERGE", "merged": "MERGE",
+
+    # Широкая загрузка/запись — те же порты, что у обычных.
+    "ldqp": "LOAD", "ldapq": "LOAD", "stqp": "STORE", "stapq": "STORE",
+
+    # Запись в регистры состояния (счётчик цикла %lsr и подобные) — ,0.
+    "rwd": "RW", "rws": "RW",
 }
 
 # `adds,0 %r1, %r2, %r3` — мнемоника, необязательный канал, операнды.

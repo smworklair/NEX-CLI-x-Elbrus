@@ -63,17 +63,22 @@ class TestMeasuredProfile(unittest.TestCase):
             if op not in ("DIV", "FDIV"):
                 self.assertEqual(M.occupancy(op), 1, op)
 
-    def test_only_the_dividers_monopolise_a_port(self):
-        """Порт ,5 — единственный монопольный, и держат его оба делителя.
+    def test_monopolies_are_where_the_assembler_says(self):
+        """Монопольных портов ДВА, и оба установлены измерением.
 
-        Раньше здесь стояло `{5: ["DIV"]}`. Деление с плавающей точкой,
-        добавленное измерением, встало на тот же канал: ассемблер отвергает
-        `fdivd` во всех остальных («cannot be encoded in ALCn»). То есть
-        монополия не размылась, а стала плотнее — за один порт борются два
-        разных устройства.
+        История строки: сперва здесь было `{5: ["DIV"]}`. Потом измерение
+        плавающей точки поставило на тот же ,5 второй делитель — монополия
+        стала плотнее, а не размылась. Потом обнаружился ,0: запись в
+        регистры состояния (`rwd`/`rws`, например счётчик цикла %lsr)
+        ассемблер принимает ТОЛЬКО там.
+
+        Дважды правленный тест — не признак шаткости проверки, а признак
+        того, что модель растёт измерениями. Проверяем состав, а не число.
         """
-        self.assertEqual(set(M.sole_host_ops()), {5})
-        self.assertEqual(set(M.sole_host_ops()[5]), {"DIV", "FDIV"})
+        sole = M.sole_host_ops()
+        self.assertEqual(set(sole), {0, 5})
+        self.assertEqual(set(sole[5]), {"DIV", "FDIV"})
+        self.assertEqual(set(sole[0]), {"RW"})
 
     def test_multiplier_is_not_a_monopoly(self):
         """Опровергнутая версия модели не должна вернуться."""

@@ -909,19 +909,21 @@ ModeScreen.tight.drawer #p-drawer { height: 45%; }
     margin-top: 1;
 }
 
-/* Тесно по высоте — ужимаемся, а не уезжаем за край. Порядок жертв: сперва
-   знак NEX (он украшение), потом отступы, потом подпись. Карточки режимов
-   не прячем никогда: без них экран теряет смысл. */
-PickerScreen.short #picker-logo { display: none; }
-PickerScreen.short #picker-tagline { margin-bottom: 1; }
-PickerScreen.short .mode-card { height: 5; margin-bottom: 0; }
-PickerScreen.short #picker-hint { margin-top: 0; }
+/* Тесно по высоте — ужимаемся ровно настолько, насколько не хватает.
+   Порядок жертв от дешёвой к дорогой: отступы, высота карточек, знак NEX,
+   подпись. Карточки не прячем никогда: без них экран теряет смысл.
+   Знак убирается ПОСЛЕДНИМ, а не первым: он занимает восемь строк, и
+   прятать его ради двух — оставить внизу дыру, что и получалось. */
+PickerScreen.snug #picker-tagline { margin-bottom: 1; }
+PickerScreen.snug .mode-card { margin-bottom: 0; }
+PickerScreen.snug #picker-hint { margin-top: 0; }
 
-PickerScreen.very-short #picker-tagline { display: none; }
-PickerScreen.very-short .mode-card {
-    height: 3;
-    padding: 0 2;
-}
+PickerScreen.short .mode-card { height: 5; }
+
+PickerScreen.tiny #picker-logo { display: none; }
+
+PickerScreen.micro #picker-tagline { display: none; }
+PickerScreen.micro .mode-card { height: 3; padding: 0 2; }
 
 /* --- развёрнутые панели РАЗБОРА: у каждой свой слой --------------------- */
 /* Слои живут в тех же панелях и включаются только на разворот: рисование
@@ -1040,8 +1042,12 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
 #journal-mark { width: 8; height: 1; content-align: left middle; }
 
 /* Правая часть строки журнала — постоянная подсказка. Раньше здесь было
-   пусто, а подсказки жили в placeholder и пропадали при первом же символе. */
-#journal-side {
+   пусто, а подсказки жили в placeholder и пропадали при первом же символе.
+   Имя `journal-hint`, а НЕ `journal-side`: последнее уже занято левой
+   колонкой каталога (шириной 32). Совпадение id рушило раскладку молча —
+   правило `width: auto` прилетало и в колонку, вывод схлопывался до двух
+   символов, и развёрнутый журнал показывал пустой экран. */
+#journal-hint {
     width: auto;
     height: 1;
     padding: 0 1;

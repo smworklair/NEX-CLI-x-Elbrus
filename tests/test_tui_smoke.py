@@ -2125,3 +2125,63 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
                 total, fit = asyncio.run(go(h))
                 self.assertEqual(fit, total,
                                  f"на высоте {h} видно {fit} из {total} карточек")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — дерево не проверяем")
+class TestNoDuplicateIds(unittest.TestCase):
+    """Двух виджетов с одним id быть не должно.
+
+    Стоило один раз занять чужое имя (`journal-side` уже принадлежал левой
+    колонке каталога шириной 32) — и правило `width: auto`, написанное для
+    новой подсказки, прилетело в колонку. Вывод журнала схлопнулся до двух
+    символов, развёрнутая панель показывала пустой экран. Ни один тест этого
+    не заметил: за край ничего не уехало, исключений не было, всё «работало».
+
+    Проверка дешёвая и ловит целый класс таких поломок разом.
+    """
+
+    @staticmethod
+    def _dupes(mode):
+        async def go():
+            app, _session = _make_app(mode)
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    seen: dict[str, int] = {}
+                    for node in app.screen.query("*"):
+                        if node.id:
+                            seen[node.id] = seen.get(node.id, 0) + 1
+                    return {k: v for k, v in seen.items() if v > 1}
+
+        return asyncio.run(go())
+
+    def test_every_screen_has_unique_ids(self):
+        for mode in ("core", "lab", "mind", "code"):
+            with self.subTest(режим=mode):
+                self.assertEqual(self._dupes(mode), {})
+
+    def test_maximized_panels_too(self):
+        """Разворот панели поднимает в дерево то, что обычно свёрнуто."""
+        from vliw.tui.widgets import Panel
+
+        async def go():
+            app, _session = _make_app("lab")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    for pid in ("#p-console", "#p-machine", "#p-numbers"):
+                        panel = sc.query_one(pid, Panel)
+                        sc.maximize(panel, container=False)
+                        panel.post_message(Panel.Expanded(panel))
+                        await pilot.pause()
+                        seen: dict[str, int] = {}
+                        for node in sc.query("*"):
+                            if node.id:
+                                seen[node.id] = seen.get(node.id, 0) + 1
+                        dupes = {k: v for k, v in seen.items() if v > 1}
+                        assert not dupes, f"{pid}: повторы {dupes}"
+                        sc.minimize()
+                        await pilot.pause()
+
+        asyncio.run(go())

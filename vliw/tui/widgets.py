@@ -463,7 +463,7 @@ class ConsoleJournal(Horizontal):
                 # Подсказка справа, а не в placeholder: в placeholder она
                 # исчезала ровно тогда, когда человек начинал печатать.
                 yield Static("каталог слева   ·   ↑↓ история   ·   ^R повтор",
-                             id="journal-side")
+                             id="journal-hint")
 
     def on_tool_picked(self, event) -> None:
         # Вкладки потока — своё, локальное. Мостик и «вернуть» не

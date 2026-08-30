@@ -498,3 +498,38 @@ class TestLinterDoesNotBlameTheCompiler(unittest.TestCase):
                 if p.kind == "ready"]
         self.assertEqual(len(errs), 1, "нарушение между тактами пропущено")
         self.assertIn("%r5", errs[0].text)
+
+
+class TestModeFlagSkipsThePicker(unittest.TestCase):
+    """`--mode` обязан пропускать экран выбора в ОБОИХ интерфейсах.
+
+    Полноэкранный так и делал (`pick_app = args.mode is None`), а построчный
+    применял режим и тут же затирал его вопросом «наберите 1, 2 или 3»: флаг,
+    обещающий в справке «пропустить экран выбора», в `--plain` не работал.
+    Классическое расхождение двух интерфейсов — то же, что и с линтером.
+    """
+
+    @staticmethod
+    def _run(argv, feed):
+        import io
+        import contextlib
+        from unittest import mock
+
+        from vliw.cli import main
+
+        out = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(feed)), \
+                contextlib.redirect_stdout(out):
+            try:
+                main(argv)
+            except SystemExit:
+                pass
+        return out.getvalue()
+
+    def test_plain_with_mode_does_not_ask(self):
+        text = self._run(["--plain", "--no-color", "--mode", "lab"], "/quit\n")
+        self.assertNotIn("наберите 1, 2 или 3", text)
+
+    def test_plain_without_mode_still_asks(self):
+        text = self._run(["--plain", "--no-color"], "q\n")
+        self.assertIn("1 / 2 / 3", text)

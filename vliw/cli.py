@@ -706,32 +706,8 @@ def _load_parsed(session: Session, parsed, label: str) -> bool:
     if label == "буфер":
         session.code_run_text = session.code_text
 
-    # Две РАЗНЫЕ причины, по которым расписания компилятора может не быть, и
-    # путать их нельзя: либо раскладку не удалось восстановить вовсе (каналы
-    # противоречат матрице портов), либо она восстановилась, но не проходит
-    # нашу же проверку. Второе на настоящем `-O3` — обычное дело и почти
-    # всегда одна ложная зависимость: компилятор конвейеризует цикл и
-    # потребляет значение из ПРЕДЫДУЩЕЙ итерации, а разбор читает файл
-    # линейно и видит «операнд ещё не готов». Раньше обе причины показывались
-    # одним текстом про каналы — человек шёл искать не туда.
-    cs = asm_parser.compiler_schedule(parsed, dag, model)
+    cs, comp_problem = asm_parser.compiler_schedule_checked(parsed, dag, model)
     comp_cycles = cs.makespan if cs else None
-    comp_problem = None
-    if cs is None:
-        comp_problem = ("расписание компилятора не восстановлено",
-                        "раскладка по каналам не сходится с моделью")
-    else:
-        errs = cs.validate()
-        if errs:
-            comp_cycles = None      # не врём: makespan такого расписания не факт
-            comp_problem = (
-                "расписание компилятора не принято проверкой",
-                (f"{errs[0]}"
-                 if len(errs) == 1 else
-                 f"{len(errs)} замечаний, первое: {errs[0]}")
-                + ". Частая причина на настоящем -O3 — конвейеризованный "
-                  "цикл: значение берётся из предыдущей итерации, а разбор "
-                  "читает файл линейно")
     base, orc, met = session.results()
 
     print(rule("загружен · " + label))
@@ -1037,8 +1013,28 @@ def _run_tool(main_fn, toks: list[str]) -> bool:
     (`python tools/probe_matrix.py`); здесь та же функция main(), просто без
     второго питона subprocess'ом — она уже принимает argv и возвращает код
     возврата вместо sys.exit().
+
+    Ошибки СВОИХ данных ловим и пересказываем. Скрипт, запущенный отдельно,
+    имеет право упасть трассировкой — это нормально для инструмента
+    разработчика. Но здесь он вызван из интерактивной команды, и «Expecting
+    value: line 1 column 1 (char 0)» вместо «файл не в формате jsonl» —
+    это утечка внутренностей наружу: человек видит ошибку парсера JSON и не
+    понимает, что подсунул не тот файл.
     """
-    return main_fn(toks) in (0, None)
+    import json
+
+    try:
+        return main_fn(toks) in (0, None)
+    except json.JSONDecodeError as exc:
+        print(paint("error", f"файл не в формате jsonl (строка {exc.lineno}): "
+                             f"здесь ждут по одному JSON-объекту на строку"))
+        return False
+    except FileNotFoundError as exc:
+        print(paint("error", f"не открыть файл: {exc.filename}"))
+        return False
+    except (KeyError, ValueError) as exc:
+        print(paint("error", f"файл разобран, но данные не те: {exc}"))
+        return False
 
 
 def cmd_verify(session: Session, arg: str) -> None:
@@ -1077,6 +1073,14 @@ def cmd_report(session: Session, arg: str) -> None:
         return False
 
 
+def _as_float(text: str) -> float:
+    """Число или 0.0 — без падения. Негодное значение ловит проверка ниже."""
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 @dataclass
 class _LearnedArgs:
     """Разобранные аргументы /learned. Чистая функция — ради тестов.
@@ -1091,6 +1095,8 @@ class _LearnedArgs:
     best_of: int = 0
     temperature: float = 0.0
     seed: int = 1
+    bad_value: tuple[str, str] | None = None
+    """Числовой флаг с нечисловым значением: (флаг, что написали)."""
     raw: bool = False
     status: bool = False
     repair: bool = True
@@ -1120,10 +1126,13 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
         elif t.startswith("--best-of="):
             a.best_of = int(t.split("=", 1)[1] or 4)
         elif t == "--temperature":
-            a.temperature = float(toks[i + 1]) if i + 1 < len(toks) else 0.0
+            # float() здесь звался напрямую и на «--temperature ой» ронял
+            # команду трассировкой ValueError. Значение проверяется ниже и
+            # сообщается по-человечески.
+            a.temperature = _as_float(toks[i + 1]) if i + 1 < len(toks) else 0.0
             flag_values.add(i + 1)
         elif t.startswith("--temperature="):
-            a.temperature = float(t.split("=", 1)[1] or 0.0)
+            a.temperature = _as_float(t.split("=", 1)[1])
         elif t == "--seed":
             a.seed = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 1
             flag_values.add(i + 1)
@@ -1132,6 +1141,22 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
     a.name = next((t for i, t in enumerate(toks)
                    if not t.startswith("--") and not t.isdigit()
                    and i not in flag_values), None)
+
+    # Нечисловое значение у числового флага НЕ проглатываем молча. Прежде
+    # «--bench 5o» тихо превращалось в «--bench 15», и человек ждал восемь
+    # минут вместо двух, не понимая, почему примеров больше, чем он просил.
+    for i, t in enumerate(toks):
+        if t in ("--bench", "--best-of", "--seed") and i + 1 < len(toks):
+            nxt = toks[i + 1]
+            if not nxt.startswith("--") and not nxt.isdigit():
+                a.bad_value = (t, nxt)
+        if t == "--temperature" and i + 1 < len(toks):
+            nxt = toks[i + 1]
+            try:
+                float(nxt)
+            except ValueError:
+                if not nxt.startswith("--"):
+                    a.bad_value = (t, nxt)
     return a
 
 
@@ -1145,6 +1170,10 @@ def cmd_learned(session: Session, arg: str) -> None:
     from .ui import learned_view
 
     a = _parse_learned(arg.split())
+    if a.bad_value:
+        flag, value = a.bad_value
+        print(paint("error", f"{flag} ждёт число, а получил {value!r}"))
+        return False
     want_raw, want_status, want_repair = a.raw, a.status, a.repair
     n_bench, best_of_n, temperature, seed = a.bench, a.best_of, a.temperature, a.seed
     name = a.name
@@ -1777,10 +1806,16 @@ def main(argv: list[str] | None = None) -> int:
                 return run_tui(session)
 
             print_logo()
-            chosen = launcher.prompt_plain()
-            if not chosen:
-                return 0
-            _apply_mode(session, chosen)
+            # `--mode` пропускает экран выбора и здесь. Полноэкранный режим так
+            # и делал (`pick_app = args.mode is None`), а построчный применял
+            # режим и тут же затирал его вопросом «наберите 1, 2 или 3» — флаг,
+            # обещающий в справке «пропустить экран выбора», в `--plain` не
+            # работал вовсе.
+            if getattr(args, "mode", None) is None:
+                chosen = launcher.prompt_plain()
+                if not chosen:
+                    return 0
+                _apply_mode(session, chosen)
             return repl(session)
 
         print_logo()

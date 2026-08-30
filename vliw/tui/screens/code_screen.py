@@ -548,6 +548,8 @@ class CodeScreen(ModeScreen):
         self.parsed = None
         self.local_dag = None
         self.comp = None              # расписание из самого исходника
+        self.comp_problem = None      # почему его нет — парой (заголовок, суть)
+        self.unknown_share = 0.0      # доля операций, неизвестных машине
         self.problems: list = []
         # Дорогое: точный поиск и диагностика — только по F5.
         self.base = None
@@ -1173,6 +1175,8 @@ class CodeScreen(ModeScreen):
         self.parsed = parsed
         self.local_dag = None
         self.comp = None
+        self.comp_problem = None
+        self.unknown_share = 0.0
         # Замечания разбора живут ОТДЕЛЬНО от наличия операций: буфер, где
         # ни одна строка не разобралась, — самый частый случай у новичка, и
         # молчать в нём хуже всего. Линтер по модели нужен только там, где
@@ -1181,8 +1185,12 @@ class CodeScreen(ModeScreen):
         if parsed is not None and parsed.ops:
             self.local_dag = asm_parser.build_dag(parsed, key="asm:буфер",
                                                   title="буфер")
-            self.comp = asm_parser.compiler_schedule(parsed, self.local_dag,
-                                                     model)
+            # Та же функция, что у построчного `/load`: раньше КОД показывал
+            # makespan любого восстановленного расписания, а `/load` отбрасывал
+            # непрошедшее validate() — один файл давал два разных вердикта.
+            self.comp, self.comp_problem = asm_parser.compiler_schedule_checked(
+                parsed, self.local_dag, model)
+            self.unknown_share = asm_parser.unknown_share(parsed)
             self.problems += asm_parser.lint(parsed, model)
         self.redraw()
         self.refresh_status()
@@ -1418,7 +1426,16 @@ class CodeScreen(ModeScreen):
             orc = self.orc.schedule.makespan
             line.append(f"   →   поиск {orc} т.", style=palette.role_hex("accent"))
             src = self.comp.makespan if self.comp is not None else None
-            if src is not None and src > orc:
+            # Резерв — только когда машина знает, из чего он складывается.
+            # При заметной доле UNKNOWN точный поиск обыгрывает компилятор не
+            # планом, а незнанием цены операций (латентность-заглушка 1), и
+            # называть разницу резервом — неправда. Тот же порог, что в
+            # построчном разборе: правило живёт в ядре, не в двух интерфейсах.
+            if src is not None and self.unknown_share >= asm_parser.UNKNOWN_SHARE_LIMIT:
+                line.append(f"   ·   сравнивать нельзя: "
+                            f"{self.unknown_share:.0%} операций машине неизвестны",
+                            style=palette.role_hex("warning"))
+            elif src is not None and src > orc:
                 gap = src - orc
                 line.append(f"   ·   резерв {gap} т. ({100 * gap / src:.0f}%)",
                             style=palette.role_hex("success"))

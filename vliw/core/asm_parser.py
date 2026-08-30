@@ -379,6 +379,45 @@ def compiler_schedule(parsed: ParsedAsm, dag: DAG, model: MachineModel) -> Sched
     return sched
 
 
+UNKNOWN_SHARE_LIMIT = 0.05
+"""С какой доли UNKNOWN сравнение с компилятором перестаёт что-либо значить."""
+
+
+def unknown_share(parsed: ParsedAsm) -> float:
+    """Доля операций, класс которых машине неизвестен."""
+    if not parsed.ops:
+        return 0.0
+    return sum(1 for o in parsed.ops if o.op == "UNKNOWN") / len(parsed.ops)
+
+
+def compiler_schedule_checked(parsed: ParsedAsm, dag: DAG, model: MachineModel):
+    """Расписание компилятора + причина, если его нельзя показывать.
+
+    Одна функция на оба интерфейса намеренно. До 0.9 построчный режим и
+    полноэкранный КОД решали это порознь и разошлись: `/load` проверял
+    расписание через `Schedule.validate()` и отбрасывал непрошедшее, а КОД
+    показывал makespan любого восстановленного; про долю UNKNOWN не думал
+    ни один. Разъехаться двум копиям тут нечему — копия одна.
+
+    Возвращает `(schedule|None, problem|None)`, где problem — пара
+    (заголовок, подробность) для показа человеку.
+    """
+    sched = compiler_schedule(parsed, dag, model)
+    if sched is None:
+        return None, ("расписание компилятора не восстановлено",
+                      "раскладка по каналам не сходится с моделью")
+    errs = sched.validate()
+    if errs:
+        detail = (errs[0] if len(errs) == 1
+                  else f"{len(errs)} замечаний, первое: {errs[0]}")
+        return None, (
+            "расписание компилятора не принято проверкой",
+            detail + ". Частая причина на настоящем -O3 — конвейеризованный "
+                     "цикл: значение берётся из предыдущей итерации, а разбор "
+                     "читает файл линейно")
+    return sched, None
+
+
 def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
     """Проверить разобранный исходник по модели машины.
 

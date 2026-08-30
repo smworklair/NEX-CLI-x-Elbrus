@@ -850,3 +850,39 @@ class TestBestOfRender(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLearnedArgErrors(unittest.TestCase):
+    """Опечатка в числовом флаге не должна проглатываться молча.
+
+    `--bench 5o` тихо превращалось в `--bench 15`: человек ждал восемь минут
+    вместо двух и не понимал, почему примеров больше, чем он просил. А
+    `--temperature ой` роняло команду трассировкой ValueError прямо из
+    разбора аргументов.
+    """
+
+    @staticmethod
+    def _parse(text: str):
+        from vliw.cli import _parse_learned
+
+        return _parse_learned(text.split())
+
+    def test_non_numeric_bench_is_reported(self):
+        a = self._parse("--bench абв")
+        self.assertEqual(a.bad_value, ("--bench", "абв"))
+
+    def test_non_numeric_temperature_does_not_raise(self):
+        a = self._parse("--temperature ой")
+        self.assertEqual(a.bad_value, ("--temperature", "ой"))
+        self.assertEqual(a.temperature, 0.0)
+
+    def test_good_values_pass_through(self):
+        a = self._parse("--bench 3 --temperature 0.7 --best-of 4 --seed 9")
+        self.assertIsNone(a.bad_value)
+        self.assertEqual((a.bench, a.temperature, a.best_of, a.seed),
+                         (3, 0.7, 4, 9))
+
+    def test_adapter_name_is_not_mistaken_for_a_flag_value(self):
+        a = self._parse("lora-eos --bench 2")
+        self.assertIsNone(a.bad_value)
+        self.assertEqual(a.name, "lora-eos")

@@ -96,6 +96,17 @@ OP_WEIGHTS = {
 _OPS = list(OP_WEIGHTS)
 _W = [OP_WEIGHTS[o] for o in _OPS]
 
+# Смесь с давлением на монопольный канал `,5`. Замер 31.08.2026: на обычных
+# весах зазор «жадный хуже оптимума» есть у 1% графов, на этих — у 6%.
+# Причина в том, что трудность создаёт не размер графа, а КОНКУРЕНЦИЯ за
+# узкий порт: DIV живёт только на `,5`, STORE — на `,2` и `,5`, LOAD — на
+# `,0 ,2 ,3 ,5`. Пока DIV встречается в 3% операций, до конкуренции дело не
+# доходит и жадная эвристика оптимальна. См. `vliw/core/hardness.py`.
+PRESSURE_WEIGHTS = {
+    "ADD": 10, "SUB": 6, "AND": 4, "SHL": 4,
+    "LOAD": 20, "STORE": 26, "MUL": 10, "DIV": 20,
+}
+
 
 # ---------------------------------------------------------------------------
 # Разбор формата + проверка настоящим валидатором проекта
@@ -173,7 +184,8 @@ def makespan(instrs: list[Instr], placements: dict[int, tuple[int, int]]) -> int
 # Генерация графа
 # ---------------------------------------------------------------------------
 
-def gen_graph(rng: random.Random, n: int, shape: str) -> list[Instr]:
+def gen_graph(rng: random.Random, n: int, shape: str,
+              weights: dict[str, int] | None = None) -> list[Instr]:
     """Случайный DAG в топологическом порядке (preds всегда < id).
 
     shape задаёт «характер» графа, чтобы датасет не был однообразным:
@@ -183,6 +195,11 @@ def gen_graph(rng: random.Random, n: int, shape: str) -> list[Instr]:
       layer  — слоями, каждый слой зависит от предыдущего (типично для циклов)
     """
     instrs: list[Instr] = []
+    # Веса параметром, а не только модульной переменной: `/hard` подмешивает
+    # свою смесь, и делать это присваиванием в чужой модуль — напрашиваться
+    # на состояние, которое переживёт вызов.
+    ops = list(weights) if weights else _OPS
+    w = [weights[o] for o in ops] if weights else _W
 
     if shape == "layer":
         layers: list[list[int]] = []
@@ -193,7 +210,7 @@ def gen_graph(rng: random.Random, n: int, shape: str) -> list[Instr]:
             i += k
         for li, layer in enumerate(layers):
             for idx in layer:
-                op = rng.choices(_OPS, weights=_W)[0]
+                op = rng.choices(ops, weights=w)[0]
                 if li == 0:
                     preds: tuple[int, ...] = ()
                 else:
@@ -211,7 +228,7 @@ def gen_graph(rng: random.Random, n: int, shape: str) -> list[Instr]:
         p_dep, max_deps = 0.65, 2
 
     for idx in range(n):
-        op = rng.choices(_OPS, weights=_W)[0]
+        op = rng.choices(ops, weights=w)[0]
         preds: tuple[int, ...] = ()
         if idx > 0 and rng.random() < p_dep:
             k = min(idx, rng.randint(1, max_deps))

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import itertools
+import json
 import random as _random
 import re
 import subprocess
@@ -589,6 +591,163 @@ def cmd_agent(session: Session, arg: str) -> None:
     _out(panel(body, title="ТОЧКА ПОДСТАНОВКИ МОДЕЛИ", color="accent2"))
 
 
+def cmd_hard(session: Session, arg: str) -> None:
+    """Есть ли на графе что выигрывать у эвристики — и где такие графы брать.
+
+    Появилась после замера `docs/CAB.md`: на обеих выборках проекта жадный
+    планировщик стоит в доказанном оптимуме почти везде (298/300 и 300/300),
+    то есть все прежние сравнения обученной модели шли на данных, где
+    выигрывать нечего. Эта команда меряет тот самый бюджет, о котором
+    говорит шапка `vliw/core/oracle.py`.
+    """
+    import shlex
+
+    from .core.hardness import harvest_one, measure
+
+    toks = shlex.split(arg or "")
+    n_survey = n_harvest = 0
+    n_jobs = 0
+    out_path = Path("hard.jsonl")
+    for i, t in enumerate(toks):
+        if t == "--survey":
+            n_survey = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 200
+        elif t.startswith("--survey="):
+            n_survey = int(t.split("=", 1)[1] or 200)
+        elif t == "--harvest":
+            n_harvest = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 50
+        elif t.startswith("--harvest="):
+            n_harvest = int(t.split("=", 1)[1] or 50)
+        elif t == "--out":
+            out_path = Path(toks[i + 1]) if i + 1 < len(toks) else out_path
+        elif t.startswith("--out="):
+            out_path = Path(t.split("=", 1)[1])
+        elif t == "--jobs":
+            n_jobs = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 0
+        elif t.startswith("--jobs="):
+            n_jobs = int(t.split("=", 1)[1] or 0)
+
+    machine = session.model()
+
+    if not n_survey and not n_harvest:
+        h = measure(session.dag_obj, machine)
+        print(rule(f"трудность · {session.scenario}"))
+        print()
+        print(f"  жадная эвристика   {h.baseline:>4} т.")
+        print(f"  оптимум            {h.optimum:>4} т."
+              + Style.dim("   (доказан)" if h.proven else "   (НЕ доказан за бюджет)"))
+        print()
+        if not h.proven:
+            print("  " + paint("warning",
+                               "оптимум не доказан — граф нельзя назвать ни трудным, "
+                               "ни лёгким"))
+        elif h.hard:
+            print("  " + paint("success",
+                               f"ЗАЗОР {h.gap} т. — есть что выигрывать, модели есть "
+                               "чем себя показать"))
+        else:
+            print("  " + paint("warning",
+                               "ЗАЗОРА НЕТ — эвристика уже оптимальна, учить на этом "
+                               "графе нечему"))
+        print()
+        print("  " + Style.dim("доля трудных среди случайных: /hard --survey 200"))
+        print("  " + Style.dim("набрать трудных в файл:       /hard --harvest 50"))
+        return None
+
+    from tools.vliw_gen import PRESSURE_WEIGHTS, SHAPES, gen_graph
+
+    def _dag(instrs):
+        from .core.dag import DAG as _DAG, Instr as _I
+        return _DAG("hard", "", "",
+                    [_I(x.id, f"n{x.id}", x.op, x.preds, f"n{x.id}") for x in instrs])
+
+    if n_survey:
+        print(rule(f"опрос трудности · {n_survey} графов на смесь"))
+        print()
+        for label, weights in (("обычные веса", None),
+                               ("давление на канал ,5", PRESSURE_WEIGHTS)):
+            rnd = _random.Random(20260831)
+            hard = shown = 0
+            for k in range(n_survey):
+                dag = _dag(gen_graph(rnd, rnd.randint(16, 24),
+                                     rnd.choice(SHAPES), weights))
+                h = measure(dag, machine, budget_s=6.0)
+                if not h.proven:
+                    continue
+                shown += 1
+                hard += 1 if h.hard else 0
+                if k % 25 == 0 and sys.stdout.isatty():
+                    print(f"  {label:22} {k + 1:>4}/{n_survey}…", end="\r")
+                    sys.stdout.flush()
+            pct = 100 * hard / max(shown, 1)
+            paint_fn = paint("success", f"{pct:5.1f}%") if pct >= 5 else Style.dim(f"{pct:5.1f}%")
+            print(f"  {label:22} трудных {hard:>4}/{shown:<4} {paint_fn}      ")
+        print()
+        print("  " + Style.dim(
+            "трудность делает не размер графа, а конкуренция за узкий порт: "
+            "DIV живёт только на ,5"))
+        return None
+
+    print(rule(f"набор трудных графов · цель {n_harvest}"))
+    print()
+    from training.encode import encode_completion, encode_prompt
+
+    # Замер 31.08.2026: доля графов с зазором растёт с размером — 0.8% при
+    # n=12, 11.7% при n=20, 18.6% при n=32. Верхняя граница не в трудности, а
+    # в оракуле: он перестаёт доказывать оптимум (5 из 120 при n=24) и
+    # дорожает до 1.65 с на граф к n=32. 16..24 — окно, где трудных уже
+    # много, а эталон ещё доказуем и дёшев.
+    N_LO, N_HI = 16, 24
+    profile = getattr(machine, "name", "e2k-v6-measured")
+    kept, seen, t0 = [], 0, time.monotonic()
+    limit = n_harvest * 400
+    tasks = ((seed, N_LO, N_HI, profile) for seed in itertools.count(20260831))
+
+    def _note(gap: int) -> None:
+        if sys.stdout.isatty():
+            print(f"  найдено {len(kept):>4}/{n_harvest}   просмотрено {seen}   "
+                  f"зазор {gap} т.      ", end="\r")
+            sys.stdout.flush()
+
+    if n_jobs > 1:
+        # Счёт независим по графам, поэтому масштабируется процессами почти
+        # линейно. chunksize>1 — потому что задача секундная, а не миллисекундная:
+        # раздавать по одной значит платить за передачу больше, чем считать.
+        import multiprocessing as mp
+
+        with mp.Pool(n_jobs) as pool:
+            for row in pool.imap_unordered(harvest_one, tasks, chunksize=4):
+                seen += 1
+                if row is not None:
+                    kept.append(row)
+                    _note(row["meta"]["gap"])
+                if len(kept) >= n_harvest or seen >= limit:
+                    pool.terminate()
+                    break
+    else:
+        for task in tasks:
+            if len(kept) >= n_harvest or seen >= limit:
+                break
+            seen += 1
+            row = harvest_one(task)
+            if row is not None:
+                kept.append(row)
+                _note(row["meta"]["gap"])
+
+    with out_path.open("w", encoding="utf-8") as f:
+        for row in kept:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    dt = time.monotonic() - t0
+    print(f"  найдено {len(kept)}/{n_harvest}, просмотрено {seen} "
+          f"({100 * len(kept) / max(seen, 1):.1f}% годных) за {dt:.0f} с      ")
+    print()
+    print("  " + paint("success", f"записано в {out_path}"))
+    if len(kept) < n_harvest:
+        print("  " + paint("warning",
+                           "цель не набрана: подними лимит просмотра или ослабь "
+                           "требование к зазору"))
+    return None
+
+
 def _group_title(cmd: dict) -> str:
     gid = cmd.get("group", "session")
     return next((t for g, t in GROUPS if g == gid), gid)
@@ -1096,6 +1255,11 @@ class _LearnedArgs:
     temperature: float = 0.0
     seed: int = 1
     constrained: bool = False
+    cab: bool = False
+    data: str = "eval_wide.jsonl"
+    """Файл эвала для --bench. Появился, когда выяснилось, что на
+    `eval_wide.jsonl` жадная эвристика оптимальна на 298 графах из 300 — то
+    есть замер шёл на данных без задачи (docs/CAB.md)."""
     bad_value: tuple[str, str] | None = None
     """Числовой флаг с нечисловым значением: (флаг, что написали)."""
     raw: bool = False
@@ -1136,6 +1300,14 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
             a.temperature = _as_float(t.split("=", 1)[1])
         elif t in ("--constrained", "--grammar"):
             a.constrained = True
+        elif t == "--cab":
+            a.cab = True
+        elif t == "--data":
+            if i + 1 < len(toks):
+                a.data = toks[i + 1]
+                flag_values.add(i + 1)
+        elif t.startswith("--data="):
+            a.data = t.split("=", 1)[1] or a.data
         elif t == "--seed":
             a.seed = int(toks[i + 1]) if i + 1 < len(toks) and toks[i + 1].isdigit() else 1
             flag_values.add(i + 1)
@@ -1199,7 +1371,7 @@ def cmd_learned(session: Session, arg: str) -> None:
 
     machine = session.model()
     if n_bench:
-        data = Path("eval_wide.jsonl")
+        data = Path(a.data)
         if not data.exists():
             print(paint("error", f"нет файла эвала {data} — замер не на чем гонять"))
             return False
@@ -1236,7 +1408,8 @@ def cmd_learned(session: Session, arg: str) -> None:
 
         try:
             res = _bench.run_bench(data, n_bench,
-                                   _LS(adapter=adapter, repair=want_repair),
+                                   _LS(adapter=adapter, repair=want_repair,
+                                       constrained=a.constrained, cab=a.cab),
                                    machine, _tick, best_of=bo)
         except (RuntimeError, OSError, ImportError) as e:
             print(paint("error", f"замер прерван: {e}"))
@@ -1252,11 +1425,16 @@ def cmd_learned(session: Session, arg: str) -> None:
     sys.stdout.flush()
 
     sch = LearnedScheduler(adapter=adapter, repair=want_repair,
-                           constrained=a.constrained)
+                           constrained=a.constrained, cab=a.cab)
     if a.constrained:
         print("  " + Style.dim(
             "ограниченная генерация: формат и канал заданы грамматикой, "
             "такты по-прежнему выбирает модель"))
+        print()
+    if a.cab:
+        print("  " + Style.dim(
+            "портфель CAB: из одного ответа строится несколько законных "
+            "расписаний, лучшее выбирает точный критерий"))
         print()
     renderer = learned_view.PlainRenderer()
     res = None
@@ -1361,10 +1539,11 @@ COMMANDS = [
     {"group": "runs", "name": "all", "arg": "", "help": "сводная таблица по всем сценариям", "fn": cmd_all},
     {"group": "runs", "name": "sweep", "arg": "[--seeds N]", "help": "массовый прогон по случайным графам", "fn": cmd_sweep},
     {"group": "runs", "name": "selfcheck", "arg": "[--seeds N]", "help": "сверить оракул независимым перебором", "fn": cmd_selfcheck},
+    {"group": "runs", "name": "hard", "arg": "[--survey N] [--harvest N] [--jobs N]", "help": "есть ли на графе что выигрывать у эвристики; где брать трудные графы", "fn": cmd_hard},
     # --- агент · обучение ---------------------------------------------------
     {"group": "agent", "name": "ask", "arg": "<вопрос>", "help": "спросить агента", "fn": cmd_ask},
     {"group": "agent", "name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
-    {"group": "agent", "name": "learned", "arg": "[--constrained] [--bench N] [--pure]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
+    {"group": "agent", "name": "learned", "arg": "[--cab] [--constrained] [--bench N] [--data ФАЙЛ] [--pure]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
     {"group": "agent", "name": "agent", "arg": "", "help": "куда встраивается обученная модель", "fn": cmd_agent},
     # --- данные ---------------------------------------------------------------
     {"group": "data", "name": "code", "arg": "[run|show|save|load|clear]", "help": "буфер исходника e2k: редактор КОД (клавиша 4), прогон, файлы", "fn": cmd_code},

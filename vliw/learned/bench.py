@@ -77,6 +77,18 @@ class BenchRow:
     с N=8 отвечает сразу на все k ≤ 8, без отдельных забегов на каждый N.
     """
 
+    cab_improved: bool = False
+    """Победитель портфеля строго короче жадного кандидата, а не вничью."""
+
+    cab_winner: str | None = None
+    """Кто выиграл портфель CAB на этом графе. None — портфель выключен.
+
+    Без этого замер отвечает «сколько тактов», но не «чья это работа»: на
+    трудном эвале жадный кандидат лежит в портфеле и не даёт результату
+    стать хуже baseline, поэтому по одному среднему нельзя понять, добавила
+    модель что-нибудь или просто не помешала.
+    """
+
     @property
     def valid_samples(self) -> int:
         return sum(1 for s in self.samples or () if s.valid)
@@ -100,6 +112,20 @@ class BenchResult:
         for r in self.rows:
             out[r.kind] = out.get(r.kind, 0) + 1
         return out
+
+    def cab_winners(self) -> dict[str, tuple[int, int]]:
+        """{кандидат: (побед, из них строго лучше жадного)}.
+
+        Второе число и есть вклад: победа вничью означает, что кандидат
+        совпал с эвристикой, а не обыграл её.
+        """
+        out: dict[str, list[int]] = {}
+        for r in self.rows:
+            if r.cab_winner:
+                slot = out.setdefault(r.cab_winner, [0, 0])
+                slot[0] += 1
+                slot[1] += 1 if r.cab_improved else 0
+        return {k: (v[0], v[1]) for k, v in out.items()}
 
     def split_store(self) -> dict[bool, tuple[int, int]]:
         """{есть ли STORE: (валидных, всего)} — главный разрез диагноза."""
@@ -147,7 +173,8 @@ def _candidate_key(res):
     двумя валидными — это и есть качество плана.
     """
     st = res.search_stats
-    return (len(st["errors"]) + len(st["missing"]), res.schedule.makespan)
+    unplaced = 0 if res.schedule.complete else len(st["missing"])
+    return (len(st["errors"]) + unplaced, res.schedule.makespan)
 
 
 def _sample_outcome(res, meta_makespan: int) -> SampleOutcome:
@@ -155,7 +182,7 @@ def _sample_outcome(res, meta_makespan: int) -> SampleOutcome:
     return SampleOutcome(
         valid=st["valid"],
         errors=len(st["errors"]),
-        missing=len(st["missing"]),
+        missing=0 if res.schedule.complete else len(st["missing"]),
         makespan=res.schedule.makespan,
         gap=res.schedule.makespan - meta_makespan if st["valid"] else None,
     )
@@ -222,6 +249,8 @@ def run_bench(dataset: Path, limit: int, scheduler, model,
                 kind, gap = "прочее", None
 
             br = BenchRow(n=len(instrs), kind=kind, has_store=has_store, gap=gap,
+                          cab_winner=st.get("cab_winner"),
+                          cab_improved=bool(st.get("cab_beat_greedy")),
                           first_error=(st["errors"][0] if st["errors"] else ""),
                           samples=([_sample_outcome(c, meta_makespan)
                                     for c in cands] if best_of is not None else None))

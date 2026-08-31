@@ -52,6 +52,36 @@ from .model import MachineModel
 from .schedule import Schedule
 
 
+@dataclass(frozen=True)
+class Hint:
+    """Подсказка точному поиску: чужое мнение о том, где искать.
+
+    Оракул от неё не становится менее точным — она не может изменить, какой
+    ответ он признает оптимальным, и ни один вывод «доказанно недостижимо»
+    от неё не зависит. Меняется только СКОРОСТЬ и то, что он успевает
+    доказать в бюджете:
+
+    * `schedule` — готовое ЗАКОННОЕ расписание как верхняя граница. Если оно
+      короче baseline, углубление кончается раньше; если оно упирается в
+      нижнюю границу, оптимальность доказана вообще без перебора.
+    * `priority` / `defer` — векторы для портфельного движка, который
+      включается, когда точный поиск не уложился в бюджет. Сейчас там
+      случайное дрожание вокруг `height` (см. `_portfolio`), и шапка этого
+      файла с самого начала предполагала, что его место — за обученной
+      моделью.
+
+    Откуда она берётся — оракул не знает и знать не должен: `vliw/learned/
+    seed.py` строит её из ответа модели, но с тем же успехом это может быть
+    расписание другого планировщика или прошлый результат.
+    """
+
+    schedule: Schedule | None = None
+    priority: tuple[float, ...] | None = None
+    defer: dict[int, int] | None = None
+    source: str = "подсказка"
+    """Чья это работа — уезжает в заметки отчёта, чтобы заслуга не терялась."""
+
+
 class _Timeout(Exception):
     pass
 
@@ -317,12 +347,26 @@ def _portfolio(
     best: Schedule,
     budget_s: float,
     seed: int = 20260811,
-) -> tuple[Schedule, int]:
+    hint: "Hint | None" = None,
+) -> tuple[Schedule, int, bool]:
+    """Перебор приоритетов. Третьим возвращается «победила ли подсказка».
+
+    Подсказка пробуется ПЕРВОЙ и в чистом виде, без дрожания: если чужой
+    вектор что-то даёт, это должно быть видно отдельной попыткой, а не
+    растворяться в двадцати тысячах случайных.
+    """
     rnd = random.Random(seed)
     blocking = [i.id for i in dag if model.occupancy(i.op) > 1]
     deadline = time.monotonic() + budget_s
     tries = 0
     hmax = max(height) if height else 1
+    hint_won = False
+    if hint is not None and hint.priority is not None:
+        tries += 1
+        cand, _ = list_schedule(dag, model, list(hint.priority),
+                                defer_until=dict(hint.defer or {}), height=height)
+        if cand.makespan < best.makespan and not cand.validate():
+            best, hint_won = cand, True
     while time.monotonic() < deadline and tries < 20000:
         tries += 1
         jitter = rnd.choice((0.0, 0.15, 0.4, 1.0)) * hmax
@@ -334,8 +378,8 @@ def _portfolio(
             dag, model, prio, defer_until=defer, height=height
         )
         if cand.makespan < best.makespan and not cand.validate():
-            best = cand
-    return best, tries
+            best, hint_won = cand, False
+    return best, tries, hint_won
 
 
 # --------------------------------------------------------------------------
@@ -346,9 +390,12 @@ class OracleScheduler:
     kind = "exact"
     short = "oracle"
 
-    def __init__(self, budget_s: float = 20.0, portfolio_s: float = 5.0):
+    def __init__(self, budget_s: float = 20.0, portfolio_s: float = 5.0,
+                 hint: Hint | None = None):
         self.budget_s = budget_s
         self.portfolio_s = portfolio_s
+        self.hint = hint
+        """Чужая подсказка (см. `Hint`). Точность результата от неё не зависит."""
 
     def schedule(self, dag: DAG, model: MachineModel) -> SchedulingResult:
         metrics = compute_metrics(dag, model)
@@ -356,6 +403,19 @@ class OracleScheduler:
         best = base.schedule
         ub = best.makespan
         lb = metrics.lower_bound
+
+        # Верхняя граница от подсказки. Берём ТОЛЬКО законное и полное
+        # расписание и только если оно строго короче baseline: неполное
+        # расписание границей быть не может, а равное ничего не меняет и
+        # лишь размывает, чья это заслуга.
+        hint = self.hint
+        hint_ub = False
+        if (hint is not None and hint.schedule is not None
+                and hint.schedule.complete and not hint.schedule.validate()
+                and hint.schedule.makespan < ub):
+            best = hint.schedule
+            ub = best.makespan
+            hint_ub = True
 
         ctx = _Ctx(
             dag=dag,
@@ -372,10 +432,13 @@ class OracleScheduler:
             f"Нижняя граница: {lb} тактов (критический путь "
             f"{metrics.critical_path_bound}, ресурсы {metrics.resource_bound}) — "
             f"связывает {metrics.binding}.",
-            f"Верхняя граница на старте — расписание baseline: {ub} тактов.",
+            (f"Верхняя граница на старте — {hint.source}: {ub} тактов "
+             f"(baseline давал {base.schedule.makespan})." if hint_ub else
+             f"Верхняя граница на старте — расписание baseline: {ub} тактов."),
         ]
         proven: bool | None = None
         timed_out = False
+        hint_won = False
         engine = "exact"
         t0 = time.monotonic()
         proved_impossible = lb  # всё, что строго меньше, доказанно недостижимо
@@ -383,8 +446,10 @@ class OracleScheduler:
         if lb >= ub:
             proven = True
             notes.append(
-                "Расписание baseline уже упирается в нижнюю границу: улучшить "
-                "его невозможно, оптимальность доказана без перебора."
+                (f"Расписание от «{hint.source}» уже упирается в нижнюю границу: "
+                 "оптимальность доказана без единого узла перебора." if hint_ub else
+                 "Расписание baseline уже упирается в нижнюю границу: улучшить "
+                 "его невозможно, оптимальность доказана без перебора.")
             )
         else:
             for target in range(lb, ub):
@@ -446,9 +511,13 @@ class OracleScheduler:
                 f"(разобрано {ctx.nodes} узлов). Переключаемся на портфельный "
                 f"перебор приоритетов."
             )
-            best, portfolio_tries = _portfolio(
-                dag, model, metrics.height, best, self.portfolio_s
+            best, portfolio_tries, hint_won = _portfolio(
+                dag, model, metrics.height, best, self.portfolio_s, hint=hint
             )
+            if hint_won:
+                notes.append(
+                    f"Лучшее в портфеле дал вектор приоритетов от «{hint.source}», "
+                    "а не случайный перебор.")
             notes.append(
                 f"Портфель: {portfolio_tries} прогонов жадного движка с разными "
                 f"приоритетами. Лучшее найденное — {best.makespan} тактов; "
@@ -468,7 +537,10 @@ class OracleScheduler:
                 "seconds": round(elapsed, 3),
                 "lower_bound": lb,
                 "proved_impossible_below": proved_impossible,
-                "baseline_upper_bound": ub,
+                "baseline_upper_bound": base.schedule.makespan,
+                "hint_source": hint.source if hint is not None else None,
+                "hint_gave_upper_bound": hint_ub,
+                "hint_won_portfolio": hint_won,
                 "result": best.makespan,
                 "timed_out": timed_out,
             },

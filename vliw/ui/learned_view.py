@@ -37,7 +37,14 @@ def render_result(res, dag, oracle_res=None, baseline_res=None) -> list[str]:
     out: list[str] = []
 
     repaired = st.get("repaired", 0)
-    if valid and repaired:
+    winner = st.get("cab_winner")
+    if valid and winner and winner not in ("модель", "модель+каналы"):
+        # Победил не ответ модели, а кандидат портфеля. Такты там ставил
+        # планировщик, и подписать это «расписанием модели» было бы враньём
+        # того же сорта, что и молчаливая починка каналов.
+        out.append("  " + paint("success", "РАСПИСАНИЕ ЗАКОННО")
+                   + Style.dim(f"  (CAB: {winner})"))
+    elif valid and repaired:
         # Подписываем честно: это уже не чистый ответ модели, а гибрид.
         out.append("  " + paint("success", "РАСПИСАНИЕ ЗАКОННО")
                    + Style.dim("  (модель + починка каналов)"))
@@ -50,8 +57,12 @@ def render_result(res, dag, oracle_res=None, baseline_res=None) -> list[str]:
     for n in res.notes:
         if n.startswith(("НЕ ", "РАСПИСАНИЕ")):
             out.append("  " + paint("warning", n))
-        elif n.startswith("ПОЧИНЕНО"):
+        elif n.startswith("ПОЧИНЕНО") or n.startswith("ПОРТФЕЛЬ"):
             out.append("  " + paint("lab", n))
+        elif n.lstrip().startswith("<-"):
+            # Строка победителя портфеля — единственная, которую человек
+            # обязан заметить в таблице кандидатов.
+            out.append("  " + paint("success", n))
         else:
             out.append("  " + Style.dim(n))
 
@@ -60,7 +71,7 @@ def render_result(res, dag, oracle_res=None, baseline_res=None) -> list[str]:
         ms = res.schedule.makespan
         orc = oracle_res.schedule.makespan
         base = baseline_res.schedule.makespan if baseline_res is not None else None
-        rows = [("модель", ms), ("точный поиск (oracle)", orc)]
+        rows = [(winner or "модель", ms), ("точный поиск (oracle)", orc)]
         if base is not None:
             rows.insert(1, ("жадная эвристика (baseline)", base))
         width = max(len(r[0]) for r in rows)
@@ -80,6 +91,9 @@ def render_result(res, dag, oracle_res=None, baseline_res=None) -> list[str]:
     out.append("")
     out.append("  " + Style.dim("сырой ответ модели: /learned --raw"
                                 "   ·   без починки: /learned --pure"))
+    if not winner:
+        out.append("  " + Style.dim(
+            "портфель законных расписаний из этого же ответа: /learned --cab"))
     return out
 
 
@@ -152,6 +166,26 @@ def render_bench(res, adapter_name: str) -> list[str]:
             out.append("  " + Style.dim(
                 f"валидных сэмплов всего: {sampled}/{n_s} "
                 f"({100 * sampled / n_s:.0f}%) — это и есть качество одного сэмпла"))
+
+    winners = res.cab_winners()
+    if winners:
+        out.append("")
+        out.append("  " + paint("title", "кто выигрывал портфель CAB"))
+        # Жадный кандидат в портфеле не даёт результату стать хуже baseline,
+        # поэтому его победы — это графы, где модель НЕ добавила ничего.
+        # Разделение важнее среднего разрыва: по одному среднему не отличить
+        # «модель помогла» от «модель не помешала».
+        total = sum(w for w, _ in winners.values())
+        gained = sum(b for _, b in winners.values())
+        for name, (k, better) in sorted(winners.items(), key=lambda kv: -kv[1][0]):
+            colour = "success" if better else "warning"
+            note = (f"из них {better} строго лучше жадного" if better
+                    else "все вничью с жадным" if name != "жадный"
+                    else "модель не добавила ничего")
+            out.append(f"    {name:<15} {paint(colour, f'{k:>3}')}"
+                       + Style.dim(f"/{total}  {note}"))
+        out.append("    " + Style.dim(
+            f"итого обыграно эвристикой графов: {gained}/{total}"))
 
     split = res.split_store()
     out.append("")

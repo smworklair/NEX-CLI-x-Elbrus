@@ -62,7 +62,7 @@ class LearnedScheduler:
                  max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
                  device: str | None = None, repair: bool = False,
                  temperature: float = 0.0, seed: int | None = None,
-                 constrained: bool = False):
+                 constrained: bool = False, cab: bool = False):
         """`backend` можно передать готовым — это точка подмены для тестов.
 
         `repair=True` включает починку каналов (см. repair.py): такты модели
@@ -76,6 +76,12 @@ class LearnedScheduler:
         жадный детерминированный ответ, которым сняты все замеры: путь до
         бэкенда остаётся прежним вызовом байт-в-байт.
         """
+        self.cab = cab
+        """Портфель CAB (см. portfolio.py): из ответа модели строится несколько
+        законных расписаний, лучшее выбирает точный критерий. ВЫКЛЮЧЕН по
+        умолчанию — он меняет смысл поля `schedule` в результате (там уже не
+        ответ модели, а победитель портфеля), а все прежние замеры сняты без
+        него."""
         self._adapter = adapter
         self._backend = backend
         self._device = device
@@ -276,6 +282,29 @@ class LearnedScheduler:
             else:
                 report = None
 
+        # CAB: портфель кандидатов на ТОМ ЖЕ ответе — без единой лишней
+        # генерации, потому что порядок и такты уже сгенерированы. Подробности
+        # и оговорки про честность — в portfolio.py.
+        cab_rows: list = []
+        cab_best = None
+        if self.cab:
+            from .portfolio import Variant, choose, variants
+
+            mine = Variant(
+                "модель+каналы" if (report is not None and report.touched)
+                else "модель",
+                "починка каналов поверх ответа модели"
+                if (report is not None and report.touched)
+                else "сырой ответ модели",
+                sched, tuple(errs))
+            cab_rows = variants(dag, model, keep, extra=(mine,))
+            cab_best = choose(cab_rows)
+            # Победитель становится результатом. Ответ самой модели идёт в
+            # портфеле первым и выигрывает при равенстве тактов, поэтому
+            # подмена происходит только там, где она реально короче.
+            sched = cab_best.schedule
+            errs = list(cab_best.errors)
+
         notes = [
             f"модель: {getattr(self.backend(), 'name', '?')}"
             + (f" · адаптер {self._adapter.name}" if self._adapter else ""),
@@ -296,12 +325,20 @@ class LearnedScheduler:
                 notes.append(f"  {dag[i].op} #{i}: канал {was} -> {now}")
             if len(report.moved) > 6:
                 notes.append(f"  … ещё {len(report.moved) - 6}")
+        if cab_rows:
+            notes.append(f"ПОРТФЕЛЬ CAB, кандидатов {len(cab_rows)}:")
+            for c in cab_rows:
+                mark = "<-" if c is cab_best else "  "
+                span = str(c.makespan) if c.schedule.complete else "-"
+                notes.append(
+                    f"  {mark} {c.name:14} {'законно' if c.legal else 'НЕЗАКОННО':9} "
+                    f"тактов {span:>3}   {c.how}")
         if errs:
             notes.append(f"РАСПИСАНИЕ НЕЗАКОННО, нарушений {len(errs)}:")
             notes.extend("  " + e for e in errs[:8])
             if len(errs) > 8:
                 notes.append(f"  … ещё {len(errs) - 8}")
-        elif not missing:
+        elif sched.complete:
             notes.append(f"расписание законно, makespan {sched.makespan}")
 
         return SchedulingResult(
@@ -315,9 +352,31 @@ class LearnedScheduler:
                 "extra": extra,
                 "missing": missing,
                 "errors": errs,
-                "valid": not errs and not missing,
+                # По ИТОГОВОМУ расписанию, а не по сырому ответу: с портфелем
+                # инструкция, которую модель не выдала, всё равно размещена, и
+                # считать такой результат невалидным — занижать замер. Без
+                # портфеля `sched.complete` — это ровно `not missing`, то есть
+                # прежние числа не меняются.
+                "valid": not errs and sched.complete,
+                "complete": sched.complete,
                 "repaired": report.touched if report is not None else 0,
                 "repair_moves": report.moved if report is not None else [],
                 "errors_before_repair": raw_errs,
+                "cab": [
+                    {"name": c.name, "legal": c.legal, "how": c.how,
+                     "makespan": c.makespan if c.schedule.complete else None,
+                     "won": c is cab_best}
+                    for c in cab_rows
+                ],
+                "cab_winner": cab_best.name if cab_best is not None else None,
+                # Победа вничью — не улучшение. «Модель» стоит в портфеле
+                # первой и забирает равенство себе (так и задумано: не
+                # приписывать алгоритму чужую заслугу), но в отчёте это
+                # обязано отличаться от настоящего выигрыша у эвристики.
+                "cab_beat_greedy": bool(
+                    cab_best is not None
+                    and any(c.name == "жадный" and c.legal
+                            and cab_best.makespan < c.makespan
+                            for c in cab_rows)),
             },
         )

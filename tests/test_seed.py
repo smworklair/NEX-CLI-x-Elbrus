@@ -83,9 +83,16 @@ class TestHintIsCredited(unittest.TestCase):
             hint=hint_from_answer(dag, machine, answer, source="модель")
         ).schedule(dag, machine)
 
+        # Не зашитое число: baseline пересчитывается тем же движком, чтобы
+        # тест не ломался на каждую честную правку латентности в model.py —
+        # он проверяет СВОЙСТВО (метрика показывает baseline, не подсказку),
+        # а не конкретный makespan конкретного профиля.
+        from vliw.core.baseline import GreedyListScheduler
+        greedy_ms = GreedyListScheduler().schedule(dag, machine).schedule.makespan
+
         self.assertTrue(res.search_stats["hint_gave_upper_bound"])
         self.assertEqual(res.search_stats["hint_source"], "модель")
-        self.assertEqual(res.search_stats["baseline_upper_bound"], 23,
+        self.assertEqual(res.search_stats["baseline_upper_bound"], greedy_ms,
                          "baseline в метриках обязан остаться baseline'ом")
         self.assertEqual(res.search_stats["nodes"], 0,
                          "подсказка на нижней границе — доказательство без перебора")

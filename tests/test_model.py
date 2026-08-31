@@ -52,8 +52,12 @@ class TestMeasuredProfile(unittest.TestCase):
         self.assertEqual(M.latency("MUL"), 4)
         self.assertEqual(M.latency("DIV"), 11)
         self.assertEqual(M.latency("LOAD"), 5)
-        for op in ("ADD", "SUB", "AND", "SHL", "STORE"):
+        for op in ("ADD", "SUB", "AND", "SHL"):
             self.assertEqual(M.latency(op), 1, op)
+        # STORE — отдельно: измерена 31.08.2026 цепочкой store→load через
+        # одну volatile-ячейку (examples/probes/store_latency.c), а не
+        # регистровым потребителем, как остальные. Была допущением-единицей.
+        self.assertEqual(M.latency("STORE"), 2)
         # Делители — единственные устройства, которые держат порт дольше такта.
         # С 30.08.2026 их два: целочисленный и с плавающей точкой, и оба
         # сидят на одном и том же ,5 — измерено потоком независимых делений.

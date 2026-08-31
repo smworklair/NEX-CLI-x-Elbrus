@@ -220,7 +220,9 @@ class TestTieIsNotAWin(unittest.TestCase):
                          "совпадение с эвристикой записано как выигрыш у неё")
 
     def test_strictly_shorter_counts_as_a_win(self):
-        """`slotclash`: жадный даёт 23, оптимум 22 — есть что обыгрывать."""
+        """`slotclash`: у жадного и оптимума есть зазор — числа не зашиты,
+        оба берутся у движков заново, чтобы правка латентности в model.py
+        (как 31.08.2026 у STORE) не превращала тест в устаревшую цифру."""
         from vliw.core.oracle import OracleScheduler
 
         dag, machine = _fixture()

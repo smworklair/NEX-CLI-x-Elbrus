@@ -748,6 +748,48 @@ def cmd_hard(session: Session, arg: str) -> None:
     return None
 
 
+def cmd_isa(session: Session, arg: str) -> None:
+    """Справочник системы команд: во что обходятся операции.
+
+    МЦСТ систему команд не публикует, поэтому таблиц латентностей и портов
+    для e2k публично не существует. Здесь они собираются генератором из
+    `vliw/core/model.py` — из того самого, по чему инструмент считает, — и у
+    каждого числа напечатан источник. См. `vliw/core/isa.py`.
+    """
+    import shlex
+
+    from .core.isa import collect
+    from .ui import isa_view
+
+    toks = shlex.split(arg or "")
+    out_path = None
+    for i, t in enumerate(toks):
+        if t == "--out" and i + 1 < len(toks):
+            out_path = Path(toks[i + 1])
+        elif t.startswith("--out="):
+            out_path = Path(t.split("=", 1)[1])
+
+    machine = session.model()
+    rows = collect(machine)
+
+    if out_path is None:
+        print(rule("система команд"))
+        _out(isa_view.render_terminal(rows))
+        return None
+
+    from . import VERSION_LABEL
+
+    text = isa_view.render_markdown(rows, machine, VERSION_LABEL)
+    out_path.write_text(text, encoding="utf-8")
+    print(rule("система команд"))
+    print()
+    print("  " + paint("success", f"записано в {out_path}")
+          + Style.dim(f"   {len(text.splitlines())} строк, "
+                      f"{len(rows)} классов, "
+                      f"{sum(len(r.mnemonics) for r in rows)} мнемоник"))
+    return None
+
+
 def _group_title(cmd: dict) -> str:
     gid = cmd.get("group", "session")
     return next((t for g, t in GROUPS if g == gid), gid)
@@ -1532,6 +1574,7 @@ COMMANDS = [
     # --- модель машины ------------------------------------------------------
     {"group": "machine", "name": "model", "arg": "[профиль]", "help": "матрица возможностей портов; смена профиля", "fn": cmd_model},
     {"group": "machine", "name": "probe", "arg": "", "help": "как probe.c измерил модель машины e2k", "fn": cmd_probe},
+    {"group": "machine", "name": "isa", "arg": "[--out ФАЙЛ]", "help": "справочник системы команд: каналы, латентности, темп приёма и чем измерено", "fn": cmd_isa},
     {"group": "machine", "name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
     # --- прогоны ------------------------------------------------------------
     {"group": "runs", "name": "scenarios", "arg": "", "help": "список доступных сценариев", "fn": cmd_scenarios},

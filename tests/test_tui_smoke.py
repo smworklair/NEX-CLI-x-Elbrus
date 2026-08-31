@@ -1580,22 +1580,23 @@ class TestJournalIsSessionBridge(unittest.TestCase):
         self.assertEqual(note, "")
 
     def test_core_consumes_pending_note_on_mount(self) -> None:
-        """Приехавшая в ЯДРО пометка показывается строкой, а не теряется."""
+        """Приехавшая в ЯДРО пометка показывается строкой листа, не теряется."""
         async def go():
             app, session = _make_app("work")
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    con = sc.query_one("#console")
-                    before = len(con.lines)
+                    sheet = sc.query_one("#tape-sheet")
+                    before = len(list(sheet.children))
                     session.pending_note = "из журнала: прогон тест"
                     sc._take_pending_note()
                     await pilot.pause()
-                    return len(con.lines) > before, session.pending_note
+                    return (len(list(sheet.children)) > before,
+                            session.pending_note)
 
         shown, rest = asyncio.run(go())
-        self.assertTrue(shown, "пометка мостика не дошла до ленты ядра")
+        self.assertTrue(shown, "пометка мостика не дошла до листа ЯДРА")
         self.assertEqual(rest, "", "пометка должна гаснуть после показа")
 
     def test_scheduler_text_goes_to_events_not_console(self) -> None:
@@ -1779,14 +1780,16 @@ class TestCoreHasTheJournalToo(unittest.TestCase):
         self.assertTrue(visible, "журнал не открылся в ЛЕНТЕ")
 
     def test_journal_from_core_bridges_back_to_lab(self) -> None:
-        """Из журнала ЯДРА прогон уезжает в РАЗБОР — полный круг."""
+        """Из журнала ЯДРО прогон уезжает в РАЗБОР — полный круг."""
         async def go():
             app, session = _make_app("work")
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    sc.handle_line("2+2")
+                    # Строка, меняющая состояние: чистая арифметика коммитом
+                    # не бывает (журнал — история состояний, не нажатий).
+                    sc.handle_line("x=load 0")
                     await pilot.pause()
                     sc.panel_tool("tape-journal")
                     await pilot.pause()
@@ -1797,6 +1800,187 @@ class TestCoreHasTheJournalToo(unittest.TestCase):
                     return app.screen.__class__.__name__
 
         self.assertEqual(asyncio.run(go()), "LabScreen")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCoreSheetAndCommits(unittest.TestCase):
+    """Лист ЛЕНТЫ, фильтр коммитов и полный чекаут машины.
+
+    Лист — главный вид ЛЕНТЫ: каждая строка человека с её итогом. В
+    git-журнал попадают только строки, изменившие машину, — у записи
+    лежит снимок машины, и «вернуть» восстанавливает её целиком.
+    """
+
+    def _screen(self, body):
+        async def go():
+            app, session = _make_app("work")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_errors_and_view_verbs_are_not_commits(self) -> None:
+        """Ошибки и служебные виды — не коммиты: журнал не лог нажатий."""
+        async def body(sc, pilot, session):
+            before = len(session.journal_runs)
+            sc.handle_line("names")
+            sc.handle_line("mul m0 a0 b0")   # ошибка: мнемоника e2k
+            await pilot.pause()
+            return (before, len(session.journal_runs),
+                    [r["kind"] for r in sc._rows])
+
+        before, after, kinds = self._screen(body)
+        self.assertEqual(after, before,
+                         "ошибки и views не должны попадать в git-журнал")
+        self.assertIn("error", kinds, "ошибка обязана быть видна в листе")
+
+    def test_arithmetic_that_adds_an_op_is_a_commit(self) -> None:
+        """`2+2` кладёт в граф операцию — значит, это честный коммит."""
+        async def body(sc, pilot, session):
+            before = len(session.journal_runs)
+            sc.handle_line("2+2")
+            await pilot.pause()
+            rec = session.journal_runs[-1]
+            return (len(session.journal_runs) - before, rec["cmd"],
+                    rec["dag"] is not None)
+
+        added, cmd, has_dag = self._screen(body)
+        self.assertEqual(added, 1, "строка с операцией обязана стать коммитом")
+        self.assertEqual(cmd, "2+2")
+        self.assertTrue(has_dag)
+
+    def test_state_line_is_a_commit_with_graph_and_machine(self) -> None:
+        """Строка, изменившая машину, — коммит с графом и снимком машины."""
+        async def body(sc, pilot, session):
+            sc.handle_line("a=10")
+            sc.handle_line("x=load 0")
+            await pilot.pause()
+            rec = session.journal_runs[-1]
+            return (rec["cmd"], rec["mode"], rec["scenario"],
+                    rec["dag"] is not None,
+                    sorted(rec["ws"]["regs"].items()),
+                    rec["ws"]["mem"][:3])
+
+        cmd, mode, scenario, has_dag, regs, mem = self._screen(body)
+        self.assertEqual(cmd, "x=load 0")
+        self.assertEqual(mode, "work")
+        self.assertEqual(scenario, "interp")
+        self.assertTrue(has_dag, "у коммита нет графа — мостик в РАЗБОР мёртв")
+        self.assertIn(("a", 10), regs, "в снимке машины потерялись имена")
+        self.assertEqual(mem, [1, 2, 3], "в снимке потерялась память")
+
+    def test_reset_is_a_commit_and_names_only_line_is_not(self) -> None:
+        """`reset` меняет машину — коммит; `names` ничего не меняет — нет."""
+        async def body(sc, pilot, session):
+            sc.handle_line("a=10")
+            n1 = len(session.journal_runs)
+            sc.handle_line("names")
+            n2 = len(session.journal_runs)
+            sc.handle_line("reset")
+            await pilot.pause()
+            rec = session.journal_runs[-1]
+            return (n2 - n1, rec["cmd"], session.workspace().regs,
+                    rec["ws"]["regs"])
+
+        names_commits, cmd, regs, snap_regs = self._screen(body)
+        self.assertEqual(names_commits, 0, "names — не коммит")
+        self.assertEqual(cmd, "reset")
+        self.assertEqual(regs, {}, "reset не очистил имена")
+        self.assertEqual(snap_regs, {}, "в снимке reset остались имена")
+
+    def test_restore_checks_out_the_whole_machine(self) -> None:
+        """«Вернуть» восстанавливает имена И память, а не только граф."""
+        async def body(sc, pilot, session):
+            sc.handle_line("a=10; b=2")
+            sc.handle_line("store 9 3")      # mem[3] = 9
+            sc.handle_line("a=55")            # испортили имя
+            journal = sc.query_one("#journal")
+            journal.pos = 1                   # коммит «store 9 3»
+            sc.panel_tool("@restore")
+            await pilot.pause()
+            ws = session.workspace()
+            return (ws.regs.get("a"), ws.regs.get("b"), ws.mem[3])
+
+        a, b, mem3 = self._screen(body)
+        self.assertEqual((a, b, mem3), (10, 2, 9),
+                         "«вернуть» не чекаутнуло машину целиком")
+
+    def test_go_attaches_verdict_to_its_commit(self) -> None:
+        """Вердикт `go` ложится в запись журнала числами (baseline/oracle)."""
+        async def body(sc, pilot, session):
+            sc.handle_line("x=load 0")
+            rec = session.journal_runs[-1]
+            base = type("R", (), {"schedule": type("S", (), {"makespan": 23})()})()
+            orc = type("R", (), {"schedule": type("S", (), {"makespan": 22})()})()
+            met = type("M", (), {"lower_bound": 22})()
+            sc._verdict(base, orc, met)
+            await pilot.pause()
+            verdict_rows = [r for r in sc._rows if r["kind"] == "verdict"]
+            return (rec.get("verdict"), len(verdict_rows),
+                    any("baseline 23" in t.plain and "оракул 22" in t.plain
+                        for t in rec["lines"]))
+
+        verdict, n_rows, in_lines = self._screen(body)
+        self.assertEqual(verdict, (23, 22), "числа вердикта не доехали до коммита")
+        self.assertEqual(n_rows, 1, "вердикт обязан быть строкой листа")
+        self.assertTrue(in_lines, "журнал обязан показать вердикт в выводе записи")
+
+    def test_verdict_number_visible_in_journal_row(self) -> None:
+        async def body(sc, pilot, session):
+            session.journal_runs.append(
+                {"cmd": "go", "lines": [], "error": False,
+                 "mode": "work", "time": "14:02",
+                 "scenario": "interp", "dag": [1], "verdict": (23, 22)})
+            journal = sc.query_one("#journal")
+            journal.load(session.journal_runs, "work", [])
+            await pilot.pause()
+            return "23→22" in journal._row(0, session.journal_runs[0]).plain
+
+        self.assertTrue(self._screen(body),
+                        "в строке журнала не видно итог прогона")
+
+    def test_link_program_op_highlights_tape_row(self) -> None:
+        """Клик по операции подсвечивает строку, которая её породила."""
+        from vliw.tui.screens.core_screen import ProgramItem, TapeRow
+
+        async def body(sc, pilot, session):
+            sc.handle_line("x=load 0")
+            sc.handle_line("y=x*2")
+            await pilot.pause()
+            items = list(sc.query(ProgramItem))
+            mul = next(i for i in items if "y" in str(i.content))
+            mul.post_message(ProgramItem.Picked(mul.node))
+            await pilot.pause()
+            rows = {r.index: r for r in sc.query(TapeRow)}
+            on = [i for i, r in rows.items() if r.has_class("on")]
+            hot = sum(1 for i in items if i.has_class("hot"))
+            return (sc._link, on, hot)
+
+        link, on, hot = self._screen(body)
+        self.assertIsNotNone(link, "связка не включилась")
+        self.assertEqual(link[0], "op")
+        self.assertEqual(on, [1], "подсвечена не та строка листа")
+        self.assertEqual(hot, 1, "подсветиться должна ровно одна операция")
+
+    def test_link_tape_row_highlights_its_ops(self) -> None:
+        from vliw.tui.screens.core_screen import ProgramItem, TapeRow
+
+        async def body(sc, pilot, session):
+            sc.handle_line("x=load 0")
+            sc.handle_line("y=x*2")
+            await pilot.pause()
+            sc._set_link(("row", 1))
+            await pilot.pause()
+            items = list(sc.query(ProgramItem))
+            return (sum(1 for i in items if i.has_class("hot")),
+                    list(sc.query(TapeRow))[-1].has_class("on"))
+
+        hot, on = self._screen(body)
+        self.assertEqual(hot, 1, "строка y=x*2 положила в граф одну операцию")
+        self.assertTrue(on, "выбранная строка листа не подсвечена")
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")

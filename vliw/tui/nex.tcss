@@ -69,16 +69,18 @@ TopBar {
 }
 
 /* --- док ввода --------------------------------------------------------- */
-/* Поле ввода — три строки: строка текста с полем сверху и снизу. Рамка
-    съедала место у главного блока экрана, а «сюда можно печатать» показывают
-    и фон, и подсветка строки при фокусе; высота делает док заметным якорем
-    экрана — его видно краем глаза, даже когда читаешь панели. */
+/* Строка ввода — терминальное приглашение, а не блок-карточка. ОДИН ряд
+    текста на фоне полотна, отделённый от вывода волоском сверху. Ни серой
+    подложки на всю ширину, ни пустых полос над и под строкой: четыре
+    прошлые версии строили строку как «якорь экрана» и получали брусок,
+    который спорил с рамками панелей над ним. Приглашение терминала ничем
+    не обрамлено — оно приглашение, а не панель. */
 
 #dock {
     dock: bottom;
     height: auto;
     width: 100%;
-    background: $nex-shadow;
+    background: $nex-canvas;
 }
 
 PromptBar {
@@ -86,32 +88,29 @@ PromptBar {
     width: 100%;
 }
 
-/* Строка ввода в нижнем доке. Боковые отступы убраны: плашка шириной во
-   весь экран читается как край окна, а не как всплывшая карточка. Отделяет
-   её от вывода волосок сверху — той же толщины, что и всюду в раскладке. */
+/* 2 ряда: строка текста и волосок сверху. Фокус показывает сама строка:
+    волосок густеет в цвет режима, текст в поле чуть светлеет. Подложки нет
+    вовсе — полоса цвета $nex-raised под вводом читалась отдельным
+    виджетом, «налепленным» на экран. */
 #prompt-field {
-    /* 4 = волосок сверху + отступ + строка + отступ. При height: 3 волосок
-       съедал ряд у содержимого, и в АГЕНТЕ строка ввода пропадала целиком:
-       оставались линия и две пустые полосы. */
-    height: 4;
+    height: 2;
     width: 100%;
     margin: 0;
-    padding: 1 1;
-    background: $nex-raised;
+    padding: 0 1;
+    background: transparent;
     border-top: solid $nex-line 30%;
 }
 
 #prompt-field:focus-within {
-    background: $primary 12%;
-    border-top: solid $primary 40%;
+    background: transparent;
+    border-top: solid $primary 55%;
 }
 
-/* Дети — по одной строке: центрирует их сам паддинг поля, и текст с
-    курсором встают ровно на средний ряд. Марка шире обычного: бейдж
-    «nex» на плашке плюс шеврон. */
+/* Дети — по одной строке. Марка — шеврон «❯» в одну клетку с пробелом:
+    плашка «nex» на общем поле была лишней табличкой. */
 
 #prompt-mark {
-    width: 8;
+    width: 2;
     height: 1;
     content-align: left middle;
 }
@@ -123,7 +122,6 @@ PromptBar {
     padding: 0;
     background: transparent;
     color: $nex-title;
-    text-style: bold;
 }
 
 #prompt-input > .input--placeholder {
@@ -319,6 +317,34 @@ Console {
 #p-mem   { height: 7; }
 #p-prog  { height: 2fr; min-height: 8; }
 
+/* Лист ЛЕНТЫ — главный вид: история строк человека с итогом каждой.
+    Строки кликабельны (связка с ПРОГРАММОЙ), отчёт slash-команды живёт
+    в консоли ПОД листом и показывается, пока отчёт свежий. */
+#tape-sheet {
+    height: 1fr;
+    width: 100%;
+    scrollbar-size-vertical: 1;
+}
+
+.tape-row {
+    height: auto;
+    width: 100%;
+    padding: 0 1;
+}
+
+.tape-row:hover { background: $nex-raised; }
+.tape-row.on { background: $primary 18%; }
+
+.tape-report { padding: 0 1 0 3; }
+
+.tape-empty { height: auto; width: 100%; padding: 0 1; }
+
+#p-tape #console {
+    height: 8;
+    scrollbar-size-vertical: 1;
+    border-top: solid $nex-line 30%;
+}
+
 .chip {
     height: 1;
     width: auto;
@@ -415,8 +441,11 @@ Panel.-maximized #grid-side { display: block; }
    фокусом. Теперь поле лежит на той же поверхности и отделено сверху
    волоском; фокус меняет ТОН волоска и подложку на едва заметную, а не
    обводит вторую рамку. */
+/* В панели GIT та же терминальная строка, что в доке: один ряд, волосок
+    сверху, фокус — густеющий волосок. Раньше здесь стоял отдельный
+    «плоский чип» — панель читалась как интерфейс из разных кусков. */
 #p-console #prompt-field {
-    height: 3;
+    height: 2;
     margin: 0;
     padding: 0 1;
     background: transparent;
@@ -425,9 +454,9 @@ Panel.-maximized #grid-side { display: block; }
 }
 
 #p-console #prompt-field:focus-within {
-    background: $primary 8%;
+    background: transparent;
     border: none;
-    border-top: solid $primary 45%;
+    border-top: solid $primary 55%;
 }
 
 #p-console #prompt-side { padding: 0 1; }
@@ -1039,24 +1068,27 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     scrollbar-size-vertical: 1;
 }
 
-/* Строка ввода терминала — тот же чип, что и командная строка панели:
-    бейдж со шевроном, круглая рамка в цвет панели, в фокусе —
-    приглушённый акцентный контур и подсветка. */
+/* Строка ввода журнала — то же терминальное приглашение, что в доке:
+    один ряд, волосок сверху, без подложки и без рамки. Вторая версия этой
+    строки была «чипом с круглой рамкой» — единственным обведённым полем
+    во всём интерфейсе, и журнал выглядел формой внутри панели. */
 #journal-field {
-    height: 3;
-    width: auto;
-    margin: 0 1 0 2;
+    height: 2;
+    width: 100%;
+    margin: 0;
     padding: 0 1;
-    background: $nex-raised;
-    border: round $nex-panel;
+    background: transparent;
+    border: none;
+    border-top: solid $nex-line 30%;
 }
 
 #journal-field:focus-within {
-    background: $primary 12%;
-    border: round $primary 45%;
+    background: transparent;
+    border: none;
+    border-top: solid $primary 55%;
 }
 
-#journal-mark { width: 8; height: 1; content-align: left middle; }
+#journal-mark { width: 2; height: 1; content-align: left middle; }
 
 /* Правая часть строки журнала — постоянная подсказка. Раньше здесь было
    пусто, а подсказки жили в placeholder и пропадали при первом же символе.
@@ -1079,7 +1111,6 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     padding: 0;
     background: transparent;
     color: $nex-title;
-    text-style: bold;
 }
 
 /* Подсказка — приглашение к набору, а не пролистываемый вывод. */
@@ -1132,6 +1163,24 @@ BridgeRow {
 .mem-cell { height: 1; width: 9; }
 .mem-cell.wrote { background: $nex-raised; }
 .mem-cell:hover { background: $nex-raised; }
+
+/* Свёрнутая ПАМЯТЬ — та же карта, что в развороте, только компактнее:
+    те же клики и маркеры записей store. */
+#mem-mini { height: auto; width: 100%; }
+#mem-mini-foot { height: auto; width: 100%; }
+.mem-cell.mini { width: 8; }
+
+/* ПРОГРАММА — по операции на строку: клик подсвечивает строку ЛЕНТЫ,
+    которая эту операцию породила (обратная половина связки листа). */
+#program { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
+
+.prog-item { height: 1; width: 100%; padding: 0 1; }
+.prog-item:hover { background: $nex-raised; }
+.prog-item.hot {
+    background: $primary 25%;
+    color: $nex-title;
+    text-style: bold;
+}
 
 /* --- всплывающая строка вопроса ----------------------------------------- */
 /* Снизу, а не сбоку: колонка отбирала треть ширины у того, ради чего панель
@@ -1228,4 +1277,4 @@ PanelPrompt {
 #scen-table > .datatable--hover { background: $nex-raised; }
 #scen-foot { height: auto; padding-top: 1; }
 
-#tape-wide, #kern-wide { display: none; height: 1fr; scrollbar-size-vertical: 1; }
+#kern-wide { display: none; height: 1fr; scrollbar-size-vertical: 1; }

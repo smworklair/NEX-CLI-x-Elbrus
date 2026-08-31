@@ -146,6 +146,50 @@ class Workspace:
         return DAG(src.key, src.title, src.note, instrs, src.profile,
                    src.family, src.lesson)
 
+    def graph_size(self) -> int:
+        """Узлов в накопленном графе. id узла равен индексу, поэтому новые
+        операции одной строки — это диапазон [было, стало)."""
+        return len(self._b._instrs)
+
+    def machine(self) -> dict:
+        """Полный снимок машины: имена, память, граф, служебные счётчики.
+
+        Кладётся в запись git-журнала, чтобы «вернуть» у неё было настоящим
+        чекаутом состояния ЯДРА, а не только графа участка. Внутри — одни
+        примитивы и кортежи: запись живёт дольше экрана и не должна тянуть
+        ссылок на живые объекты.
+        """
+        b = self._b
+        return {
+            "regs": dict(self.regs),
+            "mem": list(self.mem),
+            "lp": self._lp,
+            "last": self.last,
+            "log": list(self.log),
+            "ids": dict(self._ids),
+            "used": set(self._used_names),
+            "last_node": self._last_node,
+            "graph": [(i.id, i.name, i.op, tuple(i.preds), i.text)
+                      for i in b._instrs],
+            "meta": (b.key, b.title, b.note, b.profile, b.family, b.lesson),
+        }
+
+    def restore(self, snap: dict) -> None:
+        """Чекаут снимка: машина становится ровно такой, как была."""
+        self.regs = dict(snap["regs"])
+        self.mem = list(snap["mem"])
+        self._lp = snap["lp"]
+        self.last = snap["last"]
+        self.log = list(snap.get("log") or [])
+        self._ids = dict(snap["ids"])
+        self._used_names = set(snap["used"])
+        self._last_node = snap["last_node"]
+        key, title, note, profile, family, lesson = snap["meta"]
+        self._b = DagBuilder(key, title, note, profile=profile,
+                             family=family, lesson=lesson)
+        self._b._instrs = [Instr(i, name, op, tuple(preds), text)
+                           for i, name, op, preds, text in snap["graph"]]
+
     def exec(self, text: str) -> ExecResult:
         s = text.strip()
         if not s:

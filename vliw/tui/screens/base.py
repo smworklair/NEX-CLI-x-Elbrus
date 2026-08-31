@@ -356,15 +356,22 @@ class ModeScreen(Screen):
         rec = con.runs[pos]
         dag = rec.get("dag")
         code = rec.get("code")
-        if dag is None and code is None:
+        snap = rec.get("ws")
+        if dag is None and code is None and snap is None:
             self.app.bell()
             return
+        if snap is not None:
+            # Чекаут машины ЯДРА целиком: имена, память и граф становятся
+            # такими, какими были на момент этой строки. Восстановление
+            # видно при следующем открытии ЯДРА — машина одна на сессию.
+            self.app.session.workspace().restore(snap)
         if dag is not None:
             self.app.session.set_dag(dag, rec.get("scenario") or "прогон")
         if code:
             self.app.session.code_text = code
         con.note(f"  состояние #{pos + 1} возвращено: "
                  f"{rec.get('scenario') or '—'}"
+                 + ("  ·  машина ЯДРА восстановлена" if snap is not None else "")
                  + (f"  ·  исходник в буфере" if code else ""),
                  "success")
         self.refresh_context()

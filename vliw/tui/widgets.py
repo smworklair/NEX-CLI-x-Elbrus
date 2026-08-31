@@ -295,6 +295,19 @@ class Console(RichLog):
         self.write(t)
         self._record(t)
 
+    def commit(self, line: str, mode: str = "lab") -> dict:
+        """Новый запуск в журнале БЕЗ записи в ленту. Возвращает запись.
+
+        Лист ЛЕНТЫ в ЯДРЕ показывает строки интерпретатора сам, поэтому
+        дублировать их в RichLog не нужно. Но в общий журнал («git сессии»)
+        такие строки попадают отдельными запусками — вывод показывает сам
+        журнал при выборе записи (экран заполняет `lines` текстами листа).
+        """
+        self.runs.append({"cmd": line, "lines": [], "error": False,
+                          "mode": mode,
+                          "time": time.strftime("%H:%M")})
+        return self.runs[-1]
+
     def ansi(self, text: str) -> None:
         for line in text.split("\n"):
             t = Text.from_ansi(line)
@@ -478,12 +491,9 @@ class ConsoleJournal(Horizontal):
 
     def _repaint_mark(self) -> None:
         accent = palette.mode_hex(self.mode)
-        canvas = palette.SURFACES["canvas"]
-        # Тот же бейдж со шевроном, что у командной строки панели: все
-        # места, где печатают, выглядят одинаково.
-        mark = Text()
-        mark.append(" nex ", style=f"{canvas} on {accent} bold")
-        mark.append(" ❯", style=accent)
+        # Тот же маркер, что у командной строки в доке: акцентный шеврон
+        # без фоновой плашки. Все места, где печатают, выглядят одинаково.
+        mark = Text("❯ ", style=f"{accent} bold")
         self.query_one("#journal-mark", Static).update(mark)
 
     # --- ввод -------------------------------------------------------------
@@ -732,6 +742,13 @@ class ConsoleJournal(Horizontal):
             if dag is not None:
                 t.append(f" · {len(dag)} оп.", style=palette.role_hex("dim"))
         t.append(f" · {len(run['lines'])} стр.", style=faint)
+        # Итог прогона, если он считался (`go` из ЯДРА): числа — то, ради
+        # чего запись существует, в списке их видно без открытия вывода.
+        vw = run.get("verdict")
+        if vw:
+            b, o = vw
+            t.append(f" · {b}→{o}" if b != o else f" · {b} т.",
+                     style=palette.role_hex("dim"))
         return t
 
     def show(self, index: int) -> None:
@@ -1021,12 +1038,11 @@ class PromptBar(Vertical):
 
     def repaint(self) -> None:
         accent = palette.mode_hex(self.mode)
-        canvas = palette.SURFACES["canvas"]
-        # Марка — бейдж на акцентной плашке и шеврон: приглашение должно
-        # читаться как «сюда печатают», а не как ещё одна строка вывода.
-        mark = Text()
-        mark.append(" nex ", style=f"{canvas} on {accent} bold")
-        mark.append(" ❯", style=accent)
+        # Марка — акцентный шеврон и ничего более: плашка «nex» читалась
+        # табличкой на общем поле, а не приглашением. «Сюда печатают»
+        # показывают само поле (подложка, волосок сверху в доке), а марка
+        # только подталкивает. Бренд «NEX» живёт в шапке, а не в поле.
+        mark = Text("❯ ", style=f"{accent} bold")
         self.query_one("#prompt-mark", Static).update(mark)
 
     # --- доступ -----------------------------------------------------------
@@ -1332,8 +1348,9 @@ class PanelPrompt(Vertical):
         close.append("Esc", style=palette.role_hex("faint"))
         self.query_one("#pp-close", CloseBtn).update(close)
         self.query_one("#pp-close", CloseBtn).tooltip = "закрыть (Esc)"
-        mark = Text()
-        mark.append("? ", style=f"{accent} bold")
+        # Тот же маркер, что у дока внизу и журнала: акцентный шеврон.
+        # Все места, где печатают, выглядят одинаково, а не по-своему.
+        mark = Text("❯ ", style=f"{accent} bold")
         self.query_one("#pp-mark", Static).update(mark)
         chips = self.query_one("#pp-chips", ItemGrid)
         for q in self._chips:

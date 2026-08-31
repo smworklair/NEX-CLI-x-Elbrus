@@ -3,12 +3,21 @@
 Прежде интерпретатор был вкладкой с лентой текста: вычисления улетали в лог,
 а всё, ради чего он существует — имена, память и накопленный граф участка —
 приходилось выпрашивать командами `names`, `mem`, `list`. Здесь они видны
-постоянно и обновляются на каждой строке, а лента остаётся лентой.
+постоянно и обновляются на каждой строке.
 
 Раскладка:
-    слева   лента вычислений (что ввели → что получилось)
+    слева   ЛЕНТА — лист вычислений: каждая строка человека с её итогом
+            (значение, +операции, имена) и вердиктом `go`; консоль внутри
+            ЛЕНТы осталась только для отчётов slash-команд
     справа  ИМЕНА, ПАМЯТЬ, ПРОГРАММА — состояние машины
     внизу   чем считать (ядра и служебные слова) + строка ввода с превью
+
+Связки, ради которых экран существует:
+    — строка листа ↔ операции графа: клик по операции подсвечивает строку,
+      которая её породила, клик по строке — её операции в ПРОГРАММЕ;
+    — каждая строка, изменившая машину, — коммит в общем git-журнале с
+      ПОЛНЫМ снимком машины: «вернуть» из журнала восстанавливает имена,
+      память и граф, из любого режима.
 
 Превью считает выражение на копии рабочего пространства, пока вы печатаете:
 настоящее состояние не трогается, а число видно до нажатия Enter.
@@ -27,11 +36,11 @@ from ...core import InterpError, kernel_help
 from ...core.interp import MEM_SIZE
 from .. import palette
 from ..widgets import (Chip, Console, ConsoleJournal, Panel, PanelToolbar,
-                       PromptBar, plural)
+                        PromptBar, plural)
 from .base import ModeScreen
 
-MEM_ROWS = 5
-MEM_CELL = 6
+MEM_MINI_W = 8
+MEM_MINI_ROWS = 4
 
 
 class MemCell(Static):
@@ -56,6 +65,42 @@ class MemCell(Static):
         self.post_message(self.Picked(self.addr))
 
 
+class TapeRow(Static):
+    """Строка листа ЛЕНТЫ. Клик — связка с ПРОГРАММОЙ: подсветить операции,
+    которые эта строка положила в граф (повторный клик снимает подсветку)."""
+
+    class Picked(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+    def __init__(self, index: int, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.index = index
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.index))
+
+
+class ProgramItem(Static):
+    """Операция в ПРОГРАММЕ. Клик — связка с ЛЕНТОЙ: подсветить строку,
+    которая эту операцию породила."""
+
+    class Picked(Message):
+        def __init__(self, node: int) -> None:
+            super().__init__()
+            self.node = node
+
+    def __init__(self, node: int, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.node = node
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.node))
+
+
 class CoreScreen(ModeScreen):
     """Интерпретатор: считает здесь, граф копится на глазах."""
 
@@ -73,11 +118,18 @@ class CoreScreen(ModeScreen):
         self._prev_mem: list[int] = []
         self._changed_regs: set[str] = set()
         self._changed_mem: set[int] = set()
-        self._prev_ops = 0
-        # Лист вычислений: что каждая введённая строка изменила. Лента
-        # показывает вывод, но не «какие имена появились и сколько операций
-        # добавилось» — а это и есть работа интерпретатора.
-        self._history: list[dict] = []
+        # Лист ЛЕНТЫ: каждая строка человека — запись одного из видов
+        # (line — вычисление, error — ошибка, note — пометка мостика,
+        # verdict — итог `go`, report — вывод names/mem/list). Список
+        # только растёт: лист — летопись сессии, а не окно вывода.
+        self._rows: list[dict] = []
+        self._line_seq = 0          # номер последней строки-вычисления
+        self._sheet_drawn = 0       # сколько строк листа уже смонтировано
+        self._sheet_theme = ""      # тема, в которой нарисован лист
+        self._last_added = 0        # операций добавила последняя строка
+        self._link: tuple | None = None   # ("row", i) | ("op", node) | None
+        self._report_on = False     # консоль-отчёт slash-команды на виду
+        self._last_commit: dict | None = None   # запись журнала для go
         # Журнал команд внутри ЛЕНТЫ: выключен по умолчанию — здесь он
         # не главный, но должен быть под рукой, как на остальных экранах.
         self._tape_journal = False
@@ -106,11 +158,13 @@ class CoreScreen(ModeScreen):
                         ("git", "tape-journal",
                          "история сессии и мостик в другие режимы"),
                     ),
+                    # Лист — главный вид ЛЕНТЫ: каждая строка человека с её
+                    # итогом. Консоль осталась для отчётов slash-команд,
+                    # журнал («git») открывается своей кнопкой.
+                    VerticalScroll(id="tape-sheet"),
                     Console(id="console",
                             runs=self.app.session.journal_runs),
                     ConsoleJournal(id="journal"),
-                    VerticalScroll(Static(id="tape-full"),
-                                   id="tape-wide"),
                     title="ЛЕНТА", id="p-tape", topic="tape")
                 yield Panel(
                     Horizontal(id="kernel-chips"),
@@ -123,7 +177,8 @@ class CoreScreen(ModeScreen):
                             VerticalScroll(Static(id="names-full"),
                                            id="names-wide"),
                             title="ИМЕНА", id="p-names", topic="names")
-                yield Panel(Static(id="memory"),
+                yield Panel(ItemGrid(id="mem-mini", min_column_width=8),
+                            Static(id="mem-mini-foot"),
                             Vertical(Static(id="mem-head"),
                                      ItemGrid(id="mem-map", min_column_width=11),
                                      Static(id="mem-foot"),
@@ -134,7 +189,7 @@ class CoreScreen(ModeScreen):
                         ("go", "verb-go", "отдать граф в разбор и посчитать"),
                         ("list", "verb-list", "показать накопленный граф"),
                     ),
-                    VerticalScroll(Static(id="program")),
+                    VerticalScroll(id="program"),
                     VerticalScroll(Static(id="prog-tiers"),
                                    id="prog-wide"),
                     title="ПРОГРАММА", id="p-prog", topic="program")
@@ -198,7 +253,7 @@ class CoreScreen(ModeScreen):
             pass
 
     def _take_pending_note(self) -> None:
-        """Пометка от мостика журнала («в ядро») — строкой в ленту.
+        """Пометка от мостика журнала («в ядро») — строкой в лист.
 
         Чужой граф сюда не вставляется: здесь его собирают руками, и это
         осознанно. Мостик привозит контекст — чей прогон смотрели, — чтобы
@@ -208,20 +263,25 @@ class CoreScreen(ModeScreen):
         if not note:
             return
         self.app.session.pending_note = ""
-        con = self.console
-        if con is None:
-            return
-        con.note("  " + note, "accent2")
-        row = Text()
-        row.append("  собери здесь свой вариант графа и отдай ",
-                   style=palette.role_hex("dim"))
-        row.append("go", style=f"{palette.role_hex('work')} bold")
-        con.write(row)
+        self._rows.append({"kind": "note", "text": note})
+        self._rows.append({"kind": "note",
+                           "text": "собери здесь свой вариант графа и отдай go"})
+        self.refresh_state()
 
     def on_ready(self) -> None:
         self._fill_chips()
-        self._intro()
         self._take_pending_note()
+        self.refresh_state()
+
+    def run_core(self, line: str) -> None:
+        """Slash-команда — отчёт в консоли под листом.
+
+        Лист ЛЕНТЫ — про строки человека, отчёты команд — отдельный жанр.
+        Консоль показывается, пока отчёт свежий: первая же строка
+        интерпретатора возвращает главный вид листу (отчёт остаётся в git).
+        """
+        self._report_on = True
+        super().run_core(line)
         self.refresh_state()
 
     def hint_pairs(self):
@@ -261,31 +321,6 @@ class CoreScreen(ModeScreen):
             chip.tooltip = hint
             row.mount(chip)
 
-    def _intro(self) -> None:
-        con = self.console
-        if con is None:
-            return
-        dim = palette.role_hex("dim")
-        accent = palette.role_hex("work")
-        t = Text()
-        t.append("считает здесь. ", style=palette.role_hex("text"))
-        t.append("память с начала: 1 2 3 4 …", style=dim)
-        con.write(t)
-        con.write("")
-        for line, note in (
-            ("2+2", "арифметика"),
-            ("a=10;  b=3;  a*b+1", "имена; несколько выражений через ;"),
-            ("x=load 0", "взять из памяти — в графе появится LOAD"),
-            ("store x 3", "положить обратно — появится STORE"),
-            ("sum 8", "ядро: считает по памяти и подставляет свой граф"),
-            ("go", "отдать накопленный граф в разбор"),
-        ):
-            row = Text()
-            row.append("  " + line.ljust(22), style=accent)
-            row.append(note, style=dim)
-            con.write(row)
-        con.write("")
-
     # --- ввод -------------------------------------------------------------
 
     def handle_line(self, line: str) -> None:
@@ -295,49 +330,93 @@ class CoreScreen(ModeScreen):
         self._exec_interp(line)
 
     def _exec_interp(self, line: str) -> None:
+        """Строка интерпретатора: лист, состояние и — если машина
+        изменилась — коммит в общий git-журнал с полным снимком."""
         from ...ui import interp_view
 
         con = self.console
         ws = self.app.session.workspace()
         self._snapshot_state()
-        if con is not None:
-            con.echo(line, self.mode)
+        self._report_on = False     # строка человека возвращает лист
+        prev_graph = ws.graph_size()
         try:
             result = ws.exec(line)
         except InterpError as e:
-            if con is not None:
-                con.note(f"  {e}", "error")
-                con.write("")
+            self._rows.append({"kind": "error", "line": line, "msg": str(e)})
+            self.refresh_state()
             return
         except Exception as e:
-            if con is not None:
-                con.note(f"  {type(e).__name__}: {e}", "error")
-                con.write("")
+            self._rows.append({"kind": "error", "line": line,
+                               "msg": f"{type(e).__name__}: {e}"})
+            self.refresh_state()
             return
 
-        added = len(ws.snapshot()) - self._prev_ops
-        self._history.append({
+        # Что строка положила в граф. Ядро (`sum 8` и прочие) пересобирает
+        # граф с нуля — его операции все; обычная строка только дописывает
+        # в конец (id узла равен индексу).
+        if result.kind == "kernel":
+            created = list(range(ws.graph_size()))
+        else:
+            created = list(range(prev_graph, ws.graph_size()))
+        self._last_added = len(created)
+        names_changed = sorted(n for n, v in ws.regs.items()
+                               if self._prev_regs.get(n) != v)
+        mem_changed = {i for i, v in enumerate(ws.mem)
+                       if i < len(self._prev_mem) and self._prev_mem[i] != v}
+
+        # Служебные виды (names/mem/list) показываются выводом команды —
+        # они едут в лист как готовый блок ANSI. Но `mem 5 6` ещё и ПИШЕТ
+        # память: запись в машину обязана остаться коммитом.
+        if result.kind in ("env", "mem", "list"):
+            self._rows.append({
+                "kind": "report",
+                "ansi": interp_view.render_result(
+                    ws, result, width=max(24, self.app.size.width - 8)),
+            })
+            if result.kind == "mem" and mem_changed:
+                rec = con.commit(line, self.mode) if con is not None else {
+                    "cmd": line, "lines": [], "error": False,
+                    "mode": self.mode, "time": ""}
+                rec["lines"] = [self._tape_text(len(self._rows) - 1)]
+                rec["ws"] = ws.machine()
+                self._last_commit = rec
+            self.refresh_state()
+            self.refresh_context()
+            return
+
+        self._line_seq += 1
+        entry = {
+            "kind": "line",
+            "n": self._line_seq,
             "line": line,
             "value": result.value,
-            "names": sorted(n for n, v in ws.regs.items()
-                            if self._prev_regs.get(n) != v),
-            "ops": max(0, added),
-            "kind": result.kind,
-        })
-        if result.kind not in ("reset", "empty") and not ws.empty():
-            self.app.session.set_dag(ws.snapshot(), "interp")
-            # Мостик-поля записи журнала — как в _core_done у остальных
-            # экранов: без них строка интерпретатора в общем журнале не
-            # мостится никуда, хотя именно она чаще всего и нужна в РАЗБОРЕ.
-            if con is not None and con.runs:
-                rec = con.runs[-1]
+            "ops": len(created),
+            "names": names_changed,
+            "ids": created,
+            # У store в message живёт адрес: показывать голое «5» вместо
+            # значения — путать с именем. Ясность стоит одного слова.
+            "msg": (f"яч. {result.message}" if result.kind == "store"
+                    else result.message or ""),
+        }
+        self._rows.append(entry)
+
+        changed = (bool(created) or bool(names_changed) or bool(mem_changed)
+                   or result.kind == "reset")
+        is_go = result.kind == "go" and not ws.empty()
+        if changed or is_go:
+            # Коммит в git сессии. `2+2` и ошибки — не коммиты: журнал —
+            # история состояний машины, а не лог нажатий.
+            rec = con.commit(line, self.mode) if con is not None else {
+                "cmd": line, "lines": [], "error": False, "mode": self.mode,
+                "time": ""}
+            rec["lines"] = [self._tape_text(len(self._rows) - 1)]
+            rec["ws"] = ws.machine()
+            if result.kind != "reset" and not ws.empty():
+                self.app.session.set_dag(ws.snapshot(), "interp")
                 rec["scenario"] = self.app.session.scenario
                 rec["dag"] = self.app.session.dag_obj
                 rec["profile"] = self.app.session.profile
-        if con is not None:
-            con.ansi("\n".join(interp_view.render_result(
-                ws, result, width=max(24, con.size.width - 2))))
-            con.write("")
+            self._last_commit = rec
         self.refresh_state()
         self.refresh_context()
         if result.kind == "go":
@@ -347,9 +426,10 @@ class CoreScreen(ModeScreen):
         """`go`: посчитать накопленный граф и показать короткий вердикт."""
         ws = self.app.session.workspace()
         if ws.empty():
-            if self.console is not None:
-                self.console.note("  графа нет — считали без записи в программу",
-                                  "warning")
+            self._rows.append({"kind": "warn",
+                               "text": "графа нет — считали без записи "
+                                       "в программу"})
+            self.refresh_state()
             return
         self.set_busy(True)
         self.run_worker(self._go_worker, thread=True, exclusive=True, group="core")
@@ -370,33 +450,35 @@ class CoreScreen(ModeScreen):
 
     def _verdict_error(self, msg: str) -> None:
         self.set_busy(False)
-        if self.console is not None:
-            self.console.note(f"  не посчиталось: {msg}", "error")
+        self._rows.append({"kind": "error", "line": "go",
+                           "msg": f"не посчиталось: {msg}"})
+        self.refresh_state()
 
     def _verdict(self, base, orc, met) -> None:
-        con = self.console
-        if con is None:
-            return
+        """Итог `go` — строкой в лист и числами в коммит журнала."""
         b, o = base.schedule.makespan, orc.schedule.makespan
-        accent = palette.role_hex("work")
-        dim = palette.role_hex("dim")
-        title = palette.role_hex("title")
-        head = Text()
-        head.append("граф передан в разбор", style=f"{accent} bold")
-        head.append(f"   {len(self.app.session.dag_obj)} оп.", style=dim)
-        con.write(head)
-        row = Text()
-        row.append("  baseline ", style=dim)
-        row.append(str(b), style=title)
-        row.append("   оракул ", style=dim)
-        row.append(str(o), style=f"{palette.role_hex('success')} bold")
-        row.append("   предел ", style=dim)
-        row.append(str(met.lower_bound), style=title)
+        self._rows.append({"kind": "verdict", "base": b, "oracle": o,
+                           "bound": met.lower_bound})
+        rec = self._last_commit
+        if rec is not None:
+            rec["verdict"] = (b, o)
+            rec["lines"].append(self._verdict_text(b, o, met.lower_bound))
+        self.refresh_state()
+
+    def _verdict_text(self, b: int, o: int, bound: int) -> Text:
+        t = Text()
+        t.append("  ●  граф передан в разбор",
+                 style=f"{palette.role_hex('work')} bold")
+        t.append("\n")
+        t.append("     baseline ", style=palette.role_hex("dim"))
+        t.append(str(b), style=palette.role_hex("title"))
+        t.append("   оракул ", style=palette.role_hex("dim"))
+        t.append(str(o), style=f"{palette.role_hex('success')} bold")
+        t.append("   предел ", style=palette.role_hex("dim"))
+        t.append(str(bound), style=palette.role_hex("title"))
         if b > o:
-            row.append(f"   −{b - o} тактов", style=palette.role_hex("success"))
-        con.write(row)
-        con.write(Text("  целиком — /clear и режим РАЗБОР", style=dim))
-        con.write("")
+            t.append(f"   −{b - o} т.", style=palette.role_hex("success"))
+        return t
 
     # --- превью -----------------------------------------------------------
 
@@ -438,7 +520,6 @@ class CoreScreen(ModeScreen):
         ws = self.app.session.workspace()
         self._prev_regs = dict(ws.regs)
         self._prev_mem = list(ws.mem)
-        self._prev_ops = len(ws.snapshot())
 
     def refresh_state(self) -> None:
         ws = self.app.session.workspace()
@@ -448,29 +529,29 @@ class CoreScreen(ModeScreen):
                              if i < len(self._prev_mem) and self._prev_mem[i] != v}
         for wide_id, short_ids, topic in (
                 ("#names-wide", ("#names",), "names"),
-                ("#mem-wide", ("#memory",), "memory"),
+                ("#mem-wide", ("#mem-mini", "#mem-mini-foot"), "memory"),
                 ("#prog-wide", ("#program",), "program"),
-                ("#tape-wide", (), "tape"),
                 ("#kern-wide", ("#kernel-chips", "#verb-chips"), "kernels")):
             self.query_one(wide_id).display = self._wide == topic
             for short_id in short_ids:
                 self.query_one(short_id).display = self._wide != topic
-        # ЛЕНТА — три состояния вместо двух: лента, разворот с листом
-        # вычислений и журнал команд. Журнал заменяет собой и ленту, и лист:
-        # это место «что вообще происходило в сессии», ему нужен весь блок.
+        # ЛЕНТА — три состояния: лист (главный вид, свёрнутый и развёрнутый),
+        # консоль-отчёт slash-команды (пока отчёт свежий) и журнал команд.
+        # Журнал заменяет собой и лист, и отчёт: это место «что вообще
+        # происходило в сессии», ему нужен весь блок.
         con = self.query_one("#console", Console)
         journal = self.query_one("#journal", ConsoleJournal)
-        if self._wide == "tape":
+        if self._wide == "tape" and self._tape_journal:
+            self.query_one("#tape-sheet").display = False
             con.display = False
-            journal.display = self._tape_journal
-            if self._tape_journal:
-                self.query_one("#tape-wide").display = False
-                self._load_journal()
-            else:
-                self.query_one("#tape-wide").display = True
+            journal.display = True
+            self._load_journal()
         else:
-            con.display = True
             journal.display = False
+            con.display = self._report_on
+            sheet = self.query_one("#tape-sheet")
+            sheet.display = True
+            self._draw_tape()
         self._draw_names(ws)
         self._draw_memory(ws)
         self._draw_program(ws)
@@ -482,14 +563,10 @@ class CoreScreen(ModeScreen):
             self._draw_mem_map(ws)
         elif self._wide == "program":
             self._draw_prog_tiers(ws)
-        elif self._wide == "tape":
-            self._draw_tape_full(ws)
         elif self._wide == "kernels":
             self._draw_kern_full()
         else:
-            for pid, name in (("#p-tape", "ЛЕНТА"),
-                              ("#p-kernels", "ЧЕМ СЧИТАТЬ")):
-                self.query_one(pid, Panel).set_title(name)
+            self.query_one("#p-kernels", Panel).set_title("ЧЕМ СЧИТАТЬ")
 
     # --- развороты ЯДРА -----------------------------------------------------
     #
@@ -546,8 +623,9 @@ class CoreScreen(ModeScreen):
             return base + [f"{i.name}: {i.text} ({i.op})"
                            for i in list(dag)[:12]]
         if topic == "tape":
+            lines = [r for r in self._rows if r["kind"] == "line"]
             return base + [f"Строка «{h['line']}» дала {h['value']}, "
-                           f"операций +{h['ops']}." for h in self._history[-8:]]
+                           f"операций +{h['ops']}." for h in lines[-8:]]
         if topic == "kernels":
             return base + [f"Ядро {n} {d}: {h}" for n, d, h in kernel_help()]
         return base
@@ -566,57 +644,148 @@ class CoreScreen(ModeScreen):
                         "чем dot отличается от saxpy?"],
         }.get(topic, [])
 
-    def _draw_tape_full(self, ws) -> None:
-        """Развёрнутая ЛЕНТА — лист вычислений, а не тот же лог подлиннее.
+    # --- лист ЛЕНТЫ ---------------------------------------------------------
 
-        Лента отвечает «что напечаталось». Лист отвечает на другой вопрос:
-        что каждая строка СДЕЛАЛА — какое значение дала, какие имена завела и
-        сколько операций добавила в граф. Из этих операций потом и собирается
-        расписание, а по логу их не сосчитать.
+    def _draw_tape(self) -> None:
+        """Лист — главный вид ЛЕНТЫ: история строк человека с их итогом.
+
+        Монтируется инкрементально: лист только растёт, и на каждой строке
+        добавляется лишь новый ряд. Полная перемонка — при смене темы,
+        цвета строк считаются в момент монтирования.
         """
-        target = self.query_one("#tape-full", Static)
+        from ...ui import render
+
+        box = self.query_one("#tape-sheet", VerticalScroll)
         panel = self.query_one("#p-tape", Panel)
-        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
-        title, work = palette.role_hex("title"), palette.role_hex("work")
-        n = len(self._history)
-        total_ops = len(ws.snapshot())
-        panel.set_title(f"ЛЕНТА   ·   лист вычислений   ·   "
+        if render.THEME.name != self._sheet_theme:
+            box.remove_children()
+            self._sheet_drawn = 0
+            self._sheet_theme = render.THEME.name
+        n = len([r for r in self._rows if r["kind"] == "line"])
+        place = ("лист вычислений" if self._wide == "tape" else "лист")
+        panel.set_title(f"ЛЕНТА   ·   {place}   ·   "
                         f"{n} {plural(n, 'строка', 'строки', 'строк')}")
-        t = Text()
-        t.append_text(self._section("что вы считали",
-                                    f"в графе {total_ops} оп."))
-        t.append("\n\n")
-        if not self._history:
-            t.append("    Пока ничего. Наберите  2+2  ·  a=10  ·  sum 8  ·  go",
-                     style=faint)
-            target.update(t)
+        if not self._rows:
+            if not box.children:
+                box.mount(Static(Text(
+                    "    каждая строка ляжет сюда: что ввёл, что вышло,\n"
+                    "    сколько операций ушло в граф.\n\n"
+                    "    память с начала заполнена 1 2 3 4 …\n\n"
+                    "    2+2   ·   a=10   ·   x=load 0   ·   sum 8   ·   go",
+                    style=palette.role_hex("faint")),
+                    classes="tape-empty"))
             return
-        # Ровно тот же отступ, что у строк ниже (4, не 5): иначе шапка стоит
-        # на символ левее своих же колонок.
-        t.append("    " + "#".rjust(3) + "  " + "строка".ljust(34)
-                 + "значение".rjust(12) + "   " + "+оп.".rjust(5)
-                 + "   имена\n", style=faint)
-        for i, h in enumerate(self._history, 1):
-            t.append(f"    {i:>3}  ", style=faint)
-            t.append(h["line"][:33].ljust(34), style=title)
-            val = "—" if h["value"] is None else str(h["value"])
-            t.append(val[:11].rjust(12),
-                     style=work if h["value"] is not None else faint)
-            t.append(("+" + str(h["ops"]) if h["ops"] else "·").rjust(5),
-                     style=palette.role_hex("accent2") if h["ops"] else faint)
-            t.append("   " + ", ".join(h["names"])[:40], style=dim)
-            t.append("\n")
-        t.append("\n")
-        t.append_text(self._section("дальше"))
-        t.append("\n\n")
-        t.append("    Строки со знаком «+» положили операции в граф — их и\n"
-                 "    будет планировать РАЗБОР. Чистая арифметика (2+2) граф\n"
-                 "    не трогает: считать можно сколько угодно.\n\n",
-                 style=faint)
-        t.append("    go", style=work)
-        t.append("  — отдать граф в РАЗБОР и посчитать расписание.",
-                 style=faint)
-        target.update(t)
+        if self._sheet_drawn == 0:
+            box.remove_children()   # пустое состояние уступает первой строке
+        fresh = False
+        for i in range(self._sheet_drawn, len(self._rows)):
+            box.mount(TapeRow(i, self._tape_text(i),
+                              classes="tape-row tape-" + self._rows[i]["kind"]))
+            fresh = True
+        self._sheet_drawn = len(self._rows)
+        if fresh and self._wide != "tape":
+            box.scroll_end(animate=False)
+        self._apply_link()
+
+    def _tape_text(self, i: int) -> Text:
+        """Текст строки листа. Один и тот же и на экране, и в записи
+        git-журнала: журнал показывает вывод коммита этими же строками."""
+        r = self._rows[i]
+        faint = palette.role_hex("faint")
+        dim = palette.role_hex("dim")
+        title = palette.role_hex("title")
+        work = palette.role_hex("work")
+        kind = r["kind"]
+        t = Text()
+        if kind == "line":
+            t.append(f"{r['n']:>3}  ", style=faint)
+            t.append(r["line"][:26].ljust(26), style=title)
+            val = "—" if r["value"] is None else str(r["value"])
+            t.append(f"= {val}".ljust(12),
+                     style=work if r["value"] is not None else faint)
+            if r["ops"]:
+                t.append(f"+{r['ops']} оп.".ljust(9),
+                         style=palette.role_hex("accent2"))
+            else:
+                t.append("·".ljust(9), style=faint)
+            tail = ", ".join(r["names"]) if r["names"] else r.get("msg", "")
+            if tail:
+                t.append(tail[:32], style=dim)
+        elif kind == "error":
+            t.append("  ✗  ", style=palette.role_hex("error"))
+            t.append(r["line"][:26], style=palette.role_hex("error"))
+            t.append("   " + r["msg"], style=dim)
+        elif kind == "warn":
+            t.append("  ⚠  ", style=palette.role_hex("warning"))
+            t.append(r["text"], style=dim)
+        elif kind == "note":
+            t.append("  ·  ", style=palette.role_hex("accent2"))
+            t.append(r["text"], style=dim)
+        elif kind == "verdict":
+            t.append_text(self._verdict_text(r["base"], r["oracle"],
+                                             r["bound"]))
+        elif kind == "report":
+            return Text.from_ansi("\n".join(r["ansi"]))
+        return t
+
+    # --- связка строк ↔ операций -------------------------------------------
+
+    def on_tape_row_picked(self, event: TapeRow.Picked) -> None:
+        event.stop()
+        if self._rows[event.index]["kind"] != "line":
+            return
+        self._set_link(None if self._link == ("row", event.index)
+                       else ("row", event.index))
+
+    def on_program_item_picked(self, event: ProgramItem.Picked) -> None:
+        event.stop()
+        self._set_link(None if self._link == ("op", event.node)
+                       else ("op", event.node))
+        if self._link is None:
+            return
+        i = self._row_of_node(event.node)
+        if i is None:
+            return
+        sheet = self.query_one("#tape-sheet", VerticalScroll)
+        for row in sheet.query(TapeRow):
+            if row.index == i:
+                sheet.scroll_to_widget(row, animate=False)
+                break
+
+    def _set_link(self, link: tuple | None) -> None:
+        self._link = link
+        self._apply_link()
+
+    def _row_of_node(self, node: int) -> int | None:
+        """Строка листа, которая положила узел `node` в граф."""
+        for i, r in enumerate(self._rows):
+            if r.get("kind") == "line" and node in r.get("ids", ()):
+                return i
+        return None
+
+    def _apply_link(self) -> None:
+        """Подсветка связки в обе стороны — без перерисовки содержимого."""
+        link = self._link
+        linked_ids: set[int] = set()
+        if link is not None:
+            if link[0] == "op":
+                linked_ids.add(link[1])
+            else:
+                row = self._rows[link[1]]
+                linked_ids = set(row.get("ids", ()))
+        for row in self.query(TapeRow):
+            on = False
+            if link is not None:
+                if link[0] == "row":
+                    on = row.index == link[1]
+                else:
+                    # Клик по операции: «on» получает и строка-родитель —
+                    # иначе связка видна только со стороны программы.
+                    r = self._rows[row.index]
+                    on = r.get("kind") == "line" and link[1] in r.get("ids", ())
+            row.set_class(on, "on")
+        for item in self.query(ProgramItem):
+            item.set_class(item.node in linked_ids, "hot")
 
     def _draw_kern_full(self) -> None:
         """Развёрнутое «ЧЕМ СЧИТАТЬ» — каталог ядер, а не ряд чипов.
@@ -709,46 +878,25 @@ class CoreScreen(ModeScreen):
         grid = self.query_one("#mem-map", ItemGrid)
         foot = self.query_one("#mem-foot", Static)
         panel = self.query_one("#p-mem", Panel)
-        dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
+        faint = palette.role_hex("faint")
         used = sum(1 for v in ws.mem if v)
         panel.set_title(f"ПАМЯТЬ   ·   карта   ·   {MEM_SIZE} ячеек, "
                         f"ненулевых {used}")
-        # Куда писал накопленный граф. Адрес STORE сохранён в имени узла
-        # (`st7`), у LOAD он теряется при присваивании — поэтому честно
-        # показываем только записи, а не выдумываем чтения.
-        dag = ws.snapshot()
-        stores: set[int] = set()
-        for ins in dag:
-            if ins.op == "STORE" and ins.name.startswith("st"):
-                digits = ins.name[2:].split(".")[0]
-                if digits.isdigit():
-                    stores.add(int(digits))
+        stores = self._store_cells(ws.snapshot())
         h = Text()
         h.append_text(self._section("ячейки", "клик — подставить в ввод"))
         head.update(h)
         grid.remove_children()
         for addr in range(MEM_SIZE):
-            value = ws.mem[addr] if addr < len(ws.mem) else 0
-            cell = Text()
-            # Ни одного пробела внутри ячейки: Static переносит по пробелам, и
-            # с ними адрес уезжал на одну строку, а значение на другую — карта
-            # превращалась в кашу из чисел без понятного порядка.
-            cell.append("▸" if addr in stores else "·",
-                        style=palette.role_hex("work") if addr in stores
-                        else faint)
-            cell.append(f"{addr:>2}", style=faint)
-            cell.append("│", style=palette.role_hex("line"))
-            style = dim
-            if addr in self._changed_mem:
-                style = palette.role_hex("accent2") + " bold"
-            elif not value:
-                style = faint
-            cell.append(str(value)[:5].rjust(5), style=style)
-            grid.mount(MemCell(addr, cell, classes="mem-cell"))
+            grid.mount(MemCell(addr, self._mem_cell_text(addr, ws, stores),
+                               classes="mem-cell"))
         f = Text()
+        written = ", ".join(f"{a}←{n}" if n else str(a)
+                            for a, n in sorted(stores.items())[:8])
         f.append("\n    ▸ ", style=palette.role_hex("work"))
-        f.append("сюда писал store", style=faint)
-        f.append("        ярким — изменено последней строкой", style=faint)
+        f.append(f"сюда писал store: {written}" if written
+                 else "пока без записей store", faint)
+        f.append("        ярким — изменено последней строкой", faint)
         foot.update(f)
 
     def on_mem_cell_picked(self, event) -> None:
@@ -816,11 +964,15 @@ class CoreScreen(ModeScreen):
 
     def _draw_names(self, ws) -> None:
         target = self.query_one("#names", Static)
+        panel = self.query_one("#p-names", Panel)
         dim = palette.role_hex("dim")
+        badge = (f"   +{len(self._changed_regs)}"
+                 if self._changed_regs else "")
+        panel.set_title(f"ИМЕНА   {len(ws.regs)}{badge}")
         if not ws.regs:
             target.update(Text("пока пусто — a=10", style=palette.role_hex("faint")))
             return
-        width = max(20, self.query_one("#p-names", Panel).size.width - 4)
+        width = max(20, panel.size.width - 4)
         key_w = max(6, width - 12)
         t = Text()
         for i, (name, value) in enumerate(ws.regs.items()):
@@ -833,48 +985,97 @@ class CoreScreen(ModeScreen):
                      style=(f"{palette.role_hex('work')} bold") if hot else dim)
         target.update(t)
 
-    def _draw_memory(self, ws) -> None:
-        target = self.query_one("#memory", Static)
-        dim = palette.role_hex("dim")
+    def _store_cells(self, dag) -> dict[int, str]:
+        """Адрес → источник записи: куда положил `store` и ЧТО положил.
+
+        Адрес STORE хранит в имени узла (`st7`), источник — в тексте
+        (`st x`). Чтения адрес не сохраняют, поэтому в карте честно
+        показаны только записи.
+        """
+        stores: dict[int, str] = {}
+        for ins in dag:
+            if ins.op == "STORE" and ins.name.startswith("st"):
+                digits = ins.name[2:].split(".")[0]
+                if digits.isdigit():
+                    parts = ins.text.split()
+                    stores[int(digits)] = parts[1] if len(parts) > 1 else ""
+        return stores
+
+    def _mem_cell_text(self, addr: int, ws, stores: dict[int, str]) -> Text:
+        """Текст ячейки: маркер записи, адрес, значение. Ни одного лишнего
+        пробела внутри: Static переносит по пробелам, и с ними адрес уезжал
+        на одну строку, а значение на другую."""
+        value = ws.mem[addr] if addr < len(ws.mem) else 0
         faint = palette.role_hex("faint")
-        hot = f"{palette.role_hex('accent2')} bold"
-        # Сколько ячеек в строке — по фактической ширине панели: на узком окне
-        # сетка иначе переносится и перестаёт быть сеткой.
-        inner = max(16, self.query_one("#p-mem", Panel).size.width - 4)
-        cols = max(3, (inner - 4) // MEM_CELL)
-        shown = min(MEM_SIZE, cols * MEM_ROWS)
-        t = Text()
-        for row_start in range(0, shown, cols):
-            if row_start:
-                t.append("\n")
-            t.append(f"{row_start:>3} │", style=faint)
-            for i in range(row_start, min(row_start + cols, shown)):
-                value = ws.mem[i] if i < len(ws.mem) else 0
-                cell = str(value)
-                if len(cell) > MEM_CELL - 1:
-                    cell = cell[: MEM_CELL - 2] + "…"
-                t.append(cell.rjust(MEM_CELL),
-                         style=hot if i in self._changed_mem else dim)
-        t.append(f"\nвсего {MEM_SIZE} ячеек, показаны первые {shown}",
-                 style=faint)
-        target.update(t)
+        cell = Text()
+        cell.append("▸" if addr in stores else "·",
+                    style=palette.role_hex("work") if addr in stores else faint)
+        cell.append(f"{addr:>2}", style=faint)
+        cell.append("│", style=palette.role_hex("line"))
+        if addr in self._changed_mem:
+            style = f"{palette.role_hex('accent2')} bold"
+        elif addr in stores:
+            style = palette.role_hex("work")
+        elif not value:
+            style = faint
+        else:
+            style = palette.role_hex("dim")
+        cell.append(str(value)[:4].rjust(4), style=style)
+        return cell
+
+    def _draw_memory(self, ws) -> None:
+        """Свёрнутая ПАМЯТЬ — та же живая карта, что в развороте, только
+        первые ряды: клик по ячейке подставляет `load`, запись store
+        помечена маркером. Отдельная таблица «цифры без адресов» больше
+        не нужна: она не отвечала ни на один вопрос."""
+        grid = self.query_one("#mem-mini", ItemGrid)
+        foot = self.query_one("#mem-mini-foot", Static)
+        panel = self.query_one("#p-mem", Panel)
+        badge = (f"   +{len(self._changed_mem)}"
+                 if self._changed_mem else "")
+        panel.set_title(f"ПАМЯТЬ{badge}")
+        stores = self._store_cells(ws.snapshot())
+        grid.remove_children()
+        # Сколько ячеек в строке — по фактической ширине панели: на узком
+        # окне сетка иначе переносится и перестаёт быть сеткой.
+        inner = max(16, panel.size.width - 4)
+        cols = max(3, (inner - 4) // MEM_MINI_W)
+        for addr in range(min(MEM_SIZE, cols * MEM_MINI_ROWS)):
+            grid.mount(MemCell(addr, self._mem_cell_text(addr, ws, stores),
+                               classes="mem-cell mini"))
+        f = Text()
+        written = ", ".join(f"{a}←{n}" if n else str(a)
+                            for a, n in sorted(stores.items())[:6])
+        f.append("▸ ", style=palette.role_hex("work"))
+        if written:
+            f.append(f"store: {written}", style=palette.role_hex("dim"))
+            f.append("  ·  ", style=palette.role_hex("faint"))
+        # Подпись короткая: подвал в один ряд, иначе переносится на вторую
+        # строку и съедает ряд у карты.
+        f.append("клик — load · карта в развороте",
+                 style=palette.role_hex("faint"))
+        foot.update(f)
 
     def _draw_program(self, ws) -> None:
-        target = self.query_one("#program", Static)
+        """ПРОГРАММА — по операции на строку: операции кликабельны, это
+        половина связки «строка ↔ операция» (вторая половина в листе)."""
+        box = self.query_one("#program", VerticalScroll)
         panel = self.query_one("#p-prog", Panel)
         dag = ws.snapshot()
-        panel.set_title(f"ПРОГРАММА   {len(dag)} оп.")
+        badge = (f"   +{self._last_added}" if self._last_added else "")
+        panel.set_title(f"ПРОГРАММА   {len(dag)} оп.{badge}")
+        box.remove_children()
         if not len(dag):
-            target.update(Text("граф пуст — load/store и арифметика с именами\n"
-                               "кладут сюда операции",
-                               style=palette.role_hex("faint")))
+            box.mount(Static(Text(
+                "граф пуст — load/store и арифметика с именами\n"
+                "кладут сюда операции",
+                style=palette.role_hex("faint"))))
             return
         dim = palette.role_hex("dim")
-        t = Text()
-        for i, ins in enumerate(dag):
-            if i:
-                t.append("\n")
+        for ins in dag:
+            t = Text()
             t.append(f"{ins.name:<7}", style=palette.role_hex("text"))
             t.append(f"{ins.op:<6}", style=palette.op_style(ins.op))
             t.append(ins.text, style=dim)
-        target.update(t)
+            box.mount(ProgramItem(ins.id, t, classes="prog-item"))
+        self._apply_link()

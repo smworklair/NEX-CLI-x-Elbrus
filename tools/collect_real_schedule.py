@@ -121,6 +121,13 @@ MNEMONICS: dict[str, str] = {
     'fsubd': 'FADD',
     'fmuls': 'FMUL',
     'fmuld': 'FMUL',
+    # Сращённое умножение-сложение — см. vliw/core/model.py, класс FMA.
+    'fmul_addd': 'FMA',
+    'fmul_adds': 'FMA',
+    'fmul_subd': 'FMA',
+    'fmul_subs': 'FMA',
+    'fmul_rsubd': 'FMA',
+    'fmul_rsubs': 'FMA',
     'fdivs': 'FDIV',
     'fdivd': 'FDIV',
     'cmpesb': 'PRED',
@@ -227,17 +234,20 @@ NO_DST = {"STORE"}
 # каждое число получено. Уезжают в JSON целиком (`model`), чтобы получатель
 # видел, ПРОТИВ ЧЕГО считались нижние границы, и мог поправить.
 _LATENCY = {"ADD": 1, "SUB": 1, "AND": 1, "SHL": 1,
-            "MUL": 4, "DIV": 11, "LOAD": 5, "STORE": 2}
+            "MUL": 4, "DIV": 11, "LOAD": 5, "STORE": 2,
+            "FMA": 8}
 _OCCUPANCY = {"DIV": 2}                       # остальные по умолчанию 1
 _LAT_SOURCE = {"ADD": "измерено", "SUB": "измерено",
                "AND": "допущение", "SHL": "допущение",
                "MUL": "измерено", "DIV": "измерено",
-               "LOAD": "измерено", "STORE": "измерено"}
+               "LOAD": "измерено", "STORE": "измерено",
+               "FMA": "измерено"}
 _CHANNELS = {
     "ADD": (0, 1, 2, 3, 4, 5), "SUB": (0, 1, 2, 3, 4, 5),
     "AND": (0, 1, 2, 3, 4, 5), "SHL": (0, 1, 2, 3, 4, 5),
     "MUL": (0, 1, 3, 4), "DIV": (5,),
     "LOAD": (0, 2, 3, 5), "STORE": (2, 5),
+    "FMA": (0, 1, 2, 3, 4, 5),
 }
 WIDTH = 6
 

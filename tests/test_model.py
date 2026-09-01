@@ -100,9 +100,11 @@ class TestMeasuredProfile(unittest.TestCase):
         self.assertTrue(M.has_blocking_ops())
 
     def test_unknown_op_raises_with_hint(self):
+        # Имя нарочно бессмысленное: прежний пример «FMA» перестал быть
+        # несуществующим 02.09.2026, когда класс завели по-настоящему.
         with self.assertRaises(KeyError) as cm:
-            M.op("FMA")
-        self.assertIn("FMA", str(cm.exception))
+            M.op("NO_SUCH_OP")
+        self.assertIn("NO_SUCH_OP", str(cm.exception))
 
 
 class TestWithWidth(unittest.TestCase):

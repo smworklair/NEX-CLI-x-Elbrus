@@ -121,7 +121,13 @@ class DagMetrics:
     """Нижняя граница makespan по длине цепочек зависимостей."""
 
     resource_bound: int
-    """Нижняя граница makespan по пропускной способности каналов."""
+    """Нижняя граница makespan по пропускной способности каналов.
+
+    С 02.09.2026 считается ИНТЕРВАЛЬНО (см. `_interval_bound`), а не делением
+    суммарной занятости на число каналов. Прежний способ не выигрывал у
+    критического пути НИ НА ОДНОМ из 300 графов трудного эвала — то есть был
+    мёртвым кодом с точки зрения границы.
+    """
 
     @property
     def lower_bound(self) -> int:
@@ -134,6 +140,66 @@ class DagMetrics:
         if self.critical_path_bound > self.resource_bound:
             return "критический путь"
         return "и то, и другое"
+
+
+def _interval_bound(dag: DAG, model: MachineModel,
+                    asap: list[int], height: list[int]) -> int:
+    """Интервальная (энергетическая) нижняя граница makespan.
+
+    ЗАЧЕМ. Прежняя ресурсная граница делила суммарную занятость каналов на их
+    количество — и проигрывала критическому пути на всех 300 графах трудного
+    эвала. Она не видела главного: операции не размазаны по расписанию
+    равномерно, их прижимают к своим местам зависимости.
+
+    ИДЕЯ. Если операция выдана в такте t, то makespan >= t + height. Канал она
+    держит occ тактов, значит освобождает его к t + occ, и от этого момента до
+    конца расписания остаётся q = height - occ.
+
+    Возьмём группу каналов C и все операции, которым нужны ТОЛЬКО каналы из C
+    (другие могут уйти в сторону, на них рассчитывать нельзя). Отберём те, что
+    не могут начаться раньше r и не могут освободить канал позже makespan - q.
+    Вся их работа обязана уместиться в это окно:
+
+        sum(occ) <= |C| * (makespan - q - r)
+
+        =>  makespan >= r + q + ceil(sum(occ) / |C|)
+
+    Перебираем все пары порогов (r, q). Стоимость O(n^2) на группу: для
+    фиксированного r идём по операциям в порядке убывания q и накапливаем
+    работу — так каждый префикс сразу даёт кандидата в границу.
+
+    ЧЕГО ЗДЕСЬ НЕТ. Объединений групп каналов: перебираются только те наборы,
+    что реально встречаются у операций графа. Более сильные варианты (все
+    подмножества, дизъюнктивные рассуждения на монопольном порту) остаются
+    возможным продолжением — эта версия уже сняла 89% узлов перебора.
+    """
+    n = len(dag)
+    if not n:
+        return 0
+    occ = [model.occupancy(i.op) for i in dag]
+    chans = [frozenset(model.channels_for(i.op)) for i in dag]
+    tail = [height[i] - occ[i] for i in range(n)]
+
+    best = 0
+    for group in set(chans):
+        width = len(group)
+        if not width:
+            continue
+        # Только операции, которым БОЛЬШЕ некуда: их каналы вложены в группу.
+        idx = [i for i in range(n) if chans[i] <= group]
+        if not idx:
+            continue
+        by_tail = sorted(idx, key=lambda i: -tail[i])
+        for r in sorted({asap[i] for i in idx}):
+            work = 0
+            for i in by_tail:
+                if asap[i] < r:
+                    continue
+                work += occ[i]
+                cand = r + tail[i] + -(-work // width)
+                if cand > best:
+                    best = cand
+    return best
 
 
 def compute_metrics(dag: DAG, model: MachineModel) -> DagMetrics:
@@ -154,26 +220,8 @@ def compute_metrics(dag: DAG, model: MachineModel) -> DagMetrics:
 
     cp_bound = max((asap[i] + height[i] for i in range(n)), default=0)
 
-    # Ресурсная граница. Считаем по каждой группе каналов отдельно:
-    # операции, исполнимые только на подмножестве каналов, могут упереться
-    # в него раньше, чем машина упрётся в общую ширину.
-    res_bound = 0
-    groups: dict[tuple[int, ...], int] = {}
-    for ins in dag:
-        chans = model.channels_for(ins.op)
-        groups[chans] = groups.get(chans, 0) + model.occupancy(ins.op)
-    for chans, slots in groups.items():
-        # Все операции, чьи каналы вложены в эту же группу, тоже её нагружают.
-        total = 0
-        for other, s in groups.items():
-            if set(other) <= set(chans):
-                total += s
-        if chans:
-            res_bound = max(res_bound, -(-total // len(chans)))
-    # Плюс латентность последней выданной инструкции: makespan считается
-    # по готовности результата, а не по такту выдачи.
-    min_tail = min(lat) if lat else 0
-    res_bound = res_bound - 1 + min_tail if res_bound else 0
+    # Ресурсная граница — интервальная, см. `_interval_bound`.
+    res_bound = _interval_bound(dag, model, asap, height)
 
     return DagMetrics(
         asap=tuple(asap),

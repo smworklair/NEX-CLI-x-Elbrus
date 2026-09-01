@@ -188,3 +188,71 @@ class TestMeasuredClassScenarios(unittest.TestCase):
         for op in sorted(used - {"LOAD", "STORE"}):
             with self.subTest(класс=op):
                 self.assertIn(op, _SYMBOL)
+
+
+class TestIntervalLowerBound(unittest.TestCase):
+    """Интервальная нижняя граница: главное — она не имеет права соврать вверх.
+
+    Граница используется точным поиском как точка старта углубления. Если она
+    хоть раз превысит истинный оптимум, оракул объявит недостижимым то, что
+    достижимо, — и соврёт с самым уверенным лицом, потому что «доказано».
+    Поэтому здесь свойство проверяется перебором на случайных графах, а не
+    на паре заготовленных примеров.
+
+    Второе, что стережётся, — что она реально сильнее прежней. Прежняя
+    (суммарная занятость / число каналов) не выигрывала у критического пути
+    ни на одном из 300 графов трудного эвала, то есть была мёртвым кодом.
+    """
+
+    def setUp(self):
+        from vliw.core import get_profile
+        self.machine = get_profile("e2k-v6-measured")
+
+    def test_never_exceeds_the_true_optimum(self):
+        import random
+
+        from vliw.core.dag import DAG, Instr, compute_metrics
+        from vliw.core.oracle import OracleScheduler
+        from tools.vliw_gen import PRESSURE_WEIGHTS, SHAPES, gen_graph
+
+        rnd = random.Random(20260902)
+        checked = 0
+        for _ in range(40):
+            raw = gen_graph(rnd, rnd.randint(6, 18), rnd.choice(SHAPES),
+                            PRESSURE_WEIGHTS)
+            dag = DAG("t", "", "", [Instr(x.id, f"n{x.id}", x.op, x.preds, f"n{x.id}")
+                                    for x in raw])
+            res = OracleScheduler(budget_s=10.0).schedule(dag, self.machine)
+            if not res.optimal:
+                continue          # оптимум не доказан — сравнивать не с чем
+            checked += 1
+            lb = compute_metrics(dag, self.machine).lower_bound
+            self.assertLessEqual(
+                lb, res.schedule.makespan,
+                f"граница {lb} выше доказанного оптимума {res.schedule.makespan}")
+        self.assertGreater(checked, 20, "фикстура: оптимум доказан слишком редко")
+
+    def test_sees_contention_that_plain_division_misses(self):
+        """Граф, где делители конфликтуют во времени, а не просто «их много».
+
+        Четыре деления, все готовы сразу, все обязаны пройти через
+        единственный канал `,5` с занятием 2 такта. Деление в столбик даёт
+        4*2/1 = 8; интервальная граница обязана учесть ещё и латентность
+        деления, стоящую после последнего из них.
+        """
+        from vliw.core.dag import DAG, Instr, compute_metrics
+
+        instrs = [Instr(i, f"d{i}", "DIV", (), f"d{i}") for i in range(4)]
+        dag = DAG("divs", "", "", instrs)
+        m = compute_metrics(dag, self.machine)
+        # Четыре деления на одном канале: последнее выдаётся не раньше такта 6,
+        # плюс его латентность 11 — расписание не короче 17 тактов.
+        self.assertGreaterEqual(m.resource_bound, 17)
+        self.assertGreaterEqual(m.lower_bound, 17)
+
+    def test_degenerate_graphs_do_not_crash(self):
+        from vliw.core.dag import DAG, Instr, compute_metrics
+
+        self.assertEqual(compute_metrics(DAG("e", "", "", []), self.machine).lower_bound, 0)
+        one = DAG("o", "", "", [Instr(0, "a", "ADD", (), "a")])
+        self.assertEqual(compute_metrics(one, self.machine).lower_bound, 1)

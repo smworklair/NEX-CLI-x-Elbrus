@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 from rich.segment import Segment
 from rich.style import Style as RichStyle
@@ -39,8 +40,8 @@ from textual.widgets.text_area import TextAreaTheme
 
 from ...core import asm_parser, doctor
 from .. import palette
-from ..widgets import (BridgeRow, Console, ConsoleJournal, HintBar, Panel,
-                       PanelToolbar, PromptBar, Tool, TopBar, plural)
+from ..widgets import (BridgeRow, Console, ConsoleJournal, HintBar,
+                       PromptBar, Tool, TopBar, plural)
 from .base import ModeScreen
 
 #: Каталог примеров. Файлы лежат в `examples/code/*.s` и загружаются по
@@ -473,6 +474,35 @@ class DrawerChip(Static):
         self.post_message(self.Picked(self.target))
 
 
+class DockTabs(Horizontal):
+    """Полоса вкладок нижнего дока. Двойной клик по ней разворачивает док.
+
+    Ровно как заголовок инструментального окна в IDE: одиночный клик по
+    вкладке переключает, двойной по самой полосе — растягивает окно на
+    полэкрана и обратно. Отдельной кнопки под это нет намеренно: в полосе
+    и так живут четыре вкладки и переключатель расписания.
+    """
+
+    #: Двойной клик у Textual приходится считать по времени: в событии Click
+    #: счётчика кликов подряд нет, есть только `time` (см. Panel).
+    DOUBLE_CLICK_S = 0.4
+
+    class Zoom(Message):
+        pass
+
+    def __init__(self, *children, **kw) -> None:
+        super().__init__(*children, **kw)
+        self._last_click = 0.0
+
+    def on_click(self, event) -> None:
+        now = getattr(event, "time", 0.0) or time.monotonic()
+        double = (now - self._last_click) <= self.DOUBLE_CLICK_S
+        self._last_click = 0.0 if double else now
+        if double:
+            event.stop()
+            self.post_message(self.Zoom())
+
+
 class LintItem(Static):
     """Строка замечания. Клик — курсор на ту самую строку исходника."""
 
@@ -512,9 +542,15 @@ class CodeScreen(ModeScreen):
         # развёрнутом ОТЧЁТЕ (ConsoleJournal), а приоритетный биндинг экрана
         # отобрал бы его у журнала молча.
         Binding("f6", "rewrite", "переписать по оракулу", priority=True),
-        # F12 — как ^` в IDE: показать/убрать нижнюю панель.
-        Binding("f12", "toggle_drawer", "панель снизу", priority=True),
-        # ^P — открыть панель на ОТЧЁТЕ и начать команду. Не «/» и не «:»:
+        # F12 — как ^` в IDE: убрать нижний док совсем и вернуть.
+        # Панели независимы: без дока редактор занимает весь экран, и
+        # ничего при этом не ломается.
+        Binding("f12", "toggle_drawer", "док снизу", priority=True),
+        # F11 — развернуть док на полэкрана (то же, что двойной клик по
+        # полосе вкладок). Рядом с F12 нарочно: одна пара клавиш на всё
+        # управление высотой окна снизу.
+        Binding("f11", "zoom_dock", "развернуть док", priority=True),
+        # ^P — открыть док на ВЫВОДЕ и начать команду. Не «/» и не «:»:
         # оба знака печатные и в ассемблере встречаются (`//` в комментарии,
         # двоеточие в метке `main:`), отбирать их у текста нельзя. Поэтому
         # набор команды начинается с клавиши, которой в тексте не бывает.
@@ -534,14 +570,29 @@ class CodeScreen(ModeScreen):
     #: Действия, живые только при открытой подсказке.
     SUGGEST_ACTIONS = ("suggest_up", "suggest_down", "suggest_take")
 
-    #: Что остаётся видимым, когда блок развёрнут. Textual по умолчанию
-    #: прячет ВСЕХ прямых детей экрана, кроме развёрнутого, — и разворот
-    #: редактора убирал заодно расписание, полосу состояния и нижнюю панель.
-    #: Работать становилось хуже, а не лучше. Здесь разворот значит «отдай
-    #: коду всю ширину», всё остальное остаётся на местах.
+    #: Вкладки нижнего дока: ключ → (подпись, id блока, id кнопки, тема ИИ).
+    #: Порядок — порядок в полосе вкладок. Расписание первым: это ответ на
+    #: вопрос, ради которого экран открывают, и он показан сразу, а не по
+    #: клавише, о которой надо знать.
+    TABS = {
+        "sched": ("расписание", "#dock-sched", "#tab-sched", "sched"),
+        "line": ("разбор", "#dock-line", "#tab-line", "code"),
+        "lint": ("замечания", "#dock-lint", "#tab-lint", "lint"),
+        "term": ("вывод", "#dock-term", "#tab-term", "console"),
+    }
+
+    #: Подсказка у кнопки вкладки: чем эта вкладка отвечает на «что здесь».
+    TAB_TIPS = {
+        "sched": "куда легли операции: каналы по строкам, такты по колонкам",
+        "line": "такт под курсором, его цепочка и каталог тактов буфера",
+        "lint": "что не так по машине и где теряются такты",
+        "term": "сюда приходит результат: прогоны, история сессии, команды",
+    }
+
+    #: Что остаётся видимым при встроенном развороте (его здесь не бывает,
+    #: но панель ИИ и подвал обязаны переживать чужой maximize).
     ALLOW_IN_MAXIMIZED_VIEW = ("PanelChat, PanelPrompt, PromptBar, HintBar, "
-                               "Footer, TopBar, #p-code-sched, "
-                               "#code-status-row, #p-drawer")
+                               "Footer, TopBar, #code-foot, #code-dock")
 
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
@@ -560,6 +611,8 @@ class CodeScreen(ModeScreen):
         self.findings_from = "буфер"
         self.run_text = ""            # текст буфера на момент прогона
         self._grid_cells: dict[tuple[str, int, int], int] = {}
+        self._sched_left = None       # что сейчас в решётке
+        self._sched_which = "src"
         self._lint_lines: list[int] = []
         self._code_expanded = False
         self._sched_expanded = False
@@ -569,135 +622,131 @@ class CodeScreen(ModeScreen):
         self.sched_view = "src"     # какое расписание в решётке
         self._cursor_line = 0
         self._example = ""          # какой пример сейчас в буфере
-        # Выдвижная панель снизу: закрыта по умолчанию, вкладки внутри.
-        self.drawer_open = False
-        self.drawer_tab = "lint"    # lint | term | line
-        # Мягкий разворот: "" | code | sched | drawer. Не прячет соседей —
-        # отдаёт блоку больше места и ДОБАВЛЯЕТ ему колонки, которых в
-        # обычном виде нет.
+        # Нижний док: ОТКРЫТ по умолчанию и стоит на расписании. Пока он
+        # был выдвижным ящиком поверх второй панели, расписание занимало
+        # место всегда, а всё остальное пряталось за клавишу — то есть
+        # худшее из двух. Теперь окно одно: видно то, что выбрано, и оно
+        # целиком убирается F12, когда нужен только код.
+        self.drawer_open = True
+        self.drawer_tab = "sched"   # sched | line | lint | term
+        # Разворот дока: "" или "dock". Не прячет редактор — отдаёт доку
+        # больше высоты и добавляет то, чему в трети экрана места нет
+        # (вторую решётку рядом, полные тексты замечаний, журнал сессии).
         self.zoom = ""
 
     # --- раскладка --------------------------------------------------------
     #
-    # Каркас режима собран здесь целиком, а не взят у `ModeScreen`: строки
-    # ввода в доке снизу больше нет. Она переехала внутрь выдвижной панели
-    # (вкладка ОТЧЁТ) и как отдельная сущность исчезла — в редакторе она
-    # была нужна раз в сотню нажатий, а ряд занимала всегда.
+    # Каркас собран здесь целиком, а не взят у `ModeScreen`: строки ввода в
+    # доке снизу нет, она живёт вкладкой ВЫВОД.
     #
-    # Экран получился как в IDE: рабочая область во всю ширину, снизу одна
-    # строка состояния, и по клавише выезжает панель с вкладками
-    # ЗАМЕЧАНИЯ / ОТЧЁТ / СТРОКА. Любой блок разворачивается на весь экран
-    # со своим полным набором инструментов — основной вид показывает только
-    # то, что нужно сейчас, глубина приходит по требованию.
+    # Один экран и пристыкованные окна — как в IDE:
+    #
+    #     шапка режима                                        1 строка
+    #     полоса файлов: какой буфер открыт                   1 строка
+    #     РЕДАКТОР                                            всё остальное
+    #     ── волосок ──
+    #     расписание │ разбор │ замечания │ вывод             1 строка вкладок
+    #     содержимое выбранной вкладки                        ~треть экрана
+    #     строка состояния                                    1 строка
+    #     подсказки клавиш                                    1 строка
+    #
+    # ОДНО окно снизу, а не два. Пока их было два (расписание отдельной
+    # панелью и выдвижной ящик под ней), редактор оказывался самой маленькой
+    # областью экрана, а строка состояния висела между ними — посреди
+    # экрана, где строке состояния делать нечего.
+    #
+    # Рамок нет ни у одного блока. Три панели в рамках стоили шесть строк
+    # только на бордюры и печатали свои имена капсом там, где место нужно
+    # содержимому: имя вкладки уже написано в полосе вкладок, и второй раз
+    # его повторять незачем. Границ ровно две — волосок над доком и подложка
+    # строки состояния.
 
     def compose(self):
         yield TopBar(self.mode, self.mode_title, self.mode_subtitle,
                      id="topbar")
+        # Полоса файлов: что сейчас правится. Одна строка вместо рамки с
+        # заголовком «ИСХОДНИК   ·   ассемблер e2k (.s)   ·   имя» — то же
+        # самое, но без двух строк бордюра вокруг.
+        yield Horizontal(Static(id="code-file"), id="code-head")
         with Horizontal(id="code-body"):
-            yield Panel(
-                PanelToolbar(
-                    ("▶ прогнать", "/code run", "разобрать буфер и найти "
-                     "лучшее расписание (F5)"),
-                    ("переписать по оракулу", "code-rewrite",
-                     "переставить операции так, как их кладёт точный "
-                     "поиск (F6)"),
-                    ("сохранить", "code-save", "записать буфер в файл (^S)"),
-                    ("расписание ▶", "open-sched", "развернуть РАСПИСАНИЕ"),
-                ),
-                Horizontal(
-                    AsmArea(id="code-edit"),
-                    # Одна колонка разворота, две секции: что это за строка
-                    # и её цепочка. Двумя колонками они отбирали у кода
-                    # больше места, чем сами стоят.
-                    VerticalScroll(Static(id="code-line-body"),
-                                   Static(id="code-chain-body"),
-                                   id="code-zoom-col"),
-                    id="code-main"),
-                title="ИСХОДНИК", id="p-code", topic="code",
-                has_own_input=True, soft=True)   # заголовок дополняется в _draw_title
-            # Тулбара у расписания НЕТ намеренно. «прогнать» и «переписать по
-            # оракулу» стояли и здесь, и у редактора — одно действие в двух
-            # местах заставляет гадать, разные ли они. По правилу IDE действие
-            # живёт в одном месте, у редактора. «к коду» убран по той же
-            # причине: клик по клетке и так прыгает на строку операции
-            # (on_data_table_cell_selected), кнопка дублировала клик.
-            yield Panel(
-                Horizontal(
-                    Tool("как написано", "sched-src",
-                         "расписание из самого буфера", id="tab-src"),
-                    Tool("оракул", "sched-orc",
-                         "расписание точного поиска (F5)", id="tab-orc"),
-                    Static(id="sched-head"),
-                    id="sched-tabs"),
-                Horizontal(
-                    # cell_padding=0: шесть каналов и так впритык к ширине
-                    # колонки, а по умолчанию DataTable добавляет по два
-                    # пробела на клетку — канал ,5 уезжал за край.
-                    Vertical(DataTable(id="code-grid", cursor_type="cell",
-                                       zebra_stripes=False, cell_padding=0),
-                             id="code-grid-wrap"),
-                    Vertical(Static(id="code-grid-orc-head"),
-                             DataTable(id="code-grid-orc", cursor_type="cell",
-                                       zebra_stripes=False, cell_padding=0),
-                             id="code-grid-orc-wrap"),
-                    VerticalScroll(Static(id="sched-side-body"),
-                                   id="sched-side"),
-                    id="code-grids"),
-                title="РАСПИСАНИЕ", id="p-code-sched", topic="sched",
-                soft=True)
+            yield AsmArea(id="code-edit")
 
-        # Строка состояния: слева курсор (кликом раскрывается), справа итог
-        # по буферу, и два пункта-лаунчера нижней панели — замечания с живым
-        # счётчиком ошибок и отчёт со счётчиком команд. Панель снизу
-        # открывается любым из них одним кликом, как строка состояния в IDE.
-        with Horizontal(id="code-status-row"):
-            yield LineChip(id="code-line-chip")
-            yield Static(id="code-status")
-            yield DrawerChip(
-                "lint", "▲ 0",
-                "замечания машины: клик открывает панель снизу",
-                id="status-lint")
-            yield DrawerChip(
-                "term", "git 0",
-                "git сессии — история прогонов и мостик между режимами: "
-                "клик открывает панель снизу",
-                id="status-term")
+        # --- нижний док -----------------------------------------------
+        with Vertical(id="code-dock"):
+            with DockTabs(id="dock-tabs"):
+                for key, (label, _box, tool_id, _topic) in self.TABS.items():
+                    yield Tool(label, f"dock-{key}", self.TAB_TIPS[key],
+                               id=tool_id.lstrip("#"))
+                # Живой итог вкладки — справа в той же строке: сколько
+                # тактов, сколько ошибок, сколько коммитов. Раньше это был
+                # заголовок рамки, и на каждую цифру уходила целая рамка.
+                yield Static(id="dock-note")
+                # Переключатель расписания — правыми кнопками полосы
+                # вкладок, как настройки инструментального окна в IDE.
+                # Своей строки он не стоит: она была третьим рядом подряд.
+                yield Tool("как написано", "sched-src",
+                           "расписание из самого буфера", id="tab-src")
+                yield Tool("оракул", "sched-orc",
+                           "расписание точного поиска (F5)", id="tab-orc")
 
-        yield Panel(
-            Horizontal(
-                Tool("замечания", "drawer-lint",
-                     "что не так по машине и где теряются такты",
-                     id="tab-lint"),
-                Tool("git", "drawer-term",
-                     "история сессии и мостик: прогон отсюда уезжает в "
-                     "разбор, агенту, ядро или обратно в код",
-                     id="tab-term"),
-                Tool("такты", "drawer-line",
-                     "все широкие команды: сколько слотов занято",
-                     id="tab-line"),
-                Static(id="drawer-head"),
-                id="drawer-tabs"),
-            VerticalScroll(id="lint-scroll"),
-             Vertical(
-                 # Мостик ПРЯМО во вкладке, без разворота: выбрал прогон в
-                 # истории — отправил в другой режим двумя кликами.
-                 BridgeRow(prefix="dbridge", id="drawer-bridge"),
-                 Console(id="console",
-                         runs=self.app.session.journal_runs),
-                 ConsoleJournal(id="journal"),
-                 PromptBar(self.mode, self.placeholder,
-                           list(self.app.commands) + self.extra_commands(),
-                           hint=self.hint, id="prompt"),
-                 id="drawer-term-box"),
-            Vertical(
-                Static(id="code-line-info"),
-                VerticalScroll(id="drawer-bundles"),
-                id="drawer-line-box"),
-            title="ЗАМЕЧАНИЯ", id="p-drawer", topic="lint",
-            has_own_input=True, soft=True)
+            yield Horizontal(
+                # cell_padding=0: шесть каналов и так впритык к ширине
+                # колонки, а по умолчанию DataTable добавляет по два
+                # пробела на клетку — канал ,5 уезжал за край.
+                Vertical(DataTable(id="code-grid", cursor_type="cell",
+                                   zebra_stripes=False, cell_padding=0),
+                         id="code-grid-wrap"),
+                Vertical(Static(id="code-grid-orc-head"),
+                         DataTable(id="code-grid-orc", cursor_type="cell",
+                                   zebra_stripes=False, cell_padding=0),
+                         id="code-grid-orc-wrap"),
+                VerticalScroll(Static(id="sched-side-body"), id="sched-side"),
+                id="dock-sched")
+
+            # РАЗБОР: такт под курсором, его цепочка зависимостей и каталог
+            # всех тактов буфера. Прежде это был отдельный РЕЖИМ и отдельная
+            # колонка разворота редактора — два места под один и тот же
+            # углублённый просмотр того, что и так на экране.
+            yield Horizontal(
+                VerticalScroll(Static(id="code-line-info"),
+                               Static(id="code-chain-body"),
+                               id="dock-line-col"),
+                VerticalScroll(id="dock-bundles"),
+                id="dock-line")
+
+            yield VerticalScroll(id="dock-lint")
+
+            yield Vertical(
+                # Мостик ПРЯМО во вкладке: выбрал прогон в истории —
+                # отправил в другой режим двумя кликами.
+                BridgeRow(prefix="dbridge", id="drawer-bridge"),
+                Console(id="console", runs=self.app.session.journal_runs),
+                ConsoleJournal(id="journal"),
+                PromptBar(self.mode, self.placeholder,
+                          list(self.app.commands) + self.extra_commands(),
+                          hint=self.hint, id="prompt"),
+                id="dock-term")
+
+        # --- подвал: ОДНА строка состояния, в самом низу ------------------
+        # Слева курсор (кликом раскрывается разбор), справа итог по буферу,
+        # и два пункта-лаунчера — замечания с живым счётчиком ошибок и вывод
+        # со счётчиком коммитов. Любой открывает свою вкладку одним кликом.
+        with Vertical(id="code-foot"):
+            with Horizontal(id="code-status-row"):
+                yield LineChip(id="code-line-chip")
+                yield Static(id="code-status")
+                yield DrawerChip(
+                    "lint", "▲ 0",
+                    "замечания машины: клик — вкладка ЗАМЕЧАНИЯ",
+                    id="status-lint")
+                yield DrawerChip(
+                    "term", "git 0",
+                    "git сессии — история прогонов и мостик между режимами: "
+                    "клик — вкладка ВЫВОД",
+                    id="status-term")
+            yield HintBar(id="hints")
 
         yield Suggest(id="suggest")
-        yield HintBar(id="hints")
 
     def on_ready(self) -> None:
         edit = self.query_one("#code-edit", AsmArea)
@@ -928,14 +977,11 @@ class CodeScreen(ModeScreen):
         sug.hide()
         return True
 
-    # --- выдвижная панель --------------------------------------------------
-
-    #: Вкладка → (заголовок, id блока с содержимым, id кнопки, тема для ИИ).
-    TABS = {
-        "lint": ("ЗАМЕЧАНИЯ", "#lint-scroll", "#tab-lint", "lint"),
-        "term": ("GIT", "#drawer-term-box", "#tab-term", "console"),
-        "line": ("ТАКТЫ", "#drawer-line-box", "#tab-line", "code"),
-    }
+    # --- нижний док --------------------------------------------------------
+    #
+    # Имена методов оставлены прежними (`open_drawer`, `drawer_tab`): это
+    # то же самое пристыкованное окно, только теперь оно одно и расписание
+    # живёт в нём вкладкой, а не отдельной панелью над ним.
 
     def action_toggle_drawer(self) -> None:
         if self.drawer_open:
@@ -952,14 +998,14 @@ class CodeScreen(ModeScreen):
         self.action_command()
 
     def action_command(self) -> None:
-        """^P — панель на вкладке ОТЧЁТ с уже введённым слэшем."""
+        """^P — док на вкладке ВЫВОД с уже введённым слэшем."""
         self.open_drawer("term")
         bar = self.query_one("#prompt", PromptBar)
         bar.focus_input()
         bar.set_value("/")
 
     def open_drawer(self, tab: str) -> None:
-        self.drawer_tab = tab if tab in self.TABS else "lint"
+        self.drawer_tab = tab if tab in self.TABS else "sched"
         self.drawer_open = True
         self._draw_drawer()
         if self.drawer_tab == "term":
@@ -972,48 +1018,93 @@ class CodeScreen(ModeScreen):
 
     def _draw_drawer(self) -> None:
         """Показать нужную вкладку и убрать остальные."""
-        panel = self.query_one("#p-drawer", Panel)
-        panel.display = self.drawer_open
-        # Класс на экране: в узком окне открытая панель забирает место у
-        # расписания, а не у кода. Трёх этажей на тридцати строках не бывает.
+        dock = self.query_one("#code-dock", Vertical)
+        dock.display = self.drawer_open
+        # Класс на экране: в узком окне открытый док забирает высоту у
+        # редактора умереннее, чем на широком.
         self.set_class(self.drawer_open, "drawer")
-        title, box_id, tool_id, topic = self.TABS[self.drawer_tab]
-        for key, (_, box, tool, _t) in self.TABS.items():
+        for key, (_label, box, tool, _t) in self.TABS.items():
             self.query_one(box).display = key == self.drawer_tab
             self.query_one(tool, Tool).set_on(key == self.drawer_tab)
-        panel.topic = topic
-        panel.set_title(title + self._drawer_note())
+        # Переключатель расписания принадлежит одной вкладке и вне её не
+        # висит: кнопка, которая ничего не делает, хуже отсутствующей.
+        on_sched = self.drawer_tab == "sched"
+        for tool_id in ("#tab-src", "#tab-orc"):
+            self.query_one(tool_id, Tool).display = on_sched
         self._draw_journal()
         if self.drawer_tab == "lint":
             self._draw_lint()
         elif self.drawer_tab == "line":
-            # Две секции вкладки: разбор такта под курсором сверху, каталог
-            # тактов всего буфера снизу. Курсор двигается — верхняя живёт.
-            self._draw_line_info(self._cursor_line or 1)
+            # Три секции вкладки: разбор такта под курсором и его цепочка
+            # слева, каталог тактов всего буфера справа.
+            line = self._cursor_line or 1
+            self._draw_line_info(line)
+            self._draw_chain(line)
             self._draw_bundles()
+        self._draw_dock_note()
         self.refresh_hints()
 
-    def _drawer_note(self) -> str:
-        """Что показать в заголовке панели рядом с именем вкладки."""
-        if self.drawer_tab == "lint":
+    def _draw_dock_note(self) -> None:
+        """Итог открытой вкладки — справа в полосе вкладок.
+
+        Раньше это была подпись рамки, и ради одной живой цифры («15 т.»,
+        «3 ошибки», «7 коммитов») экран платил рамкой в две строки. Цифра
+        осталась, рамка ушла.
+        """
+        try:
+            note = self.query_one("#dock-note", Static)
+        except Exception:
+            return
+        t = Text()
+        dim = palette.role_hex("dim")
+        if self.drawer_tab == "sched":
+            t = self._sched_note()
+        elif self.drawer_tab == "lint":
             errs = sum(1 for p in self.problems if p.severity == "error")
             if errs:
-                return (f"   ·   {errs} "
-                        f"{plural(errs, 'ошибка', 'ошибки', 'ошибок')}")
-            if self.findings and not self._stale():
+                t.append(f"{errs} {plural(errs, 'ошибка', 'ошибки', 'ошибок')} ",
+                         style=palette.role_hex("error"))
+            elif self.findings and not self._stale():
                 k = len(self.findings)
-                return (f"   ·   {k} "
-                        f"{plural(k, 'находка', 'находки', 'находок')}")
-            return "   ·   чисто"
-        if self.drawer_tab == "term":
+                t.append(f"{k} {plural(k, 'находка', 'находки', 'находок')} ",
+                         style=palette.role_hex("warning"))
+            else:
+                t.append("чисто ", style=palette.role_hex("success"))
+        elif self.drawer_tab == "term":
             n = len(self.query_one("#console", Console).runs)
-            return (f"   ·   {n} "
-                    f"{plural(n, 'коммит', 'коммита', 'коммитов')}"
-                    if n else "   ·   пусто — F5 станет коммитом #1")
-        n = self.parsed.bundles if self.parsed is not None else 0
-        line = self._cursor_line or 1
-        return (f"   ·   {n} {plural(n, 'команда', 'команды', 'команд')}"
-                f"   ·   стр.{line}")
+            if n:
+                t.append(f"{n} {plural(n, 'коммит', 'коммита', 'коммитов')} ",
+                         style=dim)
+            else:
+                t.append("пусто — F5 станет коммитом #1 ", style=dim)
+        else:
+            n = self.parsed.bundles if self.parsed is not None else 0
+            t.append(f"{n} {plural(n, 'команда', 'команды', 'команд')}"
+                     f"   ·   стр.{self._cursor_line or 1} ", style=dim)
+        note.update(t)
+
+    def _sched_note(self) -> Text:
+        """Итог вкладки РАСПИСАНИЕ: во сколько тактов уложено показанное."""
+        t = Text()
+        left = self._sched_left
+        if self.parsed is None or not self.parsed.ops:
+            t.append("пусто ", style=palette.role_hex("faint"))
+        elif left is None:
+            t.append("не по модели ", style=palette.role_hex("warning"))
+        elif self._sched_which == "src":
+            t.append(f"{left.makespan} т. ", style=palette.role_hex("text"))
+            if self._have_orc():
+                gap = left.makespan - self.orc.schedule.makespan
+                if gap > 0:
+                    t.append(f" −{gap} ", style=palette.role_hex("success"))
+        else:
+            t.append(f"{left.makespan} т. ", style=palette.role_hex("accent"))
+        return t
+
+    def on_dock_tabs_zoom(self, event) -> None:
+        """Двойной клик по полосе вкладок — развернуть док и обратно."""
+        event.stop()
+        self.action_zoom_dock()
 
     def on_line_chip_picked(self, event) -> None:
         event.stop()
@@ -1089,18 +1180,20 @@ class CodeScreen(ModeScreen):
 
     def hint_pairs(self) -> list[tuple[str, str]]:
         pairs = [("F5", "прогнать")]
-        pairs.append(("F12", "панель ↓" if not self.drawer_open else "убрать ↓"))
+        pairs.append(("F12", "док ↓" if self.drawer_open else "док ↑"))
+        pairs.append(("F11", "свернуть док" if self.zoom else "развернуть док"))
         pairs.append(("^P", "команда"))
         # F6 появляется только когда ему есть что делать: пока точного поиска
         # нет, «переписать по оракулу» — обещание без покрытия.
         if self._have_orc():
             pairs.append(("F6", "переписать по оракулу"))
         pairs.append(("^S", "сохранить"))
-        pairs.append(("2×клик", "развернуть блок" if not self.zoom
-                      else "свернуть"))
-        if self.drawer_open:
-            pairs.append(("Esc", "убрать панель"))
         return pairs
+
+    def toggle_hints(self) -> list[tuple[str, str]]:
+        """Подсказки экрана про мышь. Про развороты панелей здесь молчим:
+        панелей с рамками не осталось, разворачивается только док."""
+        return []
 
     def extra_commands(self) -> list[dict]:
         return [
@@ -1141,18 +1234,15 @@ class CodeScreen(ModeScreen):
         self._update_suggest()
         self._draw_line_chip(line)
         self._sync_grid_cursor(line)
-        # Полный разбор пересчитываем, только если он открыт: он стоит куда
-        # дороже строки состояния, а курсор ездит на каждое нажатие стрелки.
-        if self.zoom == "code":
-            self._draw_zoom()
+        # Полный разбор пересчитываем, только если вкладка открыта: он стоит
+        # куда дороже строки состояния, а курсор ездит на каждую стрелку.
         if self.drawer_open and self.drawer_tab == "line":
             self._draw_line_info(line)
+            self._draw_chain(line)
             self._draw_bundles()
-            # Заголовок вкладки несёт номер строки под курсором — он меняется
+            # Итог вкладки несёт номер строки под курсором — он меняется
             # вместе с курсором, а не только при открытии вкладки.
-            title, _, _, _ = self.TABS["line"]
-            self.query_one("#p-drawer", Panel).set_title(
-                title + self._drawer_note())
+            self._draw_dock_note()
 
     def _stale(self) -> bool:
         """Числа точного поиска относятся к другому тексту?"""
@@ -1273,21 +1363,25 @@ class CodeScreen(ModeScreen):
     # --- отрисовка --------------------------------------------------------
 
     def _draw_title(self) -> None:
-        """Заголовок редактора: на чём тут пишут и что открыто.
+        """Полоса файлов: какой буфер открыт, правлен ли он.
 
-        «ИСХОДНИК» сам по себе не отвечает ни на «где писать», ни на «на
-        каком языке» — а это первые два вопроса всякого, кто открыл режим.
-        Язык называется прямо в рамке, а имя файла показывает, правишь ты
-        безымянный буфер или конкретный `.s`.
+        Заменяет рамку с подписью «ИСХОДНИК». Имя рамки отвечало на вопрос,
+        которого никто не задаёт (что это за прямоугольник — и так видно,
+        в нём код), а имя файла — на тот, который задают всегда: правлю я
+        свой `.s` или демо-пример, который не жалко.
         """
-        path = self.app.session.code_path
-        title = "ИСХОДНИК   ·   ассемблер e2k (.s)"
-        if path:
-            title += f"   ·   {path}"
-        elif self._example:
-            title += f"   ·   пример: {example_title(self._example)}"
+        s = self.app.session
+        name = s.code_path or (f"пример: {example_title(self._example)}"
+                               if self._example else "буфер")
+        t = Text()
+        t.append(f" {name} ", style=f"{palette.role_hex('title')} bold "
+                 f"on {palette.SURFACES['raised']}")
+        t.append("  ассемблер e2k (.s)", style=palette.role_hex("faint"))
+        if self._stale():
+            t.append("   ·   правлен после прогона",
+                     style=palette.role_hex("warning"))
         try:
-            self.query_one("#p-code", Panel).set_title(title)
+            self.query_one("#code-file", Static).update(t)
         except Exception:
             pass
 
@@ -1503,21 +1597,10 @@ class CodeScreen(ModeScreen):
             self.query_one(tool, Tool).set_on(
                 both or self.sched_view == name)
 
-        head = self.query_one("#sched-head", Static)
-        t = Text()
-        if self.parsed is None or not self.parsed.ops:
-            t.append("пусто ", style=palette.role_hex("faint"))
-        elif left is None:
-            t.append("не по модели ", style=palette.role_hex("warning"))
-        elif which == "src":
-            t.append(f"{left.makespan} т. ", style=palette.role_hex("text"))
-            if self._have_orc():
-                gap = left.makespan - self.orc.schedule.makespan
-                if gap > 0:
-                    t.append(f"  −{gap} ", style=palette.role_hex("success"))
-        else:
-            t.append(f"{left.makespan} т. ", style=palette.role_hex("accent"))
-        head.update(t)
+        self._sched_left = left
+        self._sched_which = which
+        if self.drawer_tab == "sched":
+            self._draw_dock_note()
         self._draw_sched_side()
 
         wrap = self.query_one("#code-grid-orc-wrap")
@@ -1717,7 +1800,7 @@ class CodeScreen(ModeScreen):
         как резерв. Смешивать их в один список значит уравнять «код считает
         не то» и «код считает медленно».
         """
-        scroll = self.query_one("#lint-scroll", VerticalScroll)
+        scroll = self.query_one("#dock-lint", VerticalScroll)
         scroll.remove_children()
         self._lint_lines = []
         limit = None if self._lint_expanded else 4
@@ -1823,7 +1906,7 @@ class CodeScreen(ModeScreen):
 
     def _lint_width(self) -> int:
         try:
-            return self.query_one("#p-drawer", Panel).size.width - 4
+            return self.query_one("#code-dock", Vertical).size.width - 4
         except Exception:
             return 40
 
@@ -1871,13 +1954,14 @@ class CodeScreen(ModeScreen):
 
     def _goto_line(self, line: int) -> None:
         edit = self.query_one("#code-edit", AsmArea)
-        if self.screen.maximized is not None and self.screen.maximized.id != "p-code":
-            self.minimize()
-            self.query_one("#p-code", Panel).post_message(Panel.Collapsed())
+        # Развёрнутый док прячет половину кода: раз уж прыгаем на строку,
+        # её надо и увидеть.
+        if self.zoom:
+            self.set_zoom("")
         edit.goto_line(line)
         edit.focus()
 
-    # --- «эта строка» (колонка разворота ИСХОДНИКА) ------------------------
+    # --- разбор такта под курсором ----------------------------------------
 
     def _bundle_at(self, line: int):
         """Широкая команда, внутри которой стоит курсор.
@@ -1924,10 +2008,10 @@ class CodeScreen(ModeScreen):
         Это не разбор одной строки покрупнее — это ответ на вопрос «где
         вообще теряется ширина» по всему буферу сразу: полоска занятости
         у каждого такта, клик ведёт курсор в эту пачку. Свои дети — только
-        у #drawer-bundles: разбор строки под курсором (#code-line-info)
+        у #dock-bundles: разбор такта под курсором (#code-line-info)
         живёт выше и курсором же обновляется, стирать его нельзя.
         """
-        box = self.query_one("#drawer-bundles", VerticalScroll)
+        box = self.query_one("#dock-bundles", VerticalScroll)
         box.remove_children()
         if self.parsed is None or not self.parsed.ops:
             box.mount(Static(Text("  буфер пуст",
@@ -2047,50 +2131,31 @@ class CodeScreen(ModeScreen):
                          style=palette.role_hex(role))
         target.update(t)
 
-    # --- развороты --------------------------------------------------------
+    # --- разворот дока ------------------------------------------------------
 
-    def on_panel_expanded(self, event) -> None:
-        """Разворот блока. Здесь он ДОБАВЛЯЕТ, а не убирает.
+    def action_zoom_dock(self) -> None:
+        """Док на две трети экрана и обратно — двойной клик по полосе вкладок.
 
-        Встроенный maximize показывает ровно один виджет и прячет всё
-        остальное — от этого разворот редактора отбирал расписание, полосу
-        состояния и нижнюю панель, то есть чем глубже работаешь, тем меньше
-        видно. Свой разворот отдаёт блоку место за счёт соседей, но их не
-        убирает, и раскрывает то, чему в обычном виде места не было:
-        у ИСХОДНИКА — разбор строки и цепочку зависимостей, у РАСПИСАНИЯ —
-        загрузку портов и список перестановок, у нижнего блока — высоту.
+        Разворот здесь ДОБАВЛЯЕТ, а не убирает: редактор остаётся на экране,
+        а вкладка получает то, чему в трети экрана места не было — вторую
+        решётку рядом с первой, полные тексты замечаний с советами, журнал
+        сессии вместо ленты вывода.
         """
-        event.stop()
-        want = {"p-code": "code", "p-code-sched": "sched",
-                "p-drawer": "drawer"}.get(getattr(event.panel, "id", ""), "")
-        self.set_zoom("" if want == self.zoom else want)
-
-    def on_panel_collapsed(self, event) -> None:
-        event.stop()
-        self.set_zoom("")
+        self.set_zoom("" if self.zoom else "dock")
 
     def set_zoom(self, zoom: str) -> None:
         self.zoom = zoom
-        for key in ("code", "sched", "drawer"):
-            self.set_class(zoom == key, f"zoom-{key}")
-        # Развёрнутый блок обязан быть виден: нижний открывается сам.
-        if zoom == "drawer" and not self.drawer_open:
+        self.set_class(bool(zoom), "zoom-dock")
+        # Развёрнутый док обязан быть виден.
+        if zoom and not self.drawer_open:
             self.open_drawer(self.drawer_tab)
-        self._sched_expanded = zoom == "sched"
-        self._lint_expanded = zoom == "drawer" and self.drawer_tab == "lint"
-        self._console_expanded = zoom == "drawer" and self.drawer_tab == "term"
-        self._code_expanded = zoom == "code"
+        self._sched_expanded = bool(zoom) and self.drawer_tab == "sched"
+        self._lint_expanded = bool(zoom) and self.drawer_tab == "lint"
+        self._console_expanded = bool(zoom) and self.drawer_tab == "term"
         self._draw_grids()
-        self._draw_zoom()
         if self.drawer_open:
             self._draw_drawer()
         self.refresh_hints()
-
-    def _draw_zoom(self) -> None:
-        """Колонки, которые появляются только в развороте ИСХОДНИКА."""
-        line = self._cursor_line or 1
-        self._draw_line_info(line, "#code-line-body")
-        self._draw_chain(line)
 
     def _draw_chain(self, line: int) -> None:
         """Цепочка зависимостей строки: кто её кормит и кто ждёт её.
@@ -2173,7 +2238,7 @@ class CodeScreen(ModeScreen):
         self._sync_drawer_bridge()
 
     def _sync_drawer_bridge(self) -> None:
-        """Ряд мостика во вкладке ОТЧЁТ — по выбору в истории сессии."""
+        """Ряд мостика во вкладке ВЫВОД — по выбору в истории сессии."""
         try:
             row = self.query_one("#drawer-bridge", BridgeRow)
             journal = self.query_one("#journal", ConsoleJournal)
@@ -2184,7 +2249,7 @@ class CodeScreen(ModeScreen):
     # --- инструменты панелей ----------------------------------------------
 
     def panel_tool(self, tool: str) -> None:
-        if tool.startswith("drawer-"):
+        if tool.startswith("dock-"):
             self.open_drawer(tool.split("-", 1)[1])
         elif tool == "code-save":
             self.action_save_code()
@@ -2192,8 +2257,6 @@ class CodeScreen(ModeScreen):
             self.action_rewrite()
         elif tool == "code-broken":
             self._load_example_named("broken")
-        elif tool == "open-sched":
-            self._open_panel("#p-code-sched", "sched")
         elif tool == "sched-src":
             self._sched_view("src")
         elif tool == "sched-orc":
@@ -2344,11 +2407,6 @@ class CodeScreen(ModeScreen):
         if instr is not None and self.parsed is not None:
             self._goto_line(self.parsed.ops[instr].line)
 
-    def _open_panel(self, selector: str, topic: str) -> None:
-        panel = self.query_one(selector, Panel)
-        self.maximize(panel, container=False)
-        panel.post_message(Panel.Expanded(panel))
-
     # --- факты для ИИ ------------------------------------------------------
 
     def panel_facts(self, topic: str) -> list[str]:
@@ -2428,11 +2486,11 @@ class CodeScreen(ModeScreen):
         super().handle_line(line)
 
     def action_back(self) -> None:
-        """Esc — шаг наружу. В КОДЕ первый шаг наружу это закрыть ящик.
+        """Esc — шаг наружу: подсказка, разворот дока, курсор в код, режим.
 
-        Строка ввода больше не отдельное место, куда «выходят» из редактора:
-        она внутри ОТЧЁТА. Поэтому каскад короче — закрыть панель, потом
-        свернуть разворот, потом уйти из режима.
+        Док по Esc НЕ закрывается: он открыт по умолчанию и является частью
+        обычного вида, а не всплывшим окном. Закрывать умолчание клавишей
+        «назад» значило бы каждый раз возвращать его руками.
         """
         sug = self.suggest
         if sug is not None and sug.display:
@@ -2442,8 +2500,9 @@ class CodeScreen(ModeScreen):
         if self.zoom:
             self.set_zoom("")
             return
-        if self.drawer_open:
-            self.close_drawer()
+        edit = self.query_one("#code-edit", AsmArea)
+        if not edit.has_focus:
+            edit.focus()
             return
         super().action_back()
 

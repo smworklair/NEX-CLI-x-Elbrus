@@ -1355,12 +1355,12 @@ class TestCodeScreen(unittest.TestCase):
             return (op.line,
                     str(screen.query_one("#code-line-chip").content),
                     str(screen.query_one("#code-line-info").content),
-                    screen.query_one("#p-drawer")._title)
+                    str(screen.query_one("#dock-note").content))
 
-        line, chip, info, title = self._screen(body)
+        line, chip, info, note = self._screen(body)
         self.assertIn(f"стр.{line}", chip)
         self.assertIn("латентность", info)
-        self.assertIn(str(line), title)
+        self.assertIn(str(line), note)
 
     def test_run_fills_the_oracle_and_the_moves(self):
         """F5 доводит до конца: точный поиск, находки и список перестановок."""
@@ -1453,23 +1453,36 @@ class TestCodeScreen(unittest.TestCase):
 
         self.assertEqual(self._screen(body), [(2, "parse")])
 
-    def test_drawer_is_closed_until_asked(self):
-        """Нижняя панель закрыта, пока не позвали: экран отдан коду."""
+    def test_dock_opens_on_the_schedule_and_f12_takes_it_away(self):
+        """Док открыт на РАСПИСАНИИ, F12 убирает его — и код занимает всё.
+
+        Два требования разом, и второе важнее первого. Расписание видно
+        сразу, без клавиши, о которой надо знать: это ответ на вопрос, ради
+        которого экран и открывают. Но панели независимы — убрал док, и
+        редактор работает дальше, просто во весь экран. Пока снизу было ДВА
+        окна, убрать их было нечем: расписание стояло всегда.
+        """
         async def body(screen, pilot, session):
-            was = (screen.drawer_open,
-                   screen.query_one("#p-drawer").display)
+            open_at_start = (screen.drawer_open, screen.drawer_tab,
+                             screen.query_one("#code-dock").display,
+                             screen.query_one("#dock-sched").display)
+            tall_with_dock = screen.query_one("#code-edit").size.height
             await pilot.press("f12")
             await pilot.pause()
-            now = (screen.drawer_open,
-                   screen.query_one("#p-drawer").display)
-            await pilot.press("escape")
+            hidden = (screen.drawer_open,
+                      screen.query_one("#code-dock").display)
+            tall_without = screen.query_one("#code-edit").size.height
+            await pilot.press("f12")
             await pilot.pause()
-            return was, now, screen.drawer_open
+            return (open_at_start, tall_with_dock, hidden, tall_without,
+                    screen.drawer_open)
 
-        was, now, after_esc = self._screen(body)
-        self.assertEqual(was, (False, False))
-        self.assertEqual(now, (True, True))
-        self.assertFalse(after_esc, "Esc обязан убирать панель первым шагом")
+        start, tall, hidden, without, back = self._screen(body)
+        self.assertEqual(start, (True, "sched", True, True))
+        self.assertEqual(hidden, (False, False))
+        self.assertGreater(without, tall,
+                           "без дока редактор обязан занять его место")
+        self.assertTrue(back, "F12 обязан возвращать док")
 
     def test_ctrl_p_opens_the_terminal_tab(self):
         """^P — команда: панель на ОТЧЁТЕ, слэш уже введён.
@@ -1498,11 +1511,12 @@ class TestCodeScreen(unittest.TestCase):
             edit.move_cursor(edit.document.end)
             await pilot.press("slash")
             await pilot.pause()
-            return edit.text.endswith("/"), screen.drawer_open
+            return edit.text.endswith("/"), screen.drawer_tab
 
-        typed, opened = self._screen(body)
+        typed, tab = self._screen(body)
         self.assertTrue(typed, "слэш не напечатался в редакторе")
-        self.assertFalse(opened, "редактор не должен открывать панель")
+        self.assertEqual(tab, "sched",
+                         "набор в редакторе не должен переключать вкладку")
 
     def test_broken_example_is_actually_caught(self):
         """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""

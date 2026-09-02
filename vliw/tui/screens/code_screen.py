@@ -94,7 +94,8 @@ def example_title(name: str) -> str:
     return name
 
 
-CONT = "↓"        # клетка занята продолжением длинной операции
+CONT = "═"        # клетка занята продолжением длинной операции
+                  # (тянется вправо: решётка развёрнута, см. _fill_grid)
 EMPTY = "·"
 
 
@@ -614,14 +615,13 @@ class CodeScreen(ModeScreen):
                     id="code-main"),
                 title="ИСХОДНИК", id="p-code", topic="code",
                 has_own_input=True, soft=True)   # заголовок дополняется в _draw_title
+            # Тулбара у расписания НЕТ намеренно. «прогнать» и «переписать по
+            # оракулу» стояли и здесь, и у редактора — одно действие в двух
+            # местах заставляет гадать, разные ли они. По правилу IDE действие
+            # живёт в одном месте, у редактора. «к коду» убран по той же
+            # причине: клик по клетке и так прыгает на строку операции
+            # (on_data_table_cell_selected), кнопка дублировала клик.
             yield Panel(
-                PanelToolbar(
-                    ("к коду", "sched-to-code",
-                     "курсор на строку операции из клетки под курсором"),
-                    ("▶ прогнать", "/code run", "пересчитать буфер (F5)"),
-                    ("переписать по оракулу", "code-rewrite",
-                     "разложить операции так, как их кладёт поиск (F6)"),
-                ),
                 Horizontal(
                     Tool("как написано", "sched-src",
                          "расписание из самого буфера", id="tab-src"),
@@ -1461,14 +1461,16 @@ class CodeScreen(ModeScreen):
         колонке жертвуем буквами мнемоники, а не столбцами: мнемоника целиком
         всё равно написана в коде слева.
         """
-        if self._sched_expanded:
-            return 8
-        try:
-            avail = self.query_one("#p-code-sched", Panel).size.width - 4
-        except Exception:
-            avail = 40
-        model = self.app.session.model()
-        return max(4, min(6, (avail - 5) // max(1, model.width)))
+        # После разворота решётки колонка — это ТАКТ, а тактов много, и они
+        # прокручиваются вбок. Значит ужимать клетку под ширину панели больше
+        # не нужно: раньше шесть каналов обязаны были влезть одновременно,
+        # теперь одновременно обязаны влезть шесть КАНАЛОВ ПО ВЕРТИКАЛИ, а с
+        # этим проблем нет — их всегда ровно шесть.
+        #
+        # Восемь символов: столько занимают самые длинные мнемоники, которые
+        # реально встречаются в выводе lcc (`fdtoistr`, `fmul_add`). Меньше —
+        # и обрезка снова начинает съедать смысл.
+        return 8
 
     def _have_orc(self) -> bool:
         return self.orc is not None and not self._stale()
@@ -1539,24 +1541,35 @@ class CodeScreen(ModeScreen):
             target.update(Text("расписания пока нет — F5", style=dim))
             return
 
-        t.append("ЗАГРУЗКА ПОРТОВ\n", style=palette.role_hex("title"))
-        t.append("  канал" + "написано".rjust(10) + "поиск".rjust(9) + "\n",
-                 style=palette.role_hex("faint"))
+        # Панель теперь низкая и широкая (раскладка как в IDE: расписание
+        # пристыковано снизу), поэтому разбор ужат под высоту, а не под
+        # ширину. Загрузка портов занимала семь строк таблицей — свёрнута в
+        # одну: она отвечает на вопрос «где тесно», и для этого достаточно
+        # видеть числа в ряд.
+        try:
+            avail = max(4, self.query_one("#sched-side").size.height - 1)
+        except Exception:
+            avail = 9
+
+        t.append("ПОРТЫ  ", style=palette.role_hex("title"))
         for port in range(model.width):
             src = self._port_load(self.comp, port)
-            orc = (self._port_load(self.orc.schedule, port)
-                   if self._have_orc() else None)
-            t.append(f"  {model.port_label(port):<5}", style=dim)
-            t.append(f"{src:>10}",
-                     style=palette.role_hex("text" if src else "faint"))
-            if orc is not None:
+            t.append(f"{model.port_label(port)}:", style=palette.role_hex("faint"))
+            t.append(f"{src} ", style=palette.role_hex("text" if src else "faint"))
+        t.append("\n")
+        if self._have_orc():
+            t.append("поиск  ", style=palette.role_hex("faint"))
+            for port in range(model.width):
+                src = self._port_load(self.comp, port)
+                orc = self._port_load(self.orc.schedule, port)
                 role = "success" if orc > src else ("dim" if orc == src
                                                     else "warning")
-                t.append(f"{orc:>9}", style=palette.role_hex(role))
+                t.append(f"{model.port_label(port)}:",
+                         style=palette.role_hex("faint"))
+                t.append(f"{orc} ", style=palette.role_hex(role))
             t.append("\n")
         if self.comp is not None:
-            t.append(f"\nслоты заняты на "
-                     f"{self.comp.slot_utilization * 100:.0f}%", style=dim)
+            t.append(f"слоты {self.comp.slot_utilization * 100:.0f}%", style=dim)
             if self._have_orc():
                 t.append(f"  →  "
                          f"{self.orc.schedule.slot_utilization * 100:.0f}%",
@@ -1565,13 +1578,17 @@ class CodeScreen(ModeScreen):
 
         moves = self._moves()
         if moves:
-            t.append(f"\nЧТО ПЕРЕСТАВЛЕНО   {len(moves)}\n",
+            # Сколько строк осталось под список после шапки портов.
+            room = max(1, avail - (4 if self._have_orc() else 3))
+            t.append(f"\nПЕРЕСТАВИТЬ   {len(moves)}\n",
                      style=palette.role_hex("title"))
-            for line, text in moves[:12]:
+            shown = moves[:room]
+            for line, text in shown:
                 t.append_text(text)
                 t.append("\n")
-            if len(moves) > 12:
-                t.append(f"      ещё {len(moves) - 12}\n",
+            if len(moves) > len(shown):
+                t.append(f"      ещё {len(moves) - len(shown)}"
+                         f"  —  F12 развернёт панель\n",
                          style=palette.role_hex("faint"))
             t.append("\nF6 разложит буфер именно так\n",
                      style=palette.role_hex("accent2"))
@@ -1599,11 +1616,23 @@ class CodeScreen(ModeScreen):
         busy = sched.busy_map()
         used = {p.channel for p in sched.placements.values()}
         cw = self._cell_w()
-        for p in range(model.width):
-            idle = p not in used
-            label = Text(model.port_label(p),
-                         style=palette.role_hex("faint" if idle else "dim"))
-            table.add_column(label, width=4 if idle else cw, key=str(p))
+        span = max(sched.span_cycles, 1)
+
+        # РЕШЁТКА РАЗВЁРНУТА: такты по горизонтали, каналы по вертикали.
+        #
+        # Было наоборот, и форма не совпадала с содержимым. Настоящее
+        # расписание разрежено: в обычном участке 34 такта на 9 операций, то
+        # есть 204 клетки при девяти занятых — интерфейс сам печатал «слоты
+        # заняты на 4%». В прежней раскладке это давало три десятка почти
+        # пустых строк, а шесть каналов ютились по ширине и обрезались.
+        #
+        # Развёрнутая решётка всегда ровно шесть строк — по числу каналов, и
+        # это число не растёт. Простой делителя виден одной длинной полосой
+        # вместо одиннадцати пустых строк, а прокрутка идёт вбок по тактам,
+        # то есть по той оси, вдоль которой расписание и длинное.
+        for cycle in range(span):
+            head = Text(f"т{cycle}", style=palette.role_hex("dim"))
+            table.add_column(head, width=cw, key=str(cycle))
 
         # Красная клетка значит «так написано и так нельзя». В решётке
         # точного поиска раскладка законна по построению — красить там
@@ -1611,26 +1640,28 @@ class CodeScreen(ModeScreen):
         bad = ({p.op for p in self.problems
                 if p.severity == "error" and p.op >= 0}
                if which == "src" else set())
-        span = max(sched.span_cycles, 1)
-        for cycle in range(span):
+
+        for port in range(model.width):
             cells = []
-            issued = 0
-            for port in range(model.width):
+            for cycle in range(span):
                 slot = busy.get((cycle, port))
                 if slot is None:
                     cells.append(Text(f" {EMPTY}",
                                       style=palette.role_hex("faint")))
                     continue
-                instr, head = slot
+                instr, head_cell = slot
                 self._grid_cells[(which, cycle, port)] = instr
                 style = palette.op_style(dag[instr].op)
-                if not head:
-                    cells.append(Text(f" {CONT}", style=style))
+                if not head_cell:
+                    # Продолжение длинной операции тянется теперь ВПРАВО, а не
+                    # вниз: занятость порта во времени — это горизонталь.
+                    cells.append(Text(" " + CONT * max(1, cw - 2), style=style))
                     continue
-                issued += 1
                 cells.append(self._cell_text(instr, cw, instr in bad))
-            table.add_row(*cells, label=self._row_label(cycle, issued,
-                                                        model.width))
+            idle = port not in used
+            label = Text(model.port_label(port),
+                         style=palette.role_hex("faint" if idle else "dim"))
+            table.add_row(*cells, label=label)
 
     def _cell_text(self, instr: int, width: int, bad: bool) -> Text:
         """Клетка — мнемоника из исходника, а не «i7»: код перед глазами."""
@@ -1645,14 +1676,11 @@ class CodeScreen(ModeScreen):
         t.append(name[:width - 1], style=style)
         return t
 
-    def _row_label(self, cycle: int, issued: int, width: int) -> Text:
-        """Номер такта и сколько слотов из шести занято именно в нём."""
-        t = Text(f"т{cycle}".rjust(4), style=palette.role_hex("dim"))
-        if self._sched_expanded:
-            role = "success" if issued >= width - 1 else (
-                "warning" if issued <= 1 else "dim")
-            t.append(f" {issued}/{width}", style=palette.role_hex(role))
-        return t
+    # _row_label удалён вместе с разворотом решётки. Он подписывал строку
+    # номером такта и долей занятых слотов («т12 2/6»). После разворота строка
+    # — это канал, а доля занятости и так видна глазами: в развёрнутой решётке
+    # плотный такт выглядит как вертикальный столбик заполненных клеток.
+    # Дробь дублировала то, что решётка показывает без слов, и съедала место.
 
     def _sync_grid_cursor(self, line: int) -> None:
         """Курсор в коде → клетка в решётке. Связь в обе стороны."""
@@ -1663,16 +1691,18 @@ class CodeScreen(ModeScreen):
             if which != "src" or instr != op.index:
                 continue
             table = self.query_one("#code-grid", DataTable)
-            if cycle < table.row_count and port < len(table.columns):
-                table.move_cursor(row=cycle, column=port)
+            # Решётка развёрнута: строка — канал, колонка — такт.
+            if port < table.row_count and cycle < len(table.columns):
+                table.move_cursor(row=port, column=cycle)
             return
 
     def on_data_table_cell_selected(self, event) -> None:
         """Клик по клетке — курсор на строку этой операции в исходнике."""
         event.stop()
         which = "orc" if event.data_table.id == "code-grid-orc" else "src"
-        instr = self._grid_cells.get((which, event.coordinate.row,
-                                      event.coordinate.column))
+        # Решётка развёрнута: coordinate.row — канал, coordinate.column — такт.
+        instr = self._grid_cells.get((which, event.coordinate.column,
+                                      event.coordinate.row))
         if instr is None or self.parsed is None or instr >= len(self.parsed.ops):
             return
         self._goto_line(self.parsed.ops[instr].line)

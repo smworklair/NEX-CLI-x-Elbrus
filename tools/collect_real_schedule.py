@@ -134,6 +134,10 @@ MNEMONICS: dict[str, str] = {
     'movad': 'MOVA', 'movaqp': 'MOVA',
     'movaq': 'MOVAQ',
     'incr': 'INCR',
+    # Преобразования формата, каналы ,0 ,1 ,3 ,4 сняты у ассемблера.
+    'istofd': 'CONV', 'istofs': 'CONV', 'idtofd': 'CONV', 'idtofs': 'CONV',
+    'fdtoistr': 'CONV', 'fstoistr': 'CONV', 'fdtois': 'CONV', 'fstois': 'CONV',
+    'fdtoid': 'CONV', 'fstoid': 'CONV', 'fdtofs': 'CONV', 'fstofd': 'CONV',
     'fdivs': 'FDIV',
     'fdivd': 'FDIV',
     'cmpesb': 'PRED',
@@ -242,14 +246,16 @@ NO_DST = {"STORE"}
 # видел, ПРОТИВ ЧЕГО считались нижние границы, и мог поправить.
 _LATENCY = {"ADD": 1, "SUB": 1, "AND": 1, "SHL": 1,
             "MUL": 4, "DIV": 11, "LOAD": 5, "STORE": 2,
-            "FMA": 8, "MOVA": 1, "MOVAQ": 1, "INCR": 1}
+            "FMA": 8, "MOVA": 1, "MOVAQ": 1, "INCR": 1,
+            "CONV": 4}
 _OCCUPANCY = {"DIV": 2}                       # остальные по умолчанию 1
 _LAT_SOURCE = {"ADD": "измерено", "SUB": "измерено",
                "AND": "допущение", "SHL": "допущение",
                "MUL": "измерено", "DIV": "измерено",
                "LOAD": "измерено", "STORE": "измерено",
                "FMA": "измерено", "MOVA": "допущение",
-               "MOVAQ": "допущение", "INCR": "допущение"}
+               "MOVAQ": "допущение", "INCR": "допущение",
+               "CONV": "измерено"}
 _CHANNELS = {
     "ADD": (0, 1, 2, 3, 4, 5), "SUB": (0, 1, 2, 3, 4, 5),
     "AND": (0, 1, 2, 3, 4, 5), "SHL": (0, 1, 2, 3, 4, 5),
@@ -257,7 +263,7 @@ _CHANNELS = {
     "LOAD": (0, 2, 3, 5), "STORE": (2, 5),
     "FMA": (0, 1, 2, 3, 4, 5),
     "MOVA": (0, 1, 2, 3), "MOVAQ": (0, 2),
-    "INCR": (0, 1, 2, 3, 4, 5),
+    "INCR": (0, 1, 2, 3, 4, 5), "CONV": (0, 1, 3, 4),
 }
 WIDTH = 6
 

@@ -692,9 +692,21 @@ ModeScreen.tight #p-console { height: 8; }
    Ряд, который она занимала всегда, отдан коду.
 */
 
-#code-body { height: 1fr; width: 100%; }
-#p-code { width: 1fr; min-width: 40; }
-#p-code-sched { width: 42; height: 100%; }
+/* Раскладка по образцу IDE: редактор занимает всю ширину и главную часть
+   высоты, расписание пристыковано СНИЗУ инструментальным окном.
+
+   Раньше они стояли рядом по горизонтали и делили ширину пополам. Это было
+   верно, пока решётка была узкой и длинной (шесть каналов в столбцах, такты
+   в строках). После разворота решётки — шесть строк по числу каналов, такты
+   по горизонтали — форма сменилась на широкую и низкую, и место сбоку стало
+   неправильным: колонка отбирала у кода половину ширины, чтобы показать
+   шесть строк.
+
+   Вертикальная раскладка тут уже была, но как запасная — для узких
+   терминалов (ModeScreen.tight ниже). Теперь она основная. */
+#code-body { height: 1fr; width: 100%; layout: vertical; }
+#p-code { width: 100%; height: 1fr; min-height: 10; }
+#p-code-sched { width: 100%; height: 13; }
 
 #code-edit {
     height: 1fr;
@@ -768,9 +780,19 @@ ModeScreen.tight #p-console { height: 8; }
     color: $nex-title;
 }
 
-/* Разбор решётки — только в развороте. */
+/* Разбор решётки: «что переставить» и загрузка портов.
+
+   Раньше пряталось до разворота — панель расписания стояла сбоку и была
+   всего 42 колонки шириной, туда не влезало ничего кроме самой решётки.
+   После перевода раскладки на вертикальную панель занимает всю ширину
+   (146 колонок на терминале 150), и разбор помещается рядом с решёткой.
+
+   Показывать его по умолчанию правильно ещё и по сути: список «что
+   переставить» — единственное здесь, что говорит, ЧТО ДЕЛАТЬ. Прятать
+   ответ за разворот, оставляя на виду одни данные, — это ровно та ошибка,
+   из-за которой экран читался как набор панелей без вывода. */
 #sched-side {
-    display: none;
+    display: block;
     width: 46;
     height: 100%;
     border-left: thick $nex-line 35%;
@@ -824,13 +846,15 @@ Panel.-maximized #sched-side { display: block; }
 
 /* --- узкое окно --------------------------------------------------------- */
 
-ModeScreen.narrow #p-code-sched { width: 38; }
+ModeScreen.narrow #p-code-sched { height: 11; }
 
 /* Совсем узкое окно: расписание уходит ПОД редактор, а не жмёт его сбоку.
    34 знака кода — это не работа. */
-ModeScreen.tight #code-body { layout: vertical; }
-ModeScreen.tight #p-code-sched { width: 100%; height: 11; }
-ModeScreen.tight Panel.-maximized #sched-side { display: none; }
+/* tight: основная раскладка уже вертикальная, узкому терминалу остаётся
+   только ужать расписание — коду высота нужнее. */
+ModeScreen.tight #p-code-sched { height: 10; }
+ModeScreen.tight #sched-side { display: none; }
+ModeScreen.narrow #sched-side { width: 34; }
 
 /* Узкое окно с открытой панелью: расписание уступает ей место. Иначе на
    тридцати строках получается три этажа по пять строк каждый, и код,
@@ -892,12 +916,12 @@ ModeScreen.zoom-code #code-zoom-col {
 
 /* Расписание в развороте кода сжимается до самого нужного — номер такта и
    занятые каналы, — но не исчезает: это то, ради чего в редакторе сидят. */
-ModeScreen.zoom-code #p-code-sched { width: 26; }
+ModeScreen.zoom-code #p-code-sched { height: 9; }
 
 /* Разворот РАСПИСАНИЯ: решётка забирает ширину, код остаётся полоской —
    видно, на какой строке стоишь, но место отдано тому, что разворачивали. */
-ModeScreen.zoom-sched #p-code { width: 44; }
-ModeScreen.zoom-sched #p-code-sched { width: 1fr; }
+ModeScreen.zoom-sched #p-code { height: 8; }
+ModeScreen.zoom-sched #p-code-sched { height: 1fr; }
 ModeScreen.zoom-sched #sched-side { display: block; }
 ModeScreen.zoom-sched #code-grid-orc-wrap { display: block; }
 

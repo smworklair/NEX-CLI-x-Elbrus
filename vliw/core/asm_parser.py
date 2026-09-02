@@ -82,6 +82,10 @@ MNEMONICS: dict[str, str] = {
     # ВЫВОД ИЗ НАБЛЮДЕНИЯ, а не из пробы: изолированно ассемблер `incr` не
     # принимает вовсе, поэтому перебрать каналы, как для остальных, нельзя.
     "incr": "INCR",
+    # Преобразования формата, каналы ,0 ,1 ,3 ,4 сняты у ассемблера.
+    "istofd": "CONV", "istofs": "CONV", "idtofd": "CONV", "idtofs": "CONV",
+    "fdtoistr": "CONV", "fstoistr": "CONV", "fdtois": "CONV", "fstois": "CONV",
+    "fdtoid": "CONV", "fstoid": "CONV", "fdtofs": "CONV", "fstofd": "CONV",
     "fdivs": "FDIV", "fdivd": "FDIV",
 
     # Сравнения, кладущие результат в предикат. Их много и они разные по

@@ -366,6 +366,21 @@ _OPS: dict[str, OpClass] = {
     "MOVAQ": OpClass("MOVAQ", latency=1, latency_source=ASSUMED, free_slot=True),
     "INCR": OpClass("INCR", latency=1, latency_source=ASSUMED, free_slot=True),
 
+    # Преобразования формата: istofd (целое→вещественное), fdtoistr
+    # (вещественное→целое с округлением), fdtofs (двойная→одинарная) и родня.
+    # Заведены 02.09.2026: в настоящем коде они попадались как UNKNOWN, и это
+    # было видно прямо в интерфейсе — «UNKNOWN лат.1» в строке состояния.
+    #
+    # Каналы ,0 ,1 ,3 ,4 — сняты у ассемблера у всех девяти мнемоник семейства.
+    # Совпадает с описанием из главы 4 руководства МЦСТ: вещественные
+    # устройства стоят в АЛУ0, АЛУ1, АЛУ3 и АЛУ4.
+    #
+    # Латентность 4 — измерена цепочкой (examples/probes/conv_latency.c):
+    # fdtoistr -> istofd -> faddd -> fdtoistr, все шаги ровно по 4 такта.
+    # Совпадает с классом Fp официальной таблицы.
+    "CONV": OpClass("CONV", latency=4, occupancy=1,
+                    latency_source=CHAIN, occupancy_source=ASSUMED),
+
     # Сращённые операции вида `shl_adds`, `getf_adds` — сдвиг и сложение за
     # один такт. Только ,1 и ,4: их умеют не все арифметические устройства.
     "COMBO": OpClass("COMBO", latency=1, latency_source=ASSUMED),
@@ -484,6 +499,7 @@ _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
     "MOVA": (0, 1, 2, 3),       # movab/h/w/d/qp — сняты у ассемблера
     "MOVAQ": (0, 2),            # четверной уже: ассемблер отвергает ,1 и ,3
     "INCR": (0, 1, 2, 3, 4, 5), # канал не занимает (free_slot), см. asm_parser
+    "CONV": (0, 1, 3, 4),       # преобразования формата — сняты у ассемблера
     "COMBO": COMBO_PORTS,
     "INSF": INSF_PORTS,
     "MERGE": MERGE_PORTS,

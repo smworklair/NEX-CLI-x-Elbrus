@@ -2104,6 +2104,137 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCodeFilesAreTabs(unittest.TestCase):
+    """Открытых буферов может быть несколько, и они не затирают друг друга.
+
+    Пока буфер был один на сессию, «посмотреть пример» значило потерять свой
+    код: `/example` писал прямо в него. Сравнение двух участков — своего и
+    того, что выдал lcc, — при этом было невозможно вовсе, а это основная
+    работа в инструменте.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_example_opens_a_tab_and_does_not_eat_the_buffer(self) -> None:
+        """Пример открывается вкладкой, а свой код остаётся на месте."""
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.text = "{\n  adds,0 %r1, %r2, %r3\n}\n"
+            screen.reparse()
+            await pilot.pause()
+            mine = edit.text
+            screen.handle_line("/example divport")
+            await pilot.pause()
+            await pilot.pause()
+            names = [r["name"] for r in screen.files]
+            shown = edit.text
+            # Назад на свою вкладку — текст обязан вернуться целиком.
+            screen.select_file(0)
+            await pilot.pause()
+            return mine, names, shown, edit.text
+
+        mine, names, shown, back = self._screen(body)
+        self.assertEqual(len(names), 2, f"вкладок должно быть две: {names}")
+        self.assertIn("divport.s", names)
+        self.assertNotEqual(shown, mine, "пример не открылся")
+        self.assertEqual(back, mine, "свой код потерян при переключении")
+
+    def test_edits_survive_switching_between_tabs(self) -> None:
+        """Правка запоминается за вкладкой, а не за экраном."""
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            screen.open_file("{\n  adds,0 %r1, %r2, %r3\n}\n", "второй.s")
+            await pilot.pause()
+            edit.text = edit.text + "! правка второго\n"
+            screen.reparse()
+            await pilot.pause()
+            screen.select_file(0)
+            await pilot.pause()
+            first = edit.text
+            screen.select_file(1)
+            await pilot.pause()
+            return first, edit.text
+
+        first, second = self._screen(body)
+        self.assertNotIn("правка второго", first,
+                         "правка протекла в чужую вкладку")
+        self.assertIn("правка второго", second, "правка не сохранилась")
+
+    def test_the_last_tab_cannot_be_closed(self) -> None:
+        """Пустого редактора без единого буфера быть не должно."""
+        async def body(screen, pilot, session):
+            screen.close_file(0)
+            await pilot.pause()
+            return len(screen.files)
+
+        self.assertEqual(self._screen(body), 1)
+
+    def test_catalog_on_the_left_opens_a_real_file(self) -> None:
+        """Каталог слева — вход в работу: клик открывает файл вкладкой."""
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(screen, pilot, session):
+            item = next(i for i in screen.query(SideItem)
+                        if i.key.endswith("probe.s"))
+            item.post_message(SideItem.Picked(item.key))
+            await pilot.pause()
+            await pilot.pause()
+            return ([r["name"] for r in screen.files],
+                    screen.files[screen.file_i]["path"],
+                    len(screen.query_one("#code-edit").text))
+
+        names, path, size = self._screen(body)
+        self.assertIn("probe.s", names)
+        self.assertTrue(path.endswith("probe.s"),
+                        f"путь не запомнен — ^S не будет знать, куда писать: {path}")
+        self.assertGreater(size, 0, "файл открылся пустым")
+
+    def test_gutter_arrow_runs_the_buffer(self) -> None:
+        """Стрелка в гуттере — то же, что F5. Действие живёт у строки.
+
+        Ряд текстовых кнопок над кодом убран, и если стрелка не работает,
+        мышью прогнать буфер становится нечем.
+        """
+        from vliw.tui.screens.code_screen import AsmArea
+
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit", AsmArea)
+            before = screen.orc
+            edit.post_message(AsmArea.RunHere())
+            await pilot.pause()
+            await screen.app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.pause()
+            return before, screen.orc
+
+        before, after = self._screen(body)
+        self.assertIsNone(before)
+        self.assertIsNotNone(after, "клик по стрелке не запустил поиск")
+
+    def test_gutter_keeps_the_arrow_out_of_the_text(self) -> None:
+        """Ширина гуттера учитывает колонку действия.
+
+        Иначе клик по коду попадал бы на две колонки левее, чем виден
+        курсор, — и это заметно только руками, тестом «экран поднялся» нет.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            return edit.gutter_width, edit.RUN_W + edit.BADGE_W
+
+        width, expected = self._screen(body)
+        self.assertEqual(width, expected)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestLabSleepBar(unittest.TestCase):
     """Вторая строка шапки РАЗБОРА: факты трёх спящих режимов.
 

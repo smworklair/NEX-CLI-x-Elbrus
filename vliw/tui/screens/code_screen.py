@@ -235,6 +235,13 @@ class AsmArea(TextArea):
     MIN_MARK_W = 3
     MAX_MARK_W = 10
 
+    #: Колонка действия в самом начале гуттера: `▷` на строке под курсором.
+    #: Гуттер несёт действие — так запуск живёт в IDE, стрелкой у строки, а
+    #: не рядом текстовых кнопок над кодом. Ряд кнопок отбирал целую строку
+    #: экрана всегда и повторял то, что уже написано в подсказках клавиш;
+    #: стрелка стоит там, где и так лежит взгляд, и не стоит ни строки.
+    RUN_W = 2
+
     #: Пустая разметка на уровне класса, а не только в `__init__`: ширину
     #: гуттера спрашивает уже `TextArea.__init__` (через `gutter_width`), то
     #: есть ДО того, как экземпляр успел завести свою.
@@ -312,7 +319,24 @@ class AsmArea(TextArea):
         # Гуттер живёт внутри виджета и не уезжает при горизонтальной
         # прокрутке — поэтому расписание стоит именно здесь, а не отдельной
         # колонкой рядом, которую пришлось бы синхронизировать вручную.
-        return self.BADGE_W
+        # TextArea сам вычитает эту ширину при переводе клика в позицию в
+        # тексте, поэтому колонку действия достаточно объявить здесь.
+        return self.RUN_W + self.BADGE_W
+
+    class RunHere(Message):
+        """Кликнули по стрелке запуска в гуттере."""
+
+    def on_click(self, event) -> None:
+        """Клик по стрелке — прогнать буфер. Остальной гуттер не трогаем.
+
+        Ровно две колонки, и только они: клик по номеру строки или по метке
+        такта обязан оставаться кликом по коду. Точный поиск стоит секунды,
+        и запускать его промахом мимо строки — худшее, что тут можно
+        сделать.
+        """
+        if event.x < self.RUN_W:
+            event.stop()
+            self.post_message(self.RunHere())
 
     def render_line(self, y: int) -> Strip:
         strip = super().render_line(y)
@@ -327,10 +351,15 @@ class AsmArea(TextArea):
             "accent2" if cursor else "faint"), bold=cursor)
         mark_w = self.MARK_W
         head = Strip([
+            # Стрелка — только на строке под курсором: шестьдесят стрелок
+            # подряд были бы обоями, а не кнопкой.
+            Segment("▷ " if cursor else "  ",
+                    RichStyle(color=palette.role_hex("success"), bold=True)
+                    if cursor else num_style),
             Segment(f"{row + 1:>{self.NUM_W - 1}} ", num_style),
             Segment((f"{badge:>{mark_w - 1}} " if badge else " " * mark_w)
                     if mark_w else "", style),
-        ], cell_length=self.BADGE_W)
+        ], cell_length=self.gutter_width)
         # Хвост берём у родителя: там уже посчитаны подсветка, курсор и
         # выделение — переписывать `_render_line` целиком значило бы держать
         # у себя копию двухсот строк чужого кода.
@@ -474,6 +503,67 @@ class DrawerChip(Static):
         self.post_message(self.Picked(self.target))
 
 
+class FileStrip(Static):
+    """Полоса вкладок открытых буферов. Клик — переключить, ✕ — закрыть.
+
+    Вкладки файлов нужны не ради «как в редакторе». Сравнение двух участков
+    — основная работа в этом инструменте: открыл `probe.s` от lcc, рядом
+    свою переписанную версию, и переключаешься между ними, не теряя ни
+    расписания, ни замечаний. Пока буфер был один на сессию, второй участок
+    можно было держать только в чужом окне.
+
+    Полоса — ОДИН виджет с размеченными зонами клика, а не вкладки-виджеты.
+    Виджетами она пересобиралась бы на каждую паузу в наборе (имя буфера и
+    признак «правлен» живые), а снос-монтаж в одном кадре у Textual значит
+    столкновение идентификаторов и мигание строки. Здесь перерисовка — это
+    `update()` с новым текстом, то есть ровно то, чем она и является.
+    """
+
+    class Picked(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+    class Closed(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+    def __init__(self, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        #: [(начало, конец, номер вкладки, есть ли ✕)] в клетках строки.
+        self.spans: list[tuple[int, int, int, bool]] = []
+
+    def on_click(self, event) -> None:
+        for start, end, index, closable in self.spans:
+            if not (start <= event.x < end):
+                continue
+            event.stop()
+            # ✕ занимает две последние клетки вкладки.
+            if closable and event.x >= end - 2:
+                self.post_message(self.Closed(index))
+            else:
+                self.post_message(self.Picked(index))
+            return
+
+
+class SideItem(Static):
+    """Строка каталога слева. Клик открывает файл вкладкой."""
+
+    class Picked(Message):
+        def __init__(self, key: str) -> None:
+            super().__init__()
+            self.key = key
+
+    def __init__(self, key: str, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.key = key
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(self.Picked(self.key))
+
+
 class DockTabs(Horizontal):
     """Полоса вкладок нижнего дока. Двойной клик по ней разворачивает док.
 
@@ -531,7 +621,10 @@ class CodeScreen(ModeScreen):
     mode_subtitle = "редактор"
     placeholder = "/doctor   ·   /code save my.s   ·   /example"
     hint = "«/» каталог   ·   ↑ история"
-    SIDE_ID = ""        # боковой колонки нет: рабочая область одна
+    # Каталог слева убирается по ^B — как дерево проекта в IDE. Полоса
+    # подсказок не убирается: в редакторе она единственное место, где
+    # написано про F5, а её ищут в первую очередь.
+    SIDE_ID = "#code-side"
     TIPS_ID = ""
 
     BINDINGS = ModeScreen.BINDINGS + [
@@ -622,6 +715,9 @@ class CodeScreen(ModeScreen):
         self.sched_view = "src"     # какое расписание в решётке
         self._cursor_line = 0
         self._example = ""          # какой пример сейчас в буфере
+        # Открытые буферы: [{name, path, text, example}] и активный.
+        self.files: list[dict] = []
+        self.file_i = 0
         # Нижний док: ОТКРЫТ по умолчанию и стоит на расписании. Пока он
         # был выдвижным ящиком поверх второй панели, расписание занимало
         # место всегда, а всё остальное пряталось за клавишу — то есть
@@ -664,11 +760,16 @@ class CodeScreen(ModeScreen):
     def compose(self):
         yield TopBar(self.mode, self.mode_title, self.mode_subtitle,
                      id="topbar")
-        # Полоса файлов: что сейчас правится. Одна строка вместо рамки с
-        # заголовком «ИСХОДНИК   ·   ассемблер e2k (.s)   ·   имя» — то же
-        # самое, но без двух строк бордюра вокруг.
-        yield Horizontal(Static(id="code-file"), id="code-head")
+        # Полоса файлов: что открыто и что правится сейчас. Одна строка
+        # вместо рамки с заголовком «ИСХОДНИК · ассемблер e2k (.s) · имя» —
+        # тот же ответ, но без двух строк бордюра вокруг и с возможностью
+        # держать открытыми несколько участков разом.
+        yield FileStrip(id="code-head")
         with Horizontal(id="code-body"):
+            # Каталог слева: примеры машины и настоящие .s из репозитория.
+            # Убирается по ^B целиком, и редактор просто становится шире —
+            # панель ничего не держит и ни от чего не зависит.
+            yield VerticalScroll(id="code-side")
             yield AsmArea(id="code-edit")
 
         # --- нижний док -----------------------------------------------
@@ -753,16 +854,126 @@ class CodeScreen(ModeScreen):
         if not self.app.session.code_text:
             self.app.session.code_text = example_text("slots") or FALLBACK
             self._example = "slots"
+        # Открытый буфер сессии становится первой вкладкой. Приезжает он
+        # по-разному: пример по умолчанию, `/code load`, вставка из другого
+        # режима, «в код» из журнала — а вкладка нужна всем одинаково.
+        self.files = [{"name": self._buffer_name(),
+                       "path": self.app.session.code_path,
+                       "text": self.app.session.code_text,
+                       "example": self._example}]
+        self.file_i = 0
         edit.text = self.app.session.code_text
         # Подсказка у строки курсора: без неё кликабельность не видна ни
-        # разу — а это вход в разбор строки и в ТАКТЫ.
+        # разу — а это вход в разбор такта.
         self.query_one("#code-line-chip", LineChip).tooltip = (
             "строка под курсором: такт, каналы, замечания\n"
-            "клик — полный разбор (вкладка ТАКТЫ снизу)")
+            "клик — полный разбор (вкладка РАЗБОР снизу)")
+        edit.tooltip = ("▷ у строки под курсором — прогнать буфер (F5)")
+        self._draw_side()
         self._seed_console()
         self._take_pending_note()
         self.reparse()
         edit.focus()
+
+    # --- открытые файлы ----------------------------------------------------
+
+    def _buffer_name(self) -> str:
+        """Как назвать текущий буфер во вкладке."""
+        path = self.app.session.code_path
+        if path:
+            return path.rsplit("/", 1)[-1]
+        if self._example:
+            return self._example + ".s"
+        return "буфер"
+
+    def _stash_current(self) -> None:
+        """Сохранить текст и имя активной вкладки перед уходом с неё."""
+        if not self.files:
+            return
+        rec = self.files[self.file_i]
+        rec["text"] = self.query_one("#code-edit", AsmArea).text
+        rec["path"] = self.app.session.code_path
+        rec["example"] = self._example
+        rec["name"] = self._buffer_name()
+
+    def open_file(self, text: str, name: str, path: str = "",
+                  example: str = "") -> None:
+        """Открыть текст новой вкладкой — или перейти на уже открытую.
+
+        Второй раз тот же файл вкладкой НЕ открывается: две вкладки с одним
+        именем и разным содержимым — способ потерять правки, а не удобство.
+        """
+        self._stash_current()
+        for i, rec in enumerate(self.files):
+            if rec["name"] == name:
+                self.select_file(i)
+                return
+        self.files.append({"name": name, "path": path, "text": text,
+                           "example": example})
+        self.select_file(len(self.files) - 1, stash=False)
+
+    def select_file(self, index: int, stash: bool = True) -> None:
+        if not (0 <= index < len(self.files)):
+            return
+        if stash:
+            self._stash_current()
+        self.file_i = index
+        rec = self.files[index]
+        edit = self.query_one("#code-edit", AsmArea)
+        edit.replace(rec["text"], (0, 0), edit.document.end)
+        self.app.session.code_text = rec["text"]
+        self.app.session.code_path = rec["path"]
+        self._example = rec["example"]
+        # Числа точного поиска принадлежат ТОМУ буферу, из которого их
+        # считали. Переключение вкладки — не правка, но результат чужой:
+        # оставить его значило бы показывать резерв одного файла на коде
+        # другого.
+        self.base = self.orc = self.met = None
+        self.findings = []
+        self.run_text = ""
+        self.reparse()
+        edit.focus()
+
+    def close_file(self, index: int) -> None:
+        """Закрыть вкладку. Последнюю не закрываем — правят всегда что-то."""
+        if len(self.files) <= 1 or not (0 <= index < len(self.files)):
+            return
+        if index == self.file_i:
+            self._stash_current()
+        self.files.pop(index)
+        self.select_file(min(self.file_i if index > self.file_i
+                             else self.file_i - 1, len(self.files) - 1),
+                         stash=False)
+
+    def on_file_strip_picked(self, event) -> None:
+        event.stop()
+        self.select_file(event.index)
+
+    def on_file_strip_closed(self, event) -> None:
+        event.stop()
+        self.close_file(event.index)
+
+    def on_side_item_picked(self, event) -> None:
+        """Клик по каталогу слева — файл открывается вкладкой."""
+        event.stop()
+        key = event.key
+        if key.startswith("ex:"):
+            name = key[3:]
+            text = example_text(name)
+            if text is not None:
+                self.open_file(text, f"{name}.s", example=name)
+            return
+        # Настоящий .s из репозитория: путь запоминаем, чтобы ^S писал туда.
+        from pathlib import Path
+
+        try:
+            text = Path(key).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            con = self.console
+            if con is not None:
+                con.note(f"  {key}: {exc}", "error")
+            return
+        self.open_file(text, key.rsplit("/", 1)[-1], path=key)
 
     def _take_pending_note(self) -> None:
         """Пометка от мостика журнала («в код») — строкой в отчёт.
@@ -1146,8 +1357,20 @@ class CodeScreen(ModeScreen):
     # --- буфер ------------------------------------------------------------
 
     def _sync_buffer(self) -> None:
-        """Текст редактора → сессия. Зовётся перед прогоном и при уходе."""
+        """Текст редактора → сессия и в запись активной вкладки.
+
+        Зовётся перед прогоном и при уходе с экрана. Вкладка обязана хранить
+        то же самое, что сессия: иначе переключение туда-обратно вернёт
+        текст на момент открытия и молча съест правки.
+        """
         self.app.session.code_text = self.query_one("#code-edit", AsmArea).text
+        if self.files:
+            self.files[self.file_i]["text"] = self.app.session.code_text
+
+    def on_asm_area_run_here(self, event) -> None:
+        """Клик по стрелке в гуттере — то же, что F5."""
+        event.stop()
+        self.action_run_code()
 
     def context_bits(self) -> str:
         """Шапка режима. Порядок — по убыванию важности НАРОЧНО.
@@ -1191,9 +1414,10 @@ class CodeScreen(ModeScreen):
         return pairs
 
     def toggle_hints(self) -> list[tuple[str, str]]:
-        """Подсказки экрана про мышь. Про развороты панелей здесь молчим:
-        панелей с рамками не осталось, разворачивается только док."""
-        return []
+        """Про развороты панелей здесь молчим: панелей с рамками не
+        осталось, разворачивается только док (F11). Осталась колонка
+        слева — единственное, что ещё убирается своей клавишей."""
+        return [("^B", "каталог" if self.side_shown else "каталог ↩")]
 
     def extra_commands(self) -> list[dict]:
         return [
@@ -1316,10 +1540,17 @@ class CodeScreen(ModeScreen):
                 con.note("  буфер стал текущим участком", "accent2")
                 con.note("  РАЗБОР (^O → 2): такт за тактом", "dim")
                 con.note("  АГЕНТ (3): по этим же числам", "dim")
-        # `/code load` мог заменить буфер целиком — покажем его в редакторе.
+        # `/code load` мог заменить буфер целиком — покажем его в редакторе
+        # и переименуем вкладку: имя файла приехало вместе с текстом.
         edit = self.query_one("#code-edit", AsmArea)
         if self.app.session.code_text != edit.text:
             edit.text = self.app.session.code_text
+            self._example = ""
+            if self.files:
+                rec = self.files[self.file_i]
+                rec["path"] = self.app.session.code_path
+                rec["example"] = ""
+                rec["name"] = self._buffer_name()
         self.reparse()
         # Журнал общий на сессию: команда могла приехать из другого режима,
         # и счётчик отчёта в строке состояния обязан это показать сразу.
@@ -1363,27 +1594,92 @@ class CodeScreen(ModeScreen):
     # --- отрисовка --------------------------------------------------------
 
     def _draw_title(self) -> None:
-        """Полоса файлов: какой буфер открыт, правлен ли он.
+        """Полоса файлов: что открыто и что правится сейчас.
 
         Заменяет рамку с подписью «ИСХОДНИК». Имя рамки отвечало на вопрос,
         которого никто не задаёт (что это за прямоугольник — и так видно,
         в нём код), а имя файла — на тот, который задают всегда: правлю я
         свой `.s` или демо-пример, который не жалко.
         """
-        s = self.app.session
-        name = s.code_path or (f"пример: {example_title(self._example)}"
-                               if self._example else "буфер")
-        t = Text()
-        t.append(f" {name} ", style=f"{palette.role_hex('title')} bold "
-                 f"on {palette.SURFACES['raised']}")
-        t.append("  ассемблер e2k (.s)", style=palette.role_hex("faint"))
-        if self._stale():
-            t.append("   ·   правлен после прогона",
-                     style=palette.role_hex("warning"))
         try:
-            self.query_one("#code-file", Static).update(t)
+            strip = self.query_one("#code-head", FileStrip)
         except Exception:
-            pass
+            return
+        raised = palette.SURFACES["raised"]
+        line = Text()
+        spans: list[tuple[int, int, int, bool]] = []
+        n = len(self.files)
+        # Последнюю вкладку закрыть нельзя: правят всегда что-то, и пустой
+        # редактор без единого буфера — состояние, из которого не выйти.
+        closable = n > 1
+        for i, rec in enumerate(self.files):
+            on = i == self.file_i
+            start = line.cell_len
+            name = rec["name"][:22]
+            line.append(f" {name}", style=(
+                f"{palette.role_hex('title')} bold on {raised}" if on
+                else palette.role_hex("dim")))
+            # Признак «правлен после прогона» на самой вкладке: он про ЭТОТ
+            # буфер, а в общей строке состояния был бы про какой-то.
+            mark = " ●" if (on and self._stale()) else "  "
+            line.append(mark, style=(f"{palette.role_hex('warning')} on {raised}"
+                                     if on else palette.role_hex("faint")))
+            line.append(" ✕ " if closable else " ",
+                        style=(f"{palette.role_hex('dim')} on {raised}" if on
+                               else palette.role_hex("faint")))
+            spans.append((start, line.cell_len, i, closable))
+            line.append(" ", style=palette.role_hex("faint"))
+        # Хвост строки: язык буфера. Он один на все вкладки и потому стоит
+        # не на вкладке, а в свободном месте справа от них.
+        line.append("  ассемблер e2k (.s)", style=palette.role_hex("faint"))
+        strip.spans = spans
+        strip.update(line)
+
+    def _draw_side(self) -> None:
+        """Каталог слева: примеры машины и настоящие `.s` репозитория.
+
+        Дерево из двух веток, а не одна свалка файлов. Примеры — учебные
+        участки, у каждого своя дыра машины и своя подпись; `examples/*.s` —
+        настоящий вывод lcc, ради которого инструмент и написан. Смешивать
+        их значит спрятать разницу между «показательным» и «настоящим», а
+        она здесь главная.
+        """
+        from pathlib import Path
+
+        try:
+            box = self.query_one("#code-side", VerticalScroll)
+        except Exception:
+            return
+        box.remove_children()
+        rows: list = []
+        title = palette.role_hex("title")
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+
+        rows.append(Static(Text(" примеры машины", style=title)))
+        for key, label, _note in EXAMPLES:
+            t = Text()
+            t.append("  " + key, style=palette.role_hex("accent2"))
+            item = SideItem("ex:" + key, t, classes="side-item")
+            item.tooltip = f"{label}\nклик — открыть вкладкой"
+            rows.append(item)
+
+        real = sorted(p for p in examples_dir().parent.glob("*.s")
+                      if p.is_file())
+        if real:
+            rows.append(Static(Text("\n настоящий код", style=title)))
+        for path in real:
+            rel = str(path.relative_to(Path.cwd())) if str(path).startswith(
+                str(Path.cwd())) else str(path)
+            name = path.name if len(path.name) <= 17 else path.name[:16] + "…"
+            t = Text()
+            t.append("  " + name, style=dim)
+            item = SideItem(rel, t, classes="side-item")
+            item.tooltip = f"{rel}\nклик — открыть вкладкой"
+            rows.append(item)
+
+        rows.append(Static(Text("\n ^B убрать колонку", style=faint)))
+        box.mount(*rows)
 
     def redraw(self) -> None:
         self._draw_title()
@@ -2297,24 +2593,21 @@ class CodeScreen(ModeScreen):
             con.note("           " + note, "dim")
 
     def _load_example(self, text: str, name: str = "") -> None:
-        """Пример в буфер.
+        """Пример — своей вкладкой, а не поверх того, что открыто.
 
         `code_path` НЕ трогаем нарочно: иначе ^S молча перезапишет файл
-        примера в репозитории вместо работы человека. Имя показывается в
-        заголовке — видно, что правишь пример, а не свой файл.
+        примера в репозитории вместо работы человека. Имя стоит на вкладке —
+        видно, что правишь пример, а не свой файл.
+
+        Раньше пример затирал буфер: набрал участок, посмотрел пример «а как
+        это выглядит правильно» — и своего кода больше нет. Отдельной
+        вкладкой оба остаются на экране, и переключение между ними стоит
+        одного клика.
         """
-        edit = self.query_one("#code-edit", AsmArea)
-        edit.replace(text, (0, 0), edit.document.end)
-        self.app.session.code_text = text
-        self._example = name
-        self.orc = self.base = self.met = None
-        self.findings = []
-        self.run_text = ""
-        self.reparse()
-        edit.focus()
+        self.open_file(text, f"{name or 'пример'}.s", example=name)
         con = self.console
         if con is not None:
-            con.note(f"  пример «{name or 'без имени'}» в буфере — F5",
+            con.note(f"  пример «{name or 'без имени'}» открыт вкладкой — F5",
                      "accent2")
 
     # --- переписать по оракулу --------------------------------------------

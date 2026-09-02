@@ -715,9 +715,22 @@ ModeScreen.tight #p-console { height: 8; }
     background: $nex-shadow;
 }
 
-#code-file { height: 1; width: 1fr; }
 
 #code-body { height: 1fr; width: 100%; }
+
+/* Каталог слева: примеры машины и настоящий код репозитория. Убирается
+   по ^B целиком — редактор просто становится шире, ничего не ломаясь.
+   Волосок справа вместо рамки: колонка отделена, а не обведена. */
+#code-side {
+    width: 20;
+    height: 100%;
+    padding: 0 0 0 1;
+    border-right: vkey $nex-line;
+    scrollbar-size-vertical: 1;
+}
+
+.side-item { height: 1; width: 100%; }
+.side-item:hover { background: $primary 20%; }
 
 #code-edit {
     height: 1fr;
@@ -880,6 +893,11 @@ ModeScreen.tight #p-console { height: 8; }
 
 ModeScreen.narrow #sched-side, ModeScreen.narrow #dock-bundles { width: 34; }
 ModeScreen.tight #sched-side, ModeScreen.tight #dock-bundles { display: none; }
+
+/* Каталог слева уходит первым: он вход в работу, а не сама работа, и
+   открыть пример можно командой /example. Двадцать колонок из восьмидесяти
+   — четверть экрана под список из десяти имён. */
+ModeScreen.tight #code-side { display: none; }
 
 /* Низкий терминал: доку хватает восьми строк по min-height, но процент от
    него отбирает у кода больше, чем стоит. Ниже 34 строк док становится

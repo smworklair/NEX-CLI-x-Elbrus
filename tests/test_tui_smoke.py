@@ -2235,6 +2235,88 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCoreIsATabNotAMode(unittest.TestCase):
+    """ЯДРО — вкладка-консоль нижнего дока, а не отдельный экран.
+
+    Его ценность ровно одна: собрать граф выражениями, не умея писать
+    ассемблер e2k, и узнать, во сколько тактов он укладывается. Целого
+    экрана и четверти главного меню эта работа не стоит. Машина одна на
+    сессию, поэтому имена и память здесь те же, что в полноэкранном ЯДРЕ.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    screen = app.screen
+                    screen.open_drawer("core")
+                    await pilot.pause()
+                    return await body(screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_expressions_build_a_graph_and_show_state(self) -> None:
+        """Строки консоли считают, кладут узлы в граф и меняют панельку."""
+        async def body(screen, pilot, session):
+            for line in ("a = 10", "t = a*2 + 3"):
+                screen._exec_core(line)
+                await pilot.pause()
+            ws = session.workspace()
+            return (dict(ws.regs), ws.graph_size(),
+                    str(screen.query_one("#core-state").content))
+
+        regs, size, state = self._screen(body)
+        self.assertEqual(regs.get("a"), 10)
+        self.assertEqual(regs.get("t"), 23)
+        self.assertGreater(size, 0, "выражение не положило ничего в граф")
+        self.assertIn("23", state, "панелька имён не показывает значение")
+
+    def test_go_computes_and_hands_the_graph_to_the_session(self) -> None:
+        """`go` считает точным поиском и делает граф участком сессии.
+
+        Без второго консоль была бы калькулятором: посчитала и забыла, а
+        РАЗБОР с АГЕНТОМ продолжали бы говорить про демо-сценарий.
+        """
+        async def body(screen, pilot, session):
+            screen._exec_core("sum 8")
+            await pilot.pause()
+            screen._exec_core("go")
+            await pilot.pause()
+            await screen.app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.pause()
+            return (session.scenario, len(session.dag_obj),
+                    str(screen.query_one("#core-log").lines[-1]))
+
+        scenario, ops, last = self._screen(body)
+        self.assertEqual(scenario, "interp")
+        self.assertGreater(ops, 0)
+        self.assertIn("участок сессии", last,
+                      "консоль не сказала, куда уехал граф")
+
+    def test_the_command_line_is_actually_visible(self) -> None:
+        """Строка ввода обязана иметь высоту: невидимое поле — не поле.
+
+        У Textual box-sizing по умолчанию border-box, и `height: 1` вместе с
+        волоском сверху даёт НОЛЬ строк содержимого. Поле при этом
+        фокусируется и принимает нажатия — то есть набирать приходится
+        вслепую, и заметить это можно только глазами.
+        """
+        async def body(screen, pilot, session):
+            core = screen.query_one("#core-input").size.height
+            screen.open_drawer("term")
+            await pilot.pause()
+            return core, screen.query_one("#prompt-input").size.height
+
+        core, term = self._screen(body)
+        self.assertEqual(core, 1, "строка ввода ЯДРА невидима")
+        self.assertEqual(term, 1, "строка ввода ВЫВОДА невидима")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestLabSleepBar(unittest.TestCase):
     """Вторая строка шапки РАЗБОРА: факты трёх спящих режимов.
 

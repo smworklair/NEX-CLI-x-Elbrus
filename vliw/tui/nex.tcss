@@ -836,16 +836,73 @@ ModeScreen.tight #p-console { height: 8; }
 #dock-lint { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
 #dock-term { height: 1fr; width: 100%; }
 
-/* Строка ввода внутри ВЫВОДА — ОДНА строка, как приглашение терминала.
-   Трёхрядное поле с отступами она была, пока стояла в доке и была главным
-   элементом экрана; здесь она просто последняя строка вывода. */
+/* Строка ввода внутри ВЫВОДА — одна строка текста, как приглашение
+   терминала. Трёхрядным полем с отступами она была, пока стояла в доке и
+   была главным элементом экрана; здесь она просто последняя строка вывода.
+
+   height: 2, а не 1. У Textual box-sizing по умолчанию border-box, то есть
+   высота считается ВМЕСТЕ с рамкой: при height:1 волосок сверху съедал
+   единственную строку содержимого, и поле ввода становилось невидимым. ^P
+   фокусировал строку, которой на экране нет, — набирать команду
+   приходилось вслепую. Тот же расчёт у #prompt-field выше по файлу: там
+   с самого начала стоит 2. */
 #dock-term #prompt-field {
-    height: 1;
+    height: 2;
     margin: 0;
     padding: 0 1;
 }
 
 #dock-term #console { height: 1fr; }
+
+/* --- вкладка ЯДРО: консоль интерпретатора ------------------------------ */
+/*
+   Аналог Python Console в IDE: лента ответов, строка ввода под ней и
+   панелька состояния машины справа. Целого экрана эта работа не стоит —
+   её ценность в одном: собрать граф выражениями, не умея писать ассемблер.
+*/
+
+#dock-core { height: 1fr; width: 100%; }
+#core-log-box { width: 1fr; height: 100%; }
+
+#core-log {
+    height: 1fr;
+    width: 100%;
+    background: transparent;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+/* Строка ввода — одна строка с шевроном, как приглашение терминала.
+   height: 2 — это строка плюс волосок над ней (box-sizing: border-box). */
+#core-prompt {
+    height: 2;
+    width: 100%;
+    border-top: solid $nex-line 30%;
+}
+
+#core-prompt:focus-within { border-top: solid $primary 55%; }
+#core-mark { width: 3; height: 1; padding: 0; color: $nex-faint; }
+
+#core-input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $nex-title;
+}
+
+#core-input > .input--placeholder { color: $nex-faint; text-style: none; }
+
+#core-state-col {
+    width: 30;
+    height: 100%;
+    padding: 0 1;
+    border-left: vkey $nex-line;
+    scrollbar-size-vertical: 1;
+}
+
+#core-state { height: auto; width: 100%; }
 
 /* Замечание — не абзац текста, а ссылка: клик ведёт курсор на строку. */
 .lint-item { height: auto; width: 100%; }
@@ -893,6 +950,8 @@ ModeScreen.tight #p-console { height: 8; }
 
 ModeScreen.narrow #sched-side, ModeScreen.narrow #dock-bundles { width: 34; }
 ModeScreen.tight #sched-side, ModeScreen.tight #dock-bundles { display: none; }
+ModeScreen.narrow #core-state-col { width: 26; }
+ModeScreen.tight #core-state-col { display: none; }
 
 /* Каталог слева уходит первым: он вход в работу, а не сама работа, и
    открыть пример можно командой /example. Двадцать колонок из восьмидесяти

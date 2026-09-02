@@ -35,7 +35,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.strip import Strip
-from textual.widgets import DataTable, Static, TextArea
+from textual.widgets import DataTable, Input, RichLog, Static, TextArea
 from textual.widgets.text_area import TextAreaTheme
 
 from ...core import asm_parser, doctor
@@ -672,6 +672,7 @@ class CodeScreen(ModeScreen):
         "line": ("разбор", "#dock-line", "#tab-line", "code"),
         "lint": ("замечания", "#dock-lint", "#tab-lint", "lint"),
         "term": ("вывод", "#dock-term", "#tab-term", "console"),
+        "core": ("ядро", "#dock-core", "#tab-core", "core"),
     }
 
     #: Подсказка у кнопки вкладки: чем эта вкладка отвечает на «что здесь».
@@ -680,6 +681,8 @@ class CodeScreen(ModeScreen):
         "line": "такт под курсором, его цепочка и каталог тактов буфера",
         "lint": "что не так по машине и где теряются такты",
         "term": "сюда приходит результат: прогоны, история сессии, команды",
+        "core": "консоль интерпретатора: собрать граф, не умея писать "
+                "ассемблер",
     }
 
     #: Что остаётся видимым при встроенном развороте (его здесь не бывает,
@@ -828,6 +831,23 @@ class CodeScreen(ModeScreen):
                           hint=self.hint, id="prompt"),
                 id="dock-term")
 
+            # ЯДРО — консоль интерпретатора, аналог Python Console в IDE.
+            # Было отдельным режимом на целый экран; его ценность в одном —
+            # собрать граф, не умея писать ассемблер, — и целого экрана она
+            # не стоит. Машина одна на сессию, поэтому имена и память здесь
+            # те же самые, что в полноэкранном ЯДРЕ.
+            yield Horizontal(
+                Vertical(
+                    RichLog(id="core-log", wrap=False, markup=False,
+                            highlight=False, auto_scroll=True),
+                    Horizontal(Static(" ❯ ", id="core-mark"),
+                               Input(placeholder="a = 10   ·   t = a*2   "
+                                     "·   sum 8   ·   go", id="core-input"),
+                               id="core-prompt"),
+                    id="core-log-box"),
+                VerticalScroll(Static(id="core-state"), id="core-state-col"),
+                id="dock-core")
+
         # --- подвал: ОДНА строка состояния, в самом низу ------------------
         # Слева курсор (кликом раскрывается разбор), справа итог по буферу,
         # и два пункта-лаунчера — замечания с живым счётчиком ошибок и вывод
@@ -871,6 +891,7 @@ class CodeScreen(ModeScreen):
         edit.tooltip = ("▷ у строки под курсором — прогнать буфер (F5)")
         self._draw_side()
         self._seed_console()
+        self._seed_core()
         self._take_pending_note()
         self.reparse()
         edit.focus()
@@ -1221,6 +1242,8 @@ class CodeScreen(ModeScreen):
         self._draw_drawer()
         if self.drawer_tab == "term":
             self.query_one("#prompt", PromptBar).focus_input()
+        elif self.drawer_tab == "core":
+            self.query_one("#core-input", Input).focus()
 
     def close_drawer(self) -> None:
         self.drawer_open = False
@@ -1252,6 +1275,8 @@ class CodeScreen(ModeScreen):
             self._draw_line_info(line)
             self._draw_chain(line)
             self._draw_bundles()
+        elif self.drawer_tab == "core":
+            self._draw_core_state()
         self._draw_dock_note()
         self.refresh_hints()
 
@@ -1288,11 +1313,179 @@ class CodeScreen(ModeScreen):
                          style=dim)
             else:
                 t.append("пусто — F5 станет коммитом #1 ", style=dim)
+        elif self.drawer_tab == "core":
+            ws = self.app.session.workspace()
+            n = ws.graph_size()
+            t.append(f"{len(ws.regs)} имён   ·   {n} "
+                     f"{plural(n, 'операция', 'операции', 'операций')} "
+                     f"в графе ", style=dim)
         else:
             n = self.parsed.bundles if self.parsed is not None else 0
             t.append(f"{n} {plural(n, 'команда', 'команды', 'команд')}"
                      f"   ·   стр.{self._cursor_line or 1} ", style=dim)
         note.update(t)
+
+    # --- вкладка ЯДРО: консоль интерпретатора ------------------------------
+    #
+    # Целого экрана эта работа не стоит: у неё одна ценность — собрать граф
+    # выражениями, не умея писать ассемблер e2k, и посмотреть, во сколько
+    # тактов он укладывается. Ровно это и делает вкладка. Полноэкранное
+    # ЯДРО с лентой, коммитами и снимками машины никуда не делось; машина
+    # одна на сессию, поэтому имена и память здесь те же самые.
+
+    def _seed_core(self) -> None:
+        log = self.query_one("#core-log", RichLog)
+        dim = palette.role_hex("dim")
+        log.write(Text("выражения строят граф — как в Python Console",
+                       style=dim))
+        for line, note in (
+            ("a = 10", "имя со значением"),
+            ("t = a*2 + 3", "выражение: каждая операция — узел графа"),
+            ("sum 8", "готовое ядро: сумма восьми чисел"),
+            ("go", "посчитать накопленный граф точным поиском"),
+        ):
+            row = Text()
+            row.append("  " + line.ljust(14), style=palette.role_hex("accent2"))
+            row.append(note, style=dim)
+            log.write(row)
+
+    def on_input_submitted(self, event) -> None:
+        """Строка консоли ЯДРА. Чужие поля ввода не трогаем."""
+        if getattr(event.input, "id", "") != "core-input":
+            return
+        event.stop()
+        line = event.value.strip()
+        event.input.value = ""
+        if line:
+            self._exec_core(line)
+
+    def _exec_core(self, line: str) -> None:
+        """Выполнить строку интерпретатора и показать её ответ."""
+        from ...core.interp import InterpError
+        from ...ui import interp_view
+
+        log = self.query_one("#core-log", RichLog)
+        ws = self.app.session.workspace()
+        echo = Text()
+        echo.append("❯ ", style=palette.role_hex("faint"))
+        echo.append(line, style=palette.role_hex("title"))
+        log.write(echo)
+        try:
+            result = ws.exec(line)
+        except InterpError as exc:
+            log.write(Text("  " + str(exc), style=palette.role_hex("error")))
+            return
+        except Exception as exc:
+            log.write(Text(f"  {type(exc).__name__}: {exc}",
+                           style=palette.role_hex("error")))
+            return
+
+        width = max(24, self.query_one("#core-log-box").size.width - 2)
+        for out in interp_view.render_result(ws, result, width=width):
+            log.write(Text.from_ansi(out))
+        # Граф ЯДРА становится текущим участком сессии: дальше про него
+        # говорят и РАЗБОР, и АГЕНТ. Без этого консоль была бы калькулятором.
+        if result.kind != "reset" and not ws.empty():
+            self.app.session.set_dag(ws.snapshot(), "interp")
+        self._draw_core_state()
+        self._draw_dock_note()
+        self.refresh_context()
+        if result.kind == "go":
+            self._core_handoff()
+
+    def _core_handoff(self) -> None:
+        """`go` — посчитать накопленный граф точным поиском.
+
+        Ассемблер отсюда НЕ сочиняется, хотя соблазн есть: у узлов графа
+        есть класс операции, но нет ни мнемоники, ни операндов, и выдумать
+        их значило бы выдать за код e2k текст, который никто не мерил. Ответ
+        честный — числа и участок, к которому они относятся.
+        """
+        ws = self.app.session.workspace()
+        log = self.query_one("#core-log", RichLog)
+        if ws.empty():
+            log.write(Text("  графа нет — считали без записи в программу",
+                           style=palette.role_hex("warning")))
+            return
+        self.set_busy(True)
+        self.run_worker(self._core_go_worker, thread=True, exclusive=True,
+                        group="core")
+
+    def _core_go_worker(self) -> None:
+        """Точный поиск идёт в отдельном потоке — экран не замирает."""
+        try:
+            base, orc, met = self.app.session.results()
+        except Exception as exc:
+            self.app.call_from_thread(self._core_go_done, None, None, str(exc))
+            return
+        self.app.call_from_thread(self._core_go_done, base, orc, met, "")
+
+    def _core_go_done(self, base, orc, met, err: str = "") -> None:
+        self.set_busy(False)
+        log = self.query_one("#core-log", RichLog)
+        if err or base is None:
+            log.write(Text(f"  не посчиталось: {err}",
+                           style=palette.role_hex("error")))
+            return
+        b, o = base.schedule.makespan, orc.schedule.makespan
+        t = Text()
+        t.append("  жадный ", style=palette.role_hex("dim"))
+        t.append(f"{b} т.", style=palette.role_hex("text"))
+        t.append("   точный поиск ", style=palette.role_hex("dim"))
+        t.append(f"{o} т.", style=palette.role_hex("accent"))
+        t.append("   нижняя граница ", style=palette.role_hex("dim"))
+        t.append(f"{met.lower_bound} т.", style=palette.role_hex("dim"))
+        log.write(t)
+        if o == met.lower_bound:
+            log.write(Text("  оптимум доказан: короче этого графа не уложить",
+                           style=palette.role_hex("success")))
+        log.write(Text("  участок сессии — этот граф: РАЗБОР и АГЕНТ теперь "
+                       "про него", style=palette.role_hex("faint")))
+        self.refresh_context()
+
+    def _draw_core_state(self) -> None:
+        """Панелька имён и памяти справа от консоли.
+
+        Отвечает на «что сейчас в машине» — вопрос, который в консоли иначе
+        задают командой `names` и получают ответ, уезжающий вверх с первой
+        же следующей строкой.
+        """
+        try:
+            target = self.query_one("#core-state", Static)
+        except Exception:
+            return
+        ws = self.app.session.workspace()
+        title = palette.role_hex("title")
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        t = Text()
+        t.append("ИМЕНА", style=title)
+        t.append(f"  {len(ws.regs)}\n", style=dim)
+        if not ws.regs:
+            t.append("  пусто — набери  a = 10\n", style=faint)
+        for name, value in list(ws.regs.items())[:12]:
+            t.append(f"  {name[:12]:<13}", style=palette.role_hex("text"))
+            t.append(f"{value}\n", style=palette.role_hex("accent2"))
+        if len(ws.regs) > 12:
+            t.append(f"  ещё {len(ws.regs) - 12}\n", style=faint)
+
+        used = [(i, v) for i, v in enumerate(ws.mem) if v]
+        t.append("\nПАМЯТЬ", style=title)
+        t.append(f"  ненулевых {len(used)} из {len(ws.mem)}\n", style=dim)
+        if not used:
+            t.append("  пусто — store 0 42\n", style=faint)
+        for i, v in used[:8]:
+            t.append(f"  яч.{i:<9}", style=faint)
+            t.append(f"{v}\n", style=palette.role_hex("accent2"))
+        if len(used) > 8:
+            t.append(f"  ещё {len(used) - 8}\n", style=faint)
+
+        n = ws.graph_size()
+        t.append("\nГРАФ", style=title)
+        t.append(f"  {n} {plural(n, 'операция', 'операции', 'операций')}\n",
+                 style=dim)
+        t.append("  go — посчитать\n" if n else "  пусто\n", style=faint)
+        target.update(t)
 
     def _sched_note(self) -> Text:
         """Итог вкладки РАСПИСАНИЕ: во сколько тактов уложено показанное."""

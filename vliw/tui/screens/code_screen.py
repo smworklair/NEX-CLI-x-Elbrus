@@ -1930,7 +1930,11 @@ class CodeScreen(ModeScreen):
         for path in real:
             rel = str(path.relative_to(Path.cwd())) if str(path).startswith(
                 str(Path.cwd())) else str(path)
-            name = path.name if len(path.name) <= 17 else path.name[:16] + "…"
+            # 15 знаков: колонка 20, минус волосок, отступ и два пробела
+            # перед именем. С длинным именем без этого обрезался бы сам
+            # многоточием — то есть признак «имя длиннее» уезжал за край
+            # вместе с именем.
+            name = path.name if len(path.name) <= 15 else path.name[:14] + "…"
             t = Text()
             t.append("  " + name, style=dim)
             item = SideItem(rel, t, classes="side-item")

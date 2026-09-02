@@ -41,7 +41,7 @@ from textual.widgets.text_area import TextAreaTheme
 from ...core import asm_parser, doctor
 from .. import palette
 from ..widgets import (BridgeRow, Console, ConsoleJournal, HintBar,
-                       PromptBar, Tool, TopBar, plural)
+                       PanelPrompt, PromptBar, Tool, TopBar, plural)
 from .base import ModeScreen
 
 #: Каталог примеров. Файлы лежат в `examples/code/*.s` и загружаются по
@@ -651,6 +651,9 @@ class CodeScreen(ModeScreen):
         # А «/» остаётся быстрым входом там, где фокус НЕ в тексте — в
         # решётке расписания или в списке замечаний.
         Binding("slash", "slash", "команда", priority=True),
+        # ^G — объяснятель: спросить про то, на что смотришь. Не режим и не
+        # четверть главного меню, а строка снизу, которая знает контекст.
+        Binding("ctrl+g", "explain", "объяснить", priority=True),
         # Пока открыта подсказка, стрелки и Enter принадлежат ей. Биндинги
         # включаются `check_action` только в этот момент, поэтому в обычном
         # наборе клавиши достаются редактору нетронутыми. Переопределять
@@ -1325,6 +1328,67 @@ class CodeScreen(ModeScreen):
                      f"   ·   стр.{self._cursor_line or 1} ", style=dim)
         note.update(t)
 
+    # --- объяснятель: агент как панель, а не как режим ---------------------
+    #
+    # АГЕНТ занимал целый экран и четверть главного меню, хотя по замерам
+    # проекта это его слабейшая часть: подсказка обученной модели оракулу
+    # дала 5% даже с идеальной подсказкой, а интервальная нижняя граница —
+    # 89% отсечённых узлов. Позиционирование «алгоритмы с ИИ, а не
+    # наоборот» подтверждено числами, и место в интерфейсе должно совпадать
+    # с этими числами.
+    #
+    # Поэтому здесь он — строка снизу, которая знает, на что человек
+    # смотрит: фокус в редакторе значит вопрос про код, открытая вкладка —
+    # вопрос про её содержимое. Отвечает НАСТОЯЩИЙ агент (тот же
+    # `Agent.ask_stream`, что ведёт диалог в АГЕНТЕ), а не облегчённая
+    # копия — см. `ModeScreen._panel_prompt_worker`.
+
+    class _Subject:
+        """Про что спрашивают. Подставляется вместо развёрнутой панели.
+
+        `open_panel_prompt` ждёт объект с `topic` и `_title` — раньше им
+        всегда была Panel. Панелей с рамками на этом экране не осталось, а
+        механика справочника осталась и работает; отдавать ей две строки
+        описания дешевле, чем заводить рамку ради совместимости.
+        """
+
+        def __init__(self, topic: str, title: str) -> None:
+            self.topic = topic
+            self._title = title
+
+    def action_explain(self) -> None:
+        """^G — спросить про то, что сейчас на экране."""
+        if list(self.query(PanelPrompt)):
+            self.close_panel_prompt()
+            self.refresh_hints()
+            return
+        # Фокус в редакторе — спрашивают про код, что бы ни было открыто
+        # снизу. Это самый частый случай и самый очевидный.
+        if self.query_one("#code-edit", AsmArea).has_focus:
+            topic, title = "code", "код"
+        else:
+            title, _box, _tool, topic = self.TABS[self.drawer_tab]
+        self.open_panel_prompt(self._Subject(topic, title))
+        self.refresh_hints()
+
+    def action_ai_or_complete(self) -> None:
+        """Tab: в редакторе — отступ. Справочник живёт на ^G, не на Tab.
+
+        Tab отбирать нельзя: в ассемблере им расставляют отступы, а
+        развёрнутых панелей с рамками, у которых Tab открывал справочник, на
+        этом экране больше нет.
+        """
+        if self._accept_suggest():
+            return
+        edit = self.query_one("#code-edit", AsmArea)
+        if edit.has_focus:
+            edit.insert("\t")
+            return
+        try:
+            self.query_one("#prompt", PromptBar).tab()
+        except Exception:
+            pass
+
     # --- вкладка ЯДРО: консоль интерпретатора ------------------------------
     #
     # Целого экрана эта работа не стоит: у неё одна ценность — собрать граф
@@ -1604,6 +1668,8 @@ class CodeScreen(ModeScreen):
         if self._have_orc():
             pairs.append(("F6", "переписать по оракулу"))
         pairs.append(("^S", "сохранить"))
+        pairs.append(("^G", "закрыть объяснятель"
+                      if list(self.query(PanelPrompt)) else "объяснить"))
         return pairs
 
     def toggle_hints(self) -> list[tuple[str, str]]:
@@ -2902,7 +2968,21 @@ class CodeScreen(ModeScreen):
             return self._sched_facts()
         if topic == "lint":
             return self._lint_facts()
+        if topic == "core":
+            return self._core_facts()
+        if topic == "console":
+            runs = self.app.session.journal_runs
+            return ([f"{r.get('cmd', '')} — участок "
+                     f"{r.get('scenario') or '—'}" for r in runs[-6:]]
+                    or ["прогонов в этой сессии ещё не было"])
         return []
+
+    def _core_facts(self) -> list[str]:
+        ws = self.app.session.workspace()
+        out = [f"в машине {len(ws.regs)} имён, в графе {ws.graph_size()} "
+               "операций"]
+        out += [f"{n} = {v}" for n, v in list(ws.regs.items())[:8]]
+        return out
 
     def _code_facts(self) -> list[str]:
         if self.parsed is None or not self.parsed.ops:
@@ -2952,6 +3032,11 @@ class CodeScreen(ModeScreen):
         if topic == "lint":
             return ["как исправить первое замечание?",
                     "что здесь самое дорогое?"]
+        if topic == "core":
+            return ["что сейчас в графе?",
+                    "как записать это же ассемблером e2k?"]
+        if topic == "console":
+            return ["что показал последний прогон?"]
         return []
 
     # --- ввод -------------------------------------------------------------
@@ -2982,6 +3067,13 @@ class CodeScreen(ModeScreen):
         if sug is not None and sug.display:
             sug.hide()
             return
+        # Объяснятель закрывается ПЕРВЫМ из окон: он всплывающий и лежит
+        # поверх нижнего края. Без этой ветки Esc просто уводил фокус из его
+        # строки в редактор, а панель оставалась висеть.
+        if list(self.query(PanelPrompt)):
+            self.close_panel_prompt()
+            self.refresh_hints()
+            return
         self._sync_buffer()
         if self.zoom:
             self.set_zoom("")
@@ -2991,16 +3083,6 @@ class CodeScreen(ModeScreen):
             edit.focus()
             return
         super().action_back()
-
-    def action_ai_or_complete(self) -> None:
-        """Tab: в редакторе — отступ, вне его — как у всех."""
-        if self._accept_suggest():
-            return
-        edit = self.query_one("#code-edit", AsmArea)
-        if edit.has_focus and self.zoom != "sched":
-            edit.insert("\t")
-            return
-        super().action_ai_or_complete()
 
     def action_save_code(self) -> None:
         """Ctrl+S: сохранить под последним именем или спросить строку ввода."""

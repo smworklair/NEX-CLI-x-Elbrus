@@ -62,8 +62,14 @@ class TestScreensMount(unittest.TestCase):
 
         self.assertEqual(asyncio.run(run()), expect_cls)
 
-    def test_picker(self):
-        self._mounts(None, "PickerScreen")
+    def test_home_is_the_editor(self):
+        """Просто запущенный инструмент открывает КОД, а не меню из карточек.
+
+        Пока первым экраном был выбор из четырёх, все четыре были равны — а
+        раз равны, каждый обязан быть самодостаточным приложением. Отсюда и
+        бралась теснота во всех сразу.
+        """
+        self._mounts(None, "CodeScreen")
 
     def test_lab(self):
         self._mounts("lab", "LabScreen")
@@ -81,11 +87,18 @@ class TestScreensMount(unittest.TestCase):
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestPickerNavigation(unittest.TestCase):
     def test_arrow_and_enter_open_mode(self):
-        """Стрелка + Enter на экране выбора уводят в рабочий режим."""
+        """Стрелка + Enter на списке экранов уводят на выбранный.
+
+        Список открывается по ^O из работы, а не встречает на входе:
+        рабочее место — КОД, отсюда только уходят.
+        """
         async def run():
             app, _ = _make_app(None)
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    await pilot.press("ctrl+o")
+                    await pilot.pause()
                     await pilot.pause()
                     start = app.screen.__class__.__name__
                     await pilot.press("down", "enter")
@@ -94,7 +107,7 @@ class TestPickerNavigation(unittest.TestCase):
                     return start, app.screen.__class__.__name__
 
         start, got = asyncio.run(run())
-        self.assertEqual(start, "PickerScreen")
+        self.assertEqual(start, "PickerScreen", "^O не открыл список экранов")
         self.assertNotEqual(got, "PickerScreen", "экран выбора не сменился")
 
 
@@ -2235,6 +2248,104 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestAgentIsAPanelNotAMode(unittest.TestCase):
+    """АГЕНТ в КОДЕ — объяснятель по ^G, знающий, на что человек смотрит.
+
+    Целого экрана и четверти главного меню он не стоит: по замерам проекта
+    подсказка обученной модели оракулу дала 5% даже с идеальной подсказкой,
+    а интервальная нижняя граница отсекла 89% узлов перебора. Место в
+    интерфейсе должно совпадать с этими числами.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_it_asks_about_what_is_on_screen(self) -> None:
+        """Фокус в редакторе — вопрос про код; вкладка — про её содержимое."""
+        from vliw.tui.widgets import PanelPrompt
+
+        async def body(screen, pilot, session):
+            screen.query_one("#code-edit").focus()
+            screen.action_explain()
+            await pilot.pause()
+            about_code = self._facts(screen)
+            screen.action_explain()          # ^G закрывает
+            await pilot.pause()
+            closed = len(list(screen.query(PanelPrompt)))
+            # Фокус не в тексте — спрашивают про открытую вкладку.
+            screen.open_drawer("lint")
+            screen.query_one("#dock-lint").focus()
+            screen.action_explain()
+            await pilot.pause()
+            return about_code, closed, self._facts(screen)
+
+        code, closed, lint = self._screen(body)
+        self.assertEqual(closed, 0, "^G обязан и закрывать")
+        self.assertTrue(any("буфер" in f or "операц" in f for f in code),
+                        f"объяснятель не знает про код: {code}")
+        self.assertNotEqual(code, lint,
+                            "факты не зависят от того, на что смотришь")
+
+    @staticmethod
+    def _facts(screen):
+        from vliw.tui.widgets import PanelPrompt
+
+        panels = list(screen.query(PanelPrompt))
+        return list(panels[0].facts) if panels else []
+
+    def test_escape_closes_it_before_anything_else(self) -> None:
+        """Esc убирает объяснятель первым: он всплывающий и лежит поверх."""
+        from vliw.tui.widgets import PanelPrompt
+
+        async def body(screen, pilot, session):
+            screen.action_explain()
+            await pilot.pause()
+            opened = len(list(screen.query(PanelPrompt)))
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.pause()
+            return (opened, len(list(screen.query(PanelPrompt))),
+                    screen.app.screen.__class__.__name__)
+
+        opened, after, where = self._screen(body)
+        self.assertEqual(opened, 1)
+        self.assertEqual(after, 0, "Esc не убрал объяснятель")
+        self.assertEqual(where, "CodeScreen", "Esc унёс с экрана целиком")
+
+    def test_tab_stays_an_indent_in_the_editor(self) -> None:
+        """Tab в ассемблере — отступ, а не открытие справочника.
+
+        Отбирать Tab у редактора нельзя: им расставляют отступы в коде.
+        Поэтому объяснятель и живёт на ^G, а не на Tab, как справочник у
+        развёрнутых панелей в остальных режимах.
+        """
+        from vliw.tui.widgets import PanelPrompt
+
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.focus()
+            edit.move_cursor(edit.document.end)
+            before = edit.text
+            await pilot.press("tab")
+            await pilot.pause()
+            return (edit.text[len(before):],
+                    len(list(screen.query(PanelPrompt))))
+
+        added, panels = self._screen(body)
+        self.assertTrue(added and added.isspace(),
+                        f"Tab перестал делать отступ, добавлено {added!r}")
+        self.assertEqual(panels, 0, "Tab открыл объяснятель вместо отступа")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestCoreIsATabNotAMode(unittest.TestCase):
     """ЯДРО — вкладка-консоль нижнего дока, а не отдельный экран.
 
@@ -2521,6 +2632,10 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
             app, _session = _make_app(None)
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(120, h)) as pilot:
+                    await pilot.pause()
+                    # Список экранов больше не стартовый — открываем его сами.
+                    app.to_picker()
+                    await pilot.pause()
                     await pilot.pause()
                     sc = app.screen
                     if not isinstance(sc, PickerScreen):

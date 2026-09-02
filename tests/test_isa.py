@@ -127,3 +127,53 @@ class TestDocument(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCrossCheckWithVendorDocs(unittest.TestCase):
+    """Сверка с официальной таблицей МЦСТ обязана оставаться сверкой.
+
+    Соблазн, против которого стоит этот тест: увидев расхождение, подставить
+    документированное число в модель и объявить вопрос закрытым. Так делать
+    нельзя — документ описывает Е4С/Е8С, а модель e2k-v6, это разные машины.
+    Числа отсюда сравниваются, но не импортируются.
+    """
+
+    def setUp(self):
+        from vliw.core.isa import DOC_LATENCY
+        self.doc = DOC_LATENCY
+        self.rows = {r.name: r for r in collect(get_profile("e2k-v6-measured"))}
+
+    def test_no_stale_entries(self):
+        """Класс из таблицы сверки обязан существовать в модели.
+
+        Иначе сверка тихо перестаёт что-либо сверять: строка есть, класса нет,
+        расхождение не всплывает никогда.
+        """
+        for cls in self.doc:
+            self.assertIn(cls, self.rows, f"{cls} есть в сверке, но нет в модели")
+
+    def test_known_discrepancy_is_still_there(self):
+        """LOAD расходится намеренно — 5 у нас против 3 у МЦСТ.
+
+        Если кто-то «починит» это подстановкой тройки, тест упадёт и заставит
+        прочитать разбор: измерение на настоящем выводе lcc для e2k-v6 даёт 5
+        по 36 зависимым парам, и это разница поколений, а не ошибка.
+        """
+        self.assertEqual(self.rows["LOAD"].latency, 5)
+        self.assertEqual(self.doc["LOAD"][0], "3")
+
+    def test_measured_classes_agree_with_docs(self):
+        """Там, где мы ИЗМЕРИЛИ, мы обязаны сходиться с документом.
+
+        Кроме LOAD, у которого расхождение разобрано отдельно. Если сойтись
+        перестанет что-то ещё — это либо сломанное измерение, либо новое
+        открытие, и в обоих случаях об этом надо узнать сразу.
+        """
+        for cls, row in self.rows.items():
+            if cls in ("LOAD",) or cls not in self.doc:
+                continue
+            if not row.latency_measured:
+                continue
+            with self.subTest(cls=cls):
+                self.assertEqual(str(row.latency), self.doc[cls][0],
+                                 f"{cls}: измерение разошлось с документацией МЦСТ")

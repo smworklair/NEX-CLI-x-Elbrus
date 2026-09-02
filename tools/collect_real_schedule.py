@@ -128,6 +128,12 @@ MNEMONICS: dict[str, str] = {
     'fmul_subs': 'FMA',
     'fmul_rsubd': 'FMA',
     'fmul_rsubs': 'FMA',
+    # Чтение из буфера предподкачки. Каналы у семейства ,0-,3, у movaq ,0 ,2.
+    # Канал ALC эти операции НЕ занимают (см. free_slot в vliw/core/model.py).
+    'movab': 'MOVA', 'movah': 'MOVA', 'movaw': 'MOVA',
+    'movad': 'MOVA', 'movaqp': 'MOVA',
+    'movaq': 'MOVAQ',
+    'incr': 'INCR',
     'fdivs': 'FDIV',
     'fdivd': 'FDIV',
     'cmpesb': 'PRED',
@@ -222,6 +228,7 @@ CONTROL = {
     "setwd", "setbn", "setsft", "settr", "setmas", "setei",
     "getsp", "getpl", "bap", "eap", "flushr", "flushc", "wait",
     "ipd", "abn", "abp", "abg", "alc", "loop_mode", "pref", "landing",
+    "ldisp", "fapb",
 }
 
 # У записи в память НЕТ регистра-приёмника: `std,2 %dr2, 0x0, %db[0]` кладёт
@@ -235,19 +242,22 @@ NO_DST = {"STORE"}
 # видел, ПРОТИВ ЧЕГО считались нижние границы, и мог поправить.
 _LATENCY = {"ADD": 1, "SUB": 1, "AND": 1, "SHL": 1,
             "MUL": 4, "DIV": 11, "LOAD": 5, "STORE": 2,
-            "FMA": 8}
+            "FMA": 8, "MOVA": 1, "MOVAQ": 1, "INCR": 1}
 _OCCUPANCY = {"DIV": 2}                       # остальные по умолчанию 1
 _LAT_SOURCE = {"ADD": "измерено", "SUB": "измерено",
                "AND": "допущение", "SHL": "допущение",
                "MUL": "измерено", "DIV": "измерено",
                "LOAD": "измерено", "STORE": "измерено",
-               "FMA": "измерено"}
+               "FMA": "измерено", "MOVA": "допущение",
+               "MOVAQ": "допущение", "INCR": "допущение"}
 _CHANNELS = {
     "ADD": (0, 1, 2, 3, 4, 5), "SUB": (0, 1, 2, 3, 4, 5),
     "AND": (0, 1, 2, 3, 4, 5), "SHL": (0, 1, 2, 3, 4, 5),
     "MUL": (0, 1, 3, 4), "DIV": (5,),
     "LOAD": (0, 2, 3, 5), "STORE": (2, 5),
     "FMA": (0, 1, 2, 3, 4, 5),
+    "MOVA": (0, 1, 2, 3), "MOVAQ": (0, 2),
+    "INCR": (0, 1, 2, 3, 4, 5),
 }
 WIDTH = 6
 

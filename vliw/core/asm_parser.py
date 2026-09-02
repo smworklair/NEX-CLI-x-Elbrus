@@ -69,6 +69,19 @@ MNEMONICS: dict[str, str] = {
     "fmul_addd": "FMA", "fmul_adds": "FMA",
     "fmul_subd": "FMA", "fmul_subs": "FMA",
     "fmul_rsubd": "FMA", "fmul_rsubs": "FMA",
+    # Чтение из буфера предподкачки (APB). Каналы сняты у ассемблера
+    # 02.09.2026: у всего семейства `,0 ,1 ,2 ,3`, и только у четверного
+    # `movaq` уже — `,0 ,2`. Поэтому классов два: иначе модель разрешала бы
+    # `movaq` там, где ассемблер его отвергает.
+    "movab": "MOVA", "movah": "MOVA", "movaw": "MOVA",
+    "movad": "MOVA", "movaqp": "MOVA",
+    "movaq": "MOVAQ",
+    # `incr` продвигает индекс AAU. В канал ALC не попадает: в настоящем
+    # листинге он стоит в одной широкой команде со `staad,2`, а staad канал
+    # ,2 занимает наверняка (ассемблер отвергает `adds,2` рядом с ним).
+    # ВЫВОД ИЗ НАБЛЮДЕНИЯ, а не из пробы: изолированно ассемблер `incr` не
+    # принимает вовсе, поэтому перебрать каналы, как для остальных, нельзя.
+    "incr": "INCR",
     "fdivs": "FDIV", "fdivd": "FDIV",
 
     # Сравнения, кладущие результат в предикат. Их много и они разные по
@@ -130,6 +143,12 @@ CONTROL = {
     "setwd", "setbn", "setsft", "settr", "setmas", "setei",
     "getsp", "getpl", "bap", "eap", "flushr", "flushc", "wait",
     "ipd", "abn", "abp", "abg", "alc", "loop_mode", "pref", "landing",
+    # Добавлено 02.09.2026 по разбору настоящего вывода lcc -O3:
+    # `ldisp %ctpr2, .L394` готовит цель перехода — ровно как `disp`, который
+    # уже здесь; `fapb ct=0, dcd=0, fmt=4, ...` настраивает буфер
+    # асинхронной предподкачки и не трогает регистров вообще. Обе — настройка,
+    # а не вычисление, и в графе зависимостей им не место.
+    "ldisp", "fapb",
 }
 """Управляющие и настроечные операции — в графе ВЫЧИСЛЕНИЙ им не место.
 
@@ -535,6 +554,16 @@ def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
     #    occupancy > 1 держит клетку и в следующих тактах.
     held: dict[tuple[int, int], AsmOp] = {}
     for o in parsed.ops:
+        # Операции с отдельным слогом (семейство movaX) канал ALC не занимают
+        # и конфликтовать с арифметикой не могут — измерено у ассемблера,
+        # см. OpClass.free_slot. Без этой проверки разбор настоящего кода
+        # находил конфликты там, где lcc совершенно законно ставит `movad,0`
+        # рядом с `fmul_addd,0` в одной широкой команде.
+        try:
+            if model.op(o.op).free_slot:
+                continue
+        except KeyError:
+            pass
         ports = model.channels_for(o.op)
         port = o.channel if (o.channel is not None and o.channel in ports) else None
         if port is None:

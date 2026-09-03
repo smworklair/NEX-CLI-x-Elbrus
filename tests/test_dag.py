@@ -127,12 +127,6 @@ class TestScenarios(unittest.TestCase):
 
     def test_randN_shortcut(self):
         self.assertEqual(len(get_scenario("rand5")), len(random_dag(5)))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestMeasuredClassScenarios(unittest.TestCase):
     """Сценарии на классы, измеренные 30.08.2026.
 
@@ -256,3 +250,7 @@ class TestIntervalLowerBound(unittest.TestCase):
         self.assertEqual(compute_metrics(DAG("e", "", "", []), self.machine).lower_bound, 0)
         one = DAG("o", "", "", [Instr(0, "a", "ADD", (), "a")])
         self.assertEqual(compute_metrics(one, self.machine).lower_bound, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

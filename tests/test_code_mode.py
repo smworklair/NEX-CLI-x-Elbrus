@@ -179,12 +179,6 @@ class TestResultsFreshness(unittest.TestCase):
 
         self.assertNotEqual(first, second,
                             "второй прогон отдал числа первого — кэш не сброшен")
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestRealCompilerOutput(unittest.TestCase):
     """Разбор НАСТОЯЩЕГО вывода lcc, а не только калибровочных проб.
 
@@ -537,3 +531,7 @@ class TestModeFlagSkipsThePicker(unittest.TestCase):
     def test_plain_without_mode_still_asks(self):
         text = self._run(["--plain", "--no-color"], "q\n")
         self.assertIn("1 / 2 / 3", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -171,12 +171,6 @@ class TestWiredIntoScheduler(unittest.TestCase):
         rows = res.search_stats["cab"]
         self.assertTrue(any(r["won"] for r in rows))
         self.assertTrue(any("порядок" in r["name"] for r in rows))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestMetricsFollowTheFinalSchedule(unittest.TestCase):
     """Инструкция, не выданная моделью, но размещённая портфелем.
 
@@ -236,3 +230,7 @@ class TestTieIsNotAWin(unittest.TestCase):
         self.assertEqual(res.schedule.makespan, orc.schedule.makespan)
         self.assertTrue(res.search_stats["cab_beat_greedy"])
         self.assertNotEqual(res.search_stats["cab_winner"], "жадный")
+
+
+if __name__ == "__main__":
+    unittest.main()

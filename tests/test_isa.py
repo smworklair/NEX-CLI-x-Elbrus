@@ -123,12 +123,6 @@ class TestDocument(unittest.TestCase):
         """Запреты — цитата ответа ассемблера, а не пересказ."""
         for *_ignored, text in COMBINATION_BANS:
             self.assertIn(text, self.md)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCrossCheckWithVendorDocs(unittest.TestCase):
     """Сверка с официальной таблицей МЦСТ обязана оставаться сверкой.
 
@@ -177,3 +171,7 @@ class TestCrossCheckWithVendorDocs(unittest.TestCase):
             with self.subTest(cls=cls):
                 self.assertEqual(str(row.latency), self.doc[cls][0],
                                  f"{cls}: измерение разошлось с документацией МЦСТ")
+
+
+if __name__ == "__main__":
+    unittest.main()

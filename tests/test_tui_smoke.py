@@ -181,8 +181,17 @@ class TestPanelMaximize(unittest.TestCase):
     """
 
     @staticmethod
-    def _click(panel, t):
-        panel.on_click(type("E", (), {"time": t, "stop": lambda self: None})())
+    async def _click(pilot, panel):
+        """Клик В СЕРЕДИНУ панели — туда, куда целится человек.
+
+        Раньше здесь звался `panel.on_click(...)` напрямую, поддельным
+        событием. Проверялся при этом сам обработчик, а не жест, и все
+        четыре теста стояли зелёными, пока двойной клик по РАСПИСАНИЮ не
+        работал вовсе: `DataTable` гасит Click на себе, и до рамки он не
+        доходил. Настоящий клик через пилота ловит и это.
+        """
+        await pilot.click(offset=(panel.region.x + panel.region.width // 2,
+                                  panel.region.y + panel.region.height // 2))
 
     def _run(self, steps):
         async def go():
@@ -199,28 +208,42 @@ class TestPanelMaximize(unittest.TestCase):
 
     def test_single_click_does_not_maximize(self):
         async def steps(app, pilot, panel):
-            self._click(panel, 100.0)
+            await self._click(pilot, panel)
             await pilot.pause()
             return app.screen.maximized
 
         self.assertIsNone(self._run(steps))
 
     def test_double_click_maximizes_that_panel(self):
-        async def steps(app, pilot, panel):
-            self._click(panel, 100.0)
-            self._click(panel, 100.2)
-            await pilot.pause()
-            return app.screen.maximized
+        """И именно на РАСПИСАНИИ: под курсором там решётка, а не пустота.
 
-        got = self._run(steps)
+        `#p-grid` выбран не случайно — это панель, ради которой разворот и
+        нужен: шесть каналов на сотню тактов в трети экрана не читаются. И
+        она же единственная, где жест был мёртв.
+        """
+        async def steps(app, pilot, panel):
+            under = app.screen.get_widget_at(
+                panel.region.x + panel.region.width // 2,
+                panel.region.y + panel.region.height // 2)[0]
+            await self._click(pilot, panel)
+            await self._click(pilot, panel)
+            await pilot.pause()
+            return app.screen.maximized, type(under).__name__
+
+        got, under = self._run(steps)
+        self.assertEqual(under, "ScheduleGrid",
+                         f"кликнули не в решётку, а в {under} — тест ослаб")
         self.assertIsNotNone(got, "панель не развернулась")
         self.assertEqual(got.id, "p-grid", "развернулась не та панель")
 
     def test_slow_second_click_is_not_double(self):
         """Два клика с большим зазором — не двойной клик, а два одиночных."""
+        from vliw.tui.widgets import Panel
+
         async def steps(app, pilot, panel):
-            self._click(panel, 100.0)
-            self._click(panel, 105.0)
+            await self._click(pilot, panel)
+            await asyncio.sleep(Panel.DOUBLE_CLICK_S + 0.2)
+            await self._click(pilot, panel)
             await pilot.pause()
             return app.screen.maximized
 
@@ -229,8 +252,8 @@ class TestPanelMaximize(unittest.TestCase):
     def test_escape_minimizes(self):
         """Esc сворачивает — и это не ломает свой Esc у экрана РАЗБОР."""
         async def steps(app, pilot, panel):
-            self._click(panel, 100.0)
-            self._click(panel, 100.2)
+            await self._click(pilot, panel)
+            await self._click(pilot, panel)
             await pilot.pause()
             before = app.screen.maximized
             await pilot.press("escape")
@@ -240,10 +263,6 @@ class TestPanelMaximize(unittest.TestCase):
         before, after = self._run(steps)
         self.assertIsNotNone(before)
         self.assertIsNone(after)
-
-if __name__ == "__main__":
-    unittest.main()
-
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestModelViewIsLive(unittest.TestCase):
@@ -852,10 +871,6 @@ class TestConsoleJournalIsATerminal(unittest.TestCase):
         self.assertEqual(n, 2)
         self.assertEqual(pos, 1, "после набора второй команды журнал обязан "
                                  "показывать именно её, а не первую")
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
@@ -3082,3 +3097,7 @@ class TestNoDuplicateIds(unittest.TestCase):
                         await pilot.pause()
 
         asyncio.run(go())
+
+
+if __name__ == "__main__":
+    unittest.main()

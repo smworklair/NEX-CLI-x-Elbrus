@@ -389,11 +389,6 @@ class TestStreaming(unittest.TestCase):
                 echo_done = True
         self.assertTrue(echo_done, "хвост промпта не найден в потоке")
         self.assertEqual("".join(out), answer)
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ChunkedBackend(ScriptedBackend):
     """Отдаёт ответ мелкими кусками — как настоящий поток llama.cpp.
 
@@ -846,12 +841,6 @@ class TestBestOfRender(unittest.TestCase):
         text = "\n".join(learned_view.render_bench(res, "lora-eos"))
         self.assertNotIn("best-of", text)
         self.assertNotIn("k=", text)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestLearnedArgErrors(unittest.TestCase):
     """Опечатка в числовом флаге не должна проглатываться молча.
 
@@ -970,3 +959,7 @@ class TestScheduleGrammar(unittest.TestCase):
         self.assertEqual(sampling_kwargs(0.0, None), {})
         self.assertEqual(sampling_kwargs(0.0, None, "root ::= \"x\""),
                          {"grammar": 'root ::= "x"'})
+
+
+if __name__ == "__main__":
+    unittest.main()

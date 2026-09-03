@@ -88,12 +88,6 @@ class TestGeneratorWeightsAreParameter(unittest.TestCase):
         self.assertLess(plain["DIV"] / plain.total(), 0.08)
         self.assertGreater(loaded["DIV"] / loaded.total(), 0.12)
         self.assertEqual(OP_WEIGHTS["DIV"], 3, "модульные веса не тронуты")
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestHarvestWorker(unittest.TestCase):
     """Сборщик трудных примеров: то, что он вернул, обязано быть эталоном.
 
@@ -150,3 +144,7 @@ class TestBenchDataFlag(unittest.TestCase):
         self.assertEqual(a.data, "eval_hard.jsonl")
         self.assertEqual(a.bench, 30)
         self.assertIsNone(a.name, "имя файла не должно уехать в имя адаптера")
+
+
+if __name__ == "__main__":
+    unittest.main()

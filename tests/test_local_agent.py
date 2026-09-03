@@ -150,12 +150,6 @@ class TestSmalltalkSkipsNudge(unittest.TestCase):
 
     def test_real_question_gets_nudge(self) -> None:
         self.assertTrue(self._asked_nudge("почему этот участок медленный?"))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCellAnswerGuard(unittest.TestCase):
     """Сторож на выдуманные числа в подписи под курсором.
 
@@ -200,3 +194,7 @@ class TestCellAnswerGuard(unittest.TestCase):
 
         self.assertTrue(context.cell_answer_is_grounded(
             "Вышла в такте 11, латентность 2.", self.FACTS))
+
+
+if __name__ == "__main__":
+    unittest.main()

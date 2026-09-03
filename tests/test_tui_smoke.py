@@ -62,8 +62,14 @@ class TestScreensMount(unittest.TestCase):
 
         self.assertEqual(asyncio.run(run()), expect_cls)
 
-    def test_picker(self):
-        self._mounts(None, "PickerScreen")
+    def test_home_is_the_editor(self):
+        """Просто запущенный инструмент открывает КОД, а не меню из карточек.
+
+        Пока первым экраном был выбор из четырёх, все четыре были равны — а
+        раз равны, каждый обязан быть самодостаточным приложением. Отсюда и
+        бралась теснота во всех сразу.
+        """
+        self._mounts(None, "CodeScreen")
 
     def test_lab(self):
         self._mounts("lab", "LabScreen")
@@ -81,11 +87,18 @@ class TestScreensMount(unittest.TestCase):
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestPickerNavigation(unittest.TestCase):
     def test_arrow_and_enter_open_mode(self):
-        """Стрелка + Enter на экране выбора уводят в рабочий режим."""
+        """Стрелка + Enter на списке экранов уводят на выбранный.
+
+        Список открывается по ^O из работы, а не встречает на входе:
+        рабочее место — КОД, отсюда только уходят.
+        """
         async def run():
             app, _ = _make_app(None)
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    await pilot.press("ctrl+o")
+                    await pilot.pause()
                     await pilot.pause()
                     start = app.screen.__class__.__name__
                     await pilot.press("down", "enter")
@@ -94,7 +107,7 @@ class TestPickerNavigation(unittest.TestCase):
                     return start, app.screen.__class__.__name__
 
         start, got = asyncio.run(run())
-        self.assertEqual(start, "PickerScreen")
+        self.assertEqual(start, "PickerScreen", "^O не открыл список экранов")
         self.assertNotEqual(got, "PickerScreen", "экран выбора не сменился")
 
 
@@ -1355,12 +1368,12 @@ class TestCodeScreen(unittest.TestCase):
             return (op.line,
                     str(screen.query_one("#code-line-chip").content),
                     str(screen.query_one("#code-line-info").content),
-                    screen.query_one("#p-drawer")._title)
+                    str(screen.query_one("#dock-note").content))
 
-        line, chip, info, title = self._screen(body)
+        line, chip, info, note = self._screen(body)
         self.assertIn(f"стр.{line}", chip)
         self.assertIn("латентность", info)
-        self.assertIn(str(line), title)
+        self.assertIn(str(line), note)
 
     def test_run_fills_the_oracle_and_the_moves(self):
         """F5 доводит до конца: точный поиск, находки и список перестановок."""
@@ -1453,23 +1466,36 @@ class TestCodeScreen(unittest.TestCase):
 
         self.assertEqual(self._screen(body), [(2, "parse")])
 
-    def test_drawer_is_closed_until_asked(self):
-        """Нижняя панель закрыта, пока не позвали: экран отдан коду."""
+    def test_dock_opens_on_the_schedule_and_f12_takes_it_away(self):
+        """Док открыт на РАСПИСАНИИ, F12 убирает его — и код занимает всё.
+
+        Два требования разом, и второе важнее первого. Расписание видно
+        сразу, без клавиши, о которой надо знать: это ответ на вопрос, ради
+        которого экран и открывают. Но панели независимы — убрал док, и
+        редактор работает дальше, просто во весь экран. Пока снизу было ДВА
+        окна, убрать их было нечем: расписание стояло всегда.
+        """
         async def body(screen, pilot, session):
-            was = (screen.drawer_open,
-                   screen.query_one("#p-drawer").display)
+            open_at_start = (screen.drawer_open, screen.drawer_tab,
+                             screen.query_one("#code-dock").display,
+                             screen.query_one("#dock-sched").display)
+            tall_with_dock = screen.query_one("#code-edit").size.height
             await pilot.press("f12")
             await pilot.pause()
-            now = (screen.drawer_open,
-                   screen.query_one("#p-drawer").display)
-            await pilot.press("escape")
+            hidden = (screen.drawer_open,
+                      screen.query_one("#code-dock").display)
+            tall_without = screen.query_one("#code-edit").size.height
+            await pilot.press("f12")
             await pilot.pause()
-            return was, now, screen.drawer_open
+            return (open_at_start, tall_with_dock, hidden, tall_without,
+                    screen.drawer_open)
 
-        was, now, after_esc = self._screen(body)
-        self.assertEqual(was, (False, False))
-        self.assertEqual(now, (True, True))
-        self.assertFalse(after_esc, "Esc обязан убирать панель первым шагом")
+        start, tall, hidden, without, back = self._screen(body)
+        self.assertEqual(start, (True, "sched", True, True))
+        self.assertEqual(hidden, (False, False))
+        self.assertGreater(without, tall,
+                           "без дока редактор обязан занять его место")
+        self.assertTrue(back, "F12 обязан возвращать док")
 
     def test_ctrl_p_opens_the_terminal_tab(self):
         """^P — команда: панель на ОТЧЁТЕ, слэш уже введён.
@@ -1498,11 +1524,12 @@ class TestCodeScreen(unittest.TestCase):
             edit.move_cursor(edit.document.end)
             await pilot.press("slash")
             await pilot.pause()
-            return edit.text.endswith("/"), screen.drawer_open
+            return edit.text.endswith("/"), screen.drawer_tab
 
-        typed, opened = self._screen(body)
+        typed, tab = self._screen(body)
         self.assertTrue(typed, "слэш не напечатался в редакторе")
-        self.assertFalse(opened, "редактор не должен открывать панель")
+        self.assertEqual(tab, "sched",
+                         "набор в редакторе не должен переключать вкладку")
 
     def test_broken_example_is_actually_caught(self):
         """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""
@@ -2090,6 +2117,484 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCodeFilesAreTabs(unittest.TestCase):
+    """Открытых буферов может быть несколько, и они не затирают друг друга.
+
+    Пока буфер был один на сессию, «посмотреть пример» значило потерять свой
+    код: `/example` писал прямо в него. Сравнение двух участков — своего и
+    того, что выдал lcc, — при этом было невозможно вовсе, а это основная
+    работа в инструменте.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_example_opens_a_tab_and_does_not_eat_the_buffer(self) -> None:
+        """Пример открывается вкладкой, а свой код остаётся на месте."""
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.text = "{\n  adds,0 %r1, %r2, %r3\n}\n"
+            screen.reparse()
+            await pilot.pause()
+            mine = edit.text
+            screen.handle_line("/example divport")
+            await pilot.pause()
+            await pilot.pause()
+            names = [r["name"] for r in screen.files]
+            shown = edit.text
+            # Назад на свою вкладку — текст обязан вернуться целиком.
+            screen.select_file(0)
+            await pilot.pause()
+            return mine, names, shown, edit.text
+
+        mine, names, shown, back = self._screen(body)
+        self.assertEqual(len(names), 2, f"вкладок должно быть две: {names}")
+        self.assertIn("divport.s", names)
+        self.assertNotEqual(shown, mine, "пример не открылся")
+        self.assertEqual(back, mine, "свой код потерян при переключении")
+
+    def test_edits_survive_switching_between_tabs(self) -> None:
+        """Правка запоминается за вкладкой, а не за экраном."""
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            screen.open_file("{\n  adds,0 %r1, %r2, %r3\n}\n", "второй.s")
+            await pilot.pause()
+            edit.text = edit.text + "! правка второго\n"
+            screen.reparse()
+            await pilot.pause()
+            screen.select_file(0)
+            await pilot.pause()
+            first = edit.text
+            screen.select_file(1)
+            await pilot.pause()
+            return first, edit.text
+
+        first, second = self._screen(body)
+        self.assertNotIn("правка второго", first,
+                         "правка протекла в чужую вкладку")
+        self.assertIn("правка второго", second, "правка не сохранилась")
+
+    def test_the_last_tab_cannot_be_closed(self) -> None:
+        """Пустого редактора без единого буфера быть не должно."""
+        async def body(screen, pilot, session):
+            screen.close_file(0)
+            await pilot.pause()
+            return len(screen.files)
+
+        self.assertEqual(self._screen(body), 1)
+
+    def test_catalog_on_the_left_opens_a_real_file(self) -> None:
+        """Каталог слева — вход в работу: клик открывает файл вкладкой."""
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(screen, pilot, session):
+            item = next(i for i in screen.query(SideItem)
+                        if i.key.endswith("probe.s"))
+            item.post_message(SideItem.Picked(item.key))
+            await pilot.pause()
+            await pilot.pause()
+            return ([r["name"] for r in screen.files],
+                    screen.files[screen.file_i]["path"],
+                    len(screen.query_one("#code-edit").text))
+
+        names, path, size = self._screen(body)
+        self.assertIn("probe.s", names)
+        self.assertTrue(path.endswith("probe.s"),
+                        f"путь не запомнен — ^S не будет знать, куда писать: {path}")
+        self.assertGreater(size, 0, "файл открылся пустым")
+
+    def test_gutter_arrow_runs_the_buffer(self) -> None:
+        """Стрелка в гуттере — то же, что F5. Действие живёт у строки.
+
+        Ряд текстовых кнопок над кодом убран, и если стрелка не работает,
+        мышью прогнать буфер становится нечем.
+        """
+        from vliw.tui.screens.code_screen import AsmArea
+
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit", AsmArea)
+            before = screen.orc
+            edit.post_message(AsmArea.RunHere())
+            await pilot.pause()
+            await screen.app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.pause()
+            return before, screen.orc
+
+        before, after = self._screen(body)
+        self.assertIsNone(before)
+        self.assertIsNotNone(after, "клик по стрелке не запустил поиск")
+
+    def test_channel_stays_visible_when_the_grid_scrolls_sideways(self) -> None:
+        """Канал — закреплённая колонка, а не подпись строки DataTable.
+
+        Решётка развёрнута: тактов много, и вбок её прокручивают всегда.
+        Подпись строки уезжает вместе с содержимым — стоило уехать трём
+        знакам «,0», и решётка переставала отвечать на свой единственный
+        вопрос: в какой канал встала операция. Вдобавок ширина подписи
+        считается лениво и в узком окне схлопывалась в ноль, унося подписи
+        совсем.
+
+        Окно нарочно узкое: на широком решётка помещается целиком, прокрутки
+        не происходит, и тест не проверял бы ничего.
+        """
+        from textual.widgets import DataTable
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(90, 40)) as pilot:
+                    await pilot.pause()
+                    grid = app.screen.query_one("#code-grid", DataTable)
+                    # Прокрутка ДО упора вправо: проверяем самый плохой
+                    # случай, а не «немножко сдвинули».
+                    grid.scroll_to(x=grid.max_scroll_x, animate=False)
+                    await pilot.pause()
+                    await pilot.pause()
+                    # Смотрим на то, что НАРИСОВАНО, а не на данные: данные
+                    # вернут канал в любом случае, вопрос ровно в том, видно
+                    # ли его на экране после прокрутки.
+                    painted = "\n".join(grid.render_line(y).text
+                                        for y in range(grid.size.height))
+                    return (grid.fixed_columns, grid.scroll_x, painted)
+
+        fixed, scrolled, painted = asyncio.run(go())
+        self.assertEqual(fixed, 1, "колонка канала не закреплена")
+        self.assertGreater(scrolled, 0,
+                           "решётка не прокрутилась — тест ничего не проверил")
+        for chan in (",0", ",5"):
+            self.assertIn(chan, painted,
+                          f"канал {chan} уехал вместе с прокруткой")
+
+    def test_cell_and_line_point_at_each_other(self) -> None:
+        """Курсор кода → клетка решётки → та же строка кода. Круг замкнут.
+
+        Колонка канала сдвинула нумерацию колонок на единицу. Забудь вычесть
+        её в одном из двух направлений — и связь разъезжается на такт: экран
+        работает, курсор ездит, ничего не падает, а показывает не ту
+        операцию. Заметно, только если знать правильный ответ.
+        """
+        from textual.widgets import DataTable
+
+        async def body(screen, pilot, session):
+            op = screen.parsed.ops[3]
+            grid = screen.query_one("#code-grid", DataTable)
+            screen._sync_grid_cursor(op.line)
+            await pilot.pause()
+            cell = (grid.cursor_row, grid.cursor_column)
+            screen._cell_to_code()
+            await pilot.pause()
+            back = screen.query_one("#code-edit").cursor_location[0] + 1
+            return (op.line, op.cycle, op.channel, cell, back)
+
+        line, cycle, channel, cell, back = self._screen(body)
+        self.assertEqual(cell, (channel, cycle + 1),
+                         "курсор кода встал не в свою клетку")
+        self.assertEqual(back, line, "клетка увела на чужую строку")
+
+    def test_numbers_survive_many_open_tabs(self) -> None:
+        """Числа участка не вытесняются вкладками, активная всегда видна.
+
+        Пока приоритета не было, шесть открытых файлов молча выдавливали
+        «15→8 т.» за край — ровно тогда, когда открыто много всего и
+        разобраться нужнее всего. А активная вкладка уезжала следом, и
+        экран показывал содержимое файла, чьего имени на нём нет.
+        """
+        from vliw.tui.screens.code_screen import FileStrip, SideItem
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(100, 30)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    for item in list(sc.query(SideItem)):
+                        item.post_message(SideItem.Picked(item.key))
+                        await pilot.pause()
+                    await pilot.pause()
+                    strip = sc.query_one("#code-head", FileStrip)
+                    return (len(sc.files), sc.files[sc.file_i]["name"],
+                            str(strip.content),
+                            [i for _s, _e, i, _c in strip.spans])
+
+        n, active, painted, shown = asyncio.run(go())
+        self.assertGreater(n, 3, "вкладок мало — тест ничего не проверяет")
+        self.assertIn("оп.", painted, "числа участка вытеснены вкладками")
+        self.assertIn(active, painted,
+                      f"активной вкладки {active} нет на экране")
+        self.assertIn(n - 1, shown,
+                      "активная вкладка есть в тексте, но по ней не кликнуть")
+        self.assertLess(len(shown), n,
+                        "все вкладки влезли — окно не проверено, нужно уже")
+
+    def test_empty_schedule_says_why_it_is_empty(self) -> None:
+        """Пустая вкладка объясняет пустоту, а не молчит прямоугольником.
+
+        Буфер без операций — самый частый первый экран. До сих пор вкладка
+        «расписание» показывала в этом случае пустой прямоугольник в треть
+        экрана: подписана, а внутри ничего и почему — молчок.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.text = ""
+            screen.reparse()
+            await pilot.pause()
+            await pilot.pause()
+            return (screen.query_one("#sched-empty").display,
+                    str(screen.query_one("#sched-empty").content),
+                    screen.query_one("#code-grid-wrap").display)
+
+        shown, text, grid = self._screen(body)
+        self.assertTrue(shown, "пустая решётка снова молчит")
+        self.assertIn("ни одной операции", text)
+        self.assertFalse(grid, "пустая таблица осталась рядом с объяснением")
+
+    def test_the_sixth_channel_fits_on_a_short_terminal(self) -> None:
+        """Канал ,5 обязан быть виден: это монопольный делитель.
+
+        Шесть каналов — инвариант решётки, записанный в её коде: обрезанный
+        шестой делает её бесполезной ровно там, где она нужнее всего. На
+        80x24 он уезжал за нижний край молча, без полосы прокрутки и без
+        единого признака, что там что-то есть.
+        """
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    grid = app.screen.query_one("#code-grid")
+                    return "\n".join(grid.render_line(y).text
+                                     for y in range(grid.size.height))
+
+        painted = asyncio.run(go())
+        for chan in (",0", ",5"):
+            self.assertIn(chan, painted,
+                          f"канал {chan} не поместился на терминале 80x24")
+
+    def test_catalog_does_not_pass_the_exhibit_off_as_real_code(self) -> None:
+        """В «настоящем коде» нет файлов-экспонатов.
+
+        probe_ILLUSTRATION_OBSOLETE.s сам про себя пишет: «ЭТО НЕ ВЫВОД
+        КОМПИЛЯТОРА, рисованная от руки иллюстрация, не использовать как
+        источник данных». Оставлен намеренно — но выдавать его за вывод lcc
+        значит ровно то враньё, от которого весь проект защищается
+        пометками источника у каждого числа.
+        """
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(screen, pilot, session):
+            return [i.key for i in screen.query(SideItem)]
+
+        keys = self._screen(body)
+        self.assertTrue(any(k.endswith("probe.s") for k in keys),
+                        "настоящий код пропал из каталога совсем")
+        self.assertFalse([k for k in keys if "OBSOLETE" in k.upper()],
+                         "экспонат подан как настоящий код")
+
+    def test_gutter_keeps_the_arrow_out_of_the_text(self) -> None:
+        """Ширина гуттера учитывает колонку действия.
+
+        Иначе клик по коду попадал бы на две колонки левее, чем виден
+        курсор, — и это заметно только руками, тестом «экран поднялся» нет.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            return edit.gutter_width, edit.RUN_W + edit.BADGE_W
+
+        width, expected = self._screen(body)
+        self.assertEqual(width, expected)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestAgentIsAPanelNotAMode(unittest.TestCase):
+    """АГЕНТ в КОДЕ — объяснятель по ^G, знающий, на что человек смотрит.
+
+    Целого экрана и четверти главного меню он не стоит: по замерам проекта
+    подсказка обученной модели оракулу дала 5% даже с идеальной подсказкой,
+    а интервальная нижняя граница отсекла 89% узлов перебора. Место в
+    интерфейсе должно совпадать с этими числами.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_it_asks_about_what_is_on_screen(self) -> None:
+        """Фокус в редакторе — вопрос про код; вкладка — про её содержимое."""
+        from vliw.tui.widgets import PanelPrompt
+
+        async def body(screen, pilot, session):
+            screen.query_one("#code-edit").focus()
+            screen.action_explain()
+            await pilot.pause()
+            about_code = self._facts(screen)
+            screen.action_explain()          # ^G закрывает
+            await pilot.pause()
+            closed = len(list(screen.query(PanelPrompt)))
+            # Фокус не в тексте — спрашивают про открытую вкладку.
+            screen.open_drawer("lint")
+            screen.query_one("#dock-lint").focus()
+            screen.action_explain()
+            await pilot.pause()
+            return about_code, closed, self._facts(screen)
+
+        code, closed, lint = self._screen(body)
+        self.assertEqual(closed, 0, "^G обязан и закрывать")
+        self.assertTrue(any("буфер" in f or "операц" in f for f in code),
+                        f"объяснятель не знает про код: {code}")
+        self.assertNotEqual(code, lint,
+                            "факты не зависят от того, на что смотришь")
+
+    @staticmethod
+    def _facts(screen):
+        from vliw.tui.widgets import PanelPrompt
+
+        panels = list(screen.query(PanelPrompt))
+        return list(panels[0].facts) if panels else []
+
+    def test_escape_closes_it_before_anything_else(self) -> None:
+        """Esc убирает объяснятель первым: он всплывающий и лежит поверх."""
+        from vliw.tui.widgets import PanelPrompt
+
+        async def body(screen, pilot, session):
+            screen.action_explain()
+            await pilot.pause()
+            opened = len(list(screen.query(PanelPrompt)))
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.pause()
+            return (opened, len(list(screen.query(PanelPrompt))),
+                    screen.app.screen.__class__.__name__)
+
+        opened, after, where = self._screen(body)
+        self.assertEqual(opened, 1)
+        self.assertEqual(after, 0, "Esc не убрал объяснятель")
+        self.assertEqual(where, "CodeScreen", "Esc унёс с экрана целиком")
+
+    def test_tab_stays_an_indent_in_the_editor(self) -> None:
+        """Tab в ассемблере — отступ, а не открытие справочника.
+
+        Отбирать Tab у редактора нельзя: им расставляют отступы в коде.
+        Поэтому объяснятель и живёт на ^G, а не на Tab, как справочник у
+        развёрнутых панелей в остальных режимах.
+        """
+        from vliw.tui.widgets import PanelPrompt
+
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.focus()
+            edit.move_cursor(edit.document.end)
+            before = edit.text
+            await pilot.press("tab")
+            await pilot.pause()
+            return (edit.text[len(before):],
+                    len(list(screen.query(PanelPrompt))))
+
+        added, panels = self._screen(body)
+        self.assertTrue(added and added.isspace(),
+                        f"Tab перестал делать отступ, добавлено {added!r}")
+        self.assertEqual(panels, 0, "Tab открыл объяснятель вместо отступа")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestCoreIsATabNotAMode(unittest.TestCase):
+    """ЯДРО — вкладка-консоль нижнего дока, а не отдельный экран.
+
+    Его ценность ровно одна: собрать граф выражениями, не умея писать
+    ассемблер e2k, и узнать, во сколько тактов он укладывается. Целого
+    экрана и четверти главного меню эта работа не стоит. Машина одна на
+    сессию, поэтому имена и память здесь те же, что в полноэкранном ЯДРЕ.
+    """
+
+    @staticmethod
+    def _screen(body):
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    screen = app.screen
+                    screen.open_drawer("core")
+                    await pilot.pause()
+                    return await body(screen, pilot, session)
+
+        return asyncio.run(go())
+
+    def test_expressions_build_a_graph_and_show_state(self) -> None:
+        """Строки консоли считают, кладут узлы в граф и меняют панельку."""
+        async def body(screen, pilot, session):
+            for line in ("a = 10", "t = a*2 + 3"):
+                screen._exec_core(line)
+                await pilot.pause()
+            ws = session.workspace()
+            return (dict(ws.regs), ws.graph_size(),
+                    str(screen.query_one("#core-state").content))
+
+        regs, size, state = self._screen(body)
+        self.assertEqual(regs.get("a"), 10)
+        self.assertEqual(regs.get("t"), 23)
+        self.assertGreater(size, 0, "выражение не положило ничего в граф")
+        self.assertIn("23", state, "панелька имён не показывает значение")
+
+    def test_go_computes_and_hands_the_graph_to_the_session(self) -> None:
+        """`go` считает точным поиском и делает граф участком сессии.
+
+        Без второго консоль была бы калькулятором: посчитала и забыла, а
+        РАЗБОР с АГЕНТОМ продолжали бы говорить про демо-сценарий.
+        """
+        async def body(screen, pilot, session):
+            screen._exec_core("sum 8")
+            await pilot.pause()
+            screen._exec_core("go")
+            await pilot.pause()
+            await screen.app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.pause()
+            return (session.scenario, len(session.dag_obj),
+                    str(screen.query_one("#core-log").lines[-1]))
+
+        scenario, ops, last = self._screen(body)
+        self.assertEqual(scenario, "interp")
+        self.assertGreater(ops, 0)
+        self.assertIn("участок сессии", last,
+                      "консоль не сказала, куда уехал граф")
+
+    def test_the_command_line_is_actually_visible(self) -> None:
+        """Строка ввода обязана иметь высоту: невидимое поле — не поле.
+
+        У Textual box-sizing по умолчанию border-box, и `height: 1` вместе с
+        волоском сверху даёт НОЛЬ строк содержимого. Поле при этом
+        фокусируется и принимает нажатия — то есть набирать приходится
+        вслепую, и заметить это можно только глазами.
+        """
+        async def body(screen, pilot, session):
+            core = screen.query_one("#core-input").size.height
+            screen.open_drawer("term")
+            await pilot.pause()
+            return core, screen.query_one("#prompt-input").size.height
+
+        core, term = self._screen(body)
+        self.assertEqual(core, 1, "строка ввода ЯДРА невидима")
+        self.assertEqual(term, 1, "строка ввода ВЫВОДА невидима")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestLabSleepBar(unittest.TestCase):
     """Вторая строка шапки РАЗБОРА: факты трёх спящих режимов.
 
@@ -2223,12 +2728,12 @@ class TestLabSleepBar(unittest.TestCase):
                          "клик по факту не открыл режим АГЕНТ")
 
     def test_other_screens_stay_one_line(self):
-        """Строка — пилот РАЗБОРА: ЯДРО/АГЕНТ/КОД её не получают."""
+        """Строка — пилот РАЗБОРА: ЯДРО и АГЕНТ её не получают."""
         from vliw.tui.widgets import TopBar
 
         async def go():
             out = {}
-            for start in ("work", "mind", "code"):
+            for start in ("work", "mind"):
                 app, _ = _make_app(start)
                 with redirect_stdout(io.StringIO()):
                     async with app.run_test(size=(150, 46)) as pilot:
@@ -2242,6 +2747,35 @@ class TestLabSleepBar(unittest.TestCase):
         for start, (sleepers, shown) in asyncio.run(go()).items():
             self.assertEqual(sleepers, [], f"{start}: строка пришла без спроса")
             self.assertFalse(shown, f"{start}: строка не должна рисоваться")
+
+    def test_code_has_no_mode_bar_at_all(self):
+        """У КОДА шапки режима нет: верхняя строка — вкладки файлов.
+
+        Строк наверху было две, и они говорили одно и то же дважды: «КОД
+        редактор» дублировало то, что и так видно, а числа участка стояли
+        ещё и в строке состояния внизу. Сильнее прежней проверки: там
+        требовалось, чтобы вторая строка шапки не рисовалась, здесь — чтобы
+        самой шапки не было.
+        """
+        from vliw.tui.widgets import TopBar
+
+        async def go():
+            app, _ = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    head = sc.query_one("#code-head")
+                    return (len(list(sc.query(TopBar))),
+                            head.region.y, head.region.height,
+                            str(head.content))
+
+        bars, y, h, text = asyncio.run(go())
+        self.assertEqual(bars, 0, "шапка режима осталась на экране КОД")
+        self.assertEqual((y, h), (0, 1),
+                         "верхняя строка не одна и не самая верхняя")
+        self.assertIn("NEX", text, "марка потерялась вместе с шапкой")
+        self.assertIn("оп.", text, "числа участка не переехали в верхнюю строку")
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
@@ -2294,6 +2828,10 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
             app, _session = _make_app(None)
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(120, h)) as pilot:
+                    await pilot.pause()
+                    # Список экранов больше не стартовый — открываем его сами.
+                    app.to_picker()
+                    await pilot.pause()
                     await pilot.pause()
                     sc = app.screen
                     if not isinstance(sc, PickerScreen):

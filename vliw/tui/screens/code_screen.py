@@ -529,12 +529,46 @@ class FileStrip(Static):
             super().__init__()
             self.index = index
 
+    class Toggled(Message):
+        """Клик по кнопке панели в правом краю полосы."""
+
+        def __init__(self, which: str) -> None:
+            super().__init__()
+            self.which = which
+
+    class Maximized(Message):
+        """Двойной клик по вкладке — редактор во весь экран и обратно.
+
+        Место выбрано по IDE: в VS Code и IntelliJ разворачивают именно
+        двойным кликом по вкладке файла. По самому редактору так делать
+        нельзя — там двойной клик выделяет слово, и это поведение текстового
+        поля, которое ломать нечем оправдать.
+        """
+
+    #: Двойной клик Textual не считает сам: в событии Click есть только
+    #: время. Тот же приём, что в DockTabs.
+    DOUBLE_CLICK_S = 0.4
+
     def __init__(self, *args, **kw) -> None:
         super().__init__(*args, **kw)
         #: [(начало, конец, номер вкладки, есть ли ✕)] в клетках строки.
         self.spans: list[tuple[int, int, int, bool]] = []
+        #: [(начало, конец, что переключает)] — кнопки панелей справа.
+        self.toggles: list[tuple[int, int, str]] = []
+        self._last_click = 0.0
 
     def on_click(self, event) -> None:
+        # Кнопки панелей проверяем первыми: они лежат правее вкладок и их
+        # зоны не пересекаются, но порядок делает намерение явным.
+        for start, end, which in self.toggles:
+            if start <= event.x < end:
+                event.stop()
+                self.post_message(self.Toggled(which))
+                return
+        now = getattr(event, "time", 0.0) or time.monotonic()
+        double = (now - self._last_click) <= self.DOUBLE_CLICK_S
+        self._last_click = 0.0 if double else now
+
         for start, end, index, closable in self.spans:
             if not (start <= event.x < end):
                 continue
@@ -542,6 +576,8 @@ class FileStrip(Static):
             # ✕ занимает две последние клетки вкладки.
             if closable and event.x >= end - 2:
                 self.post_message(self.Closed(index))
+            elif double:
+                self.post_message(self.Maximized())
             else:
                 self.post_message(self.Picked(index))
             return
@@ -732,6 +768,8 @@ class CodeScreen(ModeScreen):
         # худшее из двух. Теперь окно одно: видно то, что выбрано, и оно
         # целиком убирается F12, когда нужен только код.
         self.drawer_open = True
+        #: Что было открыто до разворота редактора; None — не развёрнут.
+        self._maximized: tuple[bool, bool] | None = None
         self.drawer_tab = "sched"   # sched | line | lint | term
         # Разворот дока: "" или "dock". Не прячет редактор — отдаёт доку
         # больше высоты и добавляет то, чему в трети экрана места нет
@@ -1652,6 +1690,64 @@ class CodeScreen(ModeScreen):
     def context_bits(self) -> str:
         return "   ·   ".join(self.context_parts())
 
+    #: Кнопки панелей в правом краю верхней полосы: (что, значок, подпись).
+    #: Порядок и место — как в VS Code: три переключателя в правом верхнем
+    #: углу. Заодно это ответ на «верхняя полоса пустая»: там теперь не
+    #: воздух, а единственные органы управления раскладкой, до которых иначе
+    #: надо было помнить клавиши ^B и F12.
+    TOGGLES = (
+        ("side", "▌", "каталог слева (^B)"),
+        ("dock", "▄", "панель снизу (F12)"),
+    )
+
+    def _append_toggles(self, line) -> list[tuple[int, int, str]]:
+        """Дописать кнопки панелей в конец строки, вернуть их зоны клика.
+
+        Значок закрашен, когда панель открыта, и приглушён, когда убрана, —
+        состояние читается, не нажимая.
+        """
+        zones: list[tuple[int, int, str]] = []
+        for which, glyph, _tip in self.TOGGLES:
+            shown = self.side_shown if which == "side" else self.drawer_open
+            begin = line.cell_len
+            line.append(" " + glyph + " ",
+                        style=palette.role_hex("accent2" if shown else "faint"))
+            zones.append((begin, line.cell_len, which))
+        return zones
+
+    def on_file_strip_maximized(self, event) -> None:
+        """Редактор во весь экран: убрать всё вокруг, вторым кликом вернуть.
+
+        Состояние запоминаем, чтобы возврат отдавал ровно то, что было
+        открыто до разворота, а не «всё подряд»: если каталог был закрыт, он
+        и останется закрытым.
+        """
+        event.stop()
+        if self._maximized is None:
+            self._maximized = (self.side_shown, self.drawer_open)
+            if self.side_shown:
+                self.action_toggle_side()
+            if self.drawer_open:
+                self.action_toggle_drawer()
+        else:
+            side, drawer = self._maximized
+            self._maximized = None
+            if side and not self.side_shown:
+                self.action_toggle_side()
+            if drawer and not self.drawer_open:
+                self.action_toggle_drawer()
+        self.refresh_context()
+        self.refresh_hints()
+
+    def on_file_strip_toggled(self, event) -> None:
+        """Кнопка панели нажата."""
+        event.stop()
+        if event.which == "side":
+            self.action_toggle_side()
+        else:
+            self.action_toggle_drawer()
+        self.refresh_context()
+
     def context_parts(self) -> list[str]:
         """Числа участка для правого края верхней строки, по кускам.
 
@@ -1948,6 +2044,7 @@ class CodeScreen(ModeScreen):
             head.append(" " * max(1, width - head.cell_len - len(tail) - 1))
             head.append(tail, style=dim)
             strip.spans = []
+            strip.toggles = self._append_toggles(head)
             strip.update(head)
             return
         # Последнюю вкладку закрыть нельзя: правят всегда что-то, и пустой
@@ -1997,10 +2094,11 @@ class CodeScreen(ModeScreen):
         if hi < n - 1:
             line.append(f"› {n - 1 - hi} ", style=faint)
 
-        pad = max(1, width - line.cell_len - len(tail) - 1)
+        pad = max(1, width - line.cell_len - len(tail) - len(self.TOGGLES) * 3 - 2)
         line.append(" " * pad)
         line.append(tail, style=dim)
         strip.spans = spans
+        strip.toggles = self._append_toggles(line)
         strip.update(line)
 
     def _draw_side(self) -> None:

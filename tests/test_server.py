@@ -70,12 +70,45 @@ class FakeServer:
     def _handle(self, conn) -> None:
         try:
             conn.settimeout(2.0)
-            self.requests.append(conn.recv(65536))
+            self.requests.append(self._read_request(conn))
             conn.sendall(self.response)
         except OSError:
             pass
         finally:
             conn.close()
+
+    @staticmethod
+    def _read_request(conn) -> bytes:
+        """Прочитать запрос ЦЕЛИКОМ: заголовки и тело по Content-Length.
+
+        Одного `recv` не хватало, и это была вторая причина флака (первая —
+        последовательный `accept`, см. `_serve`). `http.client` отправляет
+        заголовки и тело разными вызовами. Подставной сервер успевал
+        прочитать 126 байт заголовков, ответить и ЗАКРЫТЬ сокет — а клиент в
+        этот момент ещё дописывал тело и получал EPIPE прямо на
+        `conn.request`. Отсюда и обманчивая картина в отчёте: падал тест
+        отмены, хотя до отмены дело не доходило вовсе.
+
+        Настоящий сервер читает запрос до конца, и подставной обязан вести
+        себя так же, иначе он проверяет не тот протокол.
+        """
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            part = conn.recv(65536)
+            if not part:
+                return buf
+            buf += part
+        head, _, body = buf.partition(b"\r\n\r\n")
+        want = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                want = int(line.split(b":", 1)[1])
+        while len(body) < want:
+            part = conn.recv(65536)
+            if not part:
+                break
+            body += part
+        return head + b"\r\n\r\n" + body
 
     def close(self) -> None:
         self._stop = True

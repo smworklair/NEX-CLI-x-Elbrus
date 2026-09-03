@@ -62,14 +62,20 @@ class TestScreensMount(unittest.TestCase):
 
         self.assertEqual(asyncio.run(run()), expect_cls)
 
-    def test_home_is_the_editor(self):
-        """Просто запущенный инструмент открывает КОД, а не меню из карточек.
+    def test_home_is_the_picker_but_code_is_the_main_screen(self):
+        """Запуск — выбор режима; КОД остаётся главным экраном по смыслу.
 
-        Пока первым экраном был выбор из четырёх, все четыре были равны — а
-        раз равны, каждый обязан быть самодостаточным приложением. Отсюда и
-        бралась теснота во всех сразу.
+        Это два РАЗНЫХ решения, и их однажды спутали. КОД главный: он
+        единственный, куда человек приносит своё, и остальные экраны стали
+        вкладками его дока. Но СТАРТОВАТЬ прямо в нём оказалось ловушкой —
+        человек попадает в редактор и не знает, что экранов четыре, потому
+        что выход на ^O нигде не показан. Выбор режима стоит одного нажатия
+        и сразу отвечает, что тут вообще есть.
         """
-        self._mounts(None, "CodeScreen")
+        from vliw.tui.app import NexApp
+
+        self.assertEqual(NexApp.HOME, "code", "главным остаётся КОД")
+        self._mounts(None, "PickerScreen")
 
     def test_lab(self):
         self._mounts("lab", "LabScreen")
@@ -1516,20 +1522,49 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(tab, "term")
         self.assertEqual(value, "/")
 
-    def test_slash_in_the_editor_is_just_a_character(self):
-        """В редакторе «/» печатается: отбирать у текста знак нельзя."""
+    def test_slash_inside_a_line_is_just_a_character(self):
+        """«/» посреди строки печатается: отбирать у текста знак нельзя.
+
+        А в НАЧАЛЕ пустой строки он открывает каталог команд — см. тест
+        ниже. Различение по столбцу возможно потому, что в ассемблере e2k
+        строка со слэша не начинается никогда: комментарий это «!», а
+        операция — мнемоника.
+        """
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             edit.focus()
             edit.move_cursor(edit.document.end)
+            edit.insert("adds,0 %r1")      # курсор не в нулевой колонке
+            await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
             return edit.text.endswith("/"), screen.drawer_tab
 
         typed, tab = self._screen(body)
-        self.assertTrue(typed, "слэш не напечатался в редакторе")
+        self.assertTrue(typed, "слэш не напечатался посреди строки")
         self.assertEqual(tab, "sched",
                          "набор в редакторе не должен переключать вкладку")
+
+    def test_slash_at_line_start_opens_the_command_catalog(self):
+        """«/» в пустой строке — каталог команд, а не символ.
+
+        До этого каталог жил только на ^P, про который надо знать, — а «/»
+        люди жмут первым делом, потому что так работает почти везде. Команды
+        при этом есть: /gen, /fill, /example, /rewrite, и найти их было
+        неоткуда.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.focus()
+            edit.load_text("")
+            await pilot.pause()
+            await pilot.press("slash")
+            await pilot.pause()
+            return edit.text, screen.drawer_tab
+
+        text, tab = self._screen(body)
+        self.assertEqual(text, "", "слэш не должен печататься в пустой строке")
+        self.assertEqual(tab, "term", "каталог команд не открылся")
 
     def test_broken_example_is_actually_caught(self):
         """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""

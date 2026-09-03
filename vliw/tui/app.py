@@ -85,11 +85,23 @@ class NexApp(App):
     #: из работы, а не начинают ими.
     HOME = "code"
 
+    #: С чего инструмент ОТКРЫВАЕТСЯ — отдельно от того, какой экран главный.
+    #: КОД остаётся главным по смыслу, но стартовать сразу в нём оказалось
+    #: ловушкой: человек попадает в редактор и не знает, что экранов четыре,
+    #: — выход на ^O нигде не показан. Выбор режима стоит одного нажатия и
+    #: сразу отвечает на вопрос «а что тут вообще есть».
+    START_AT_PICKER = True
+
     def on_mount(self) -> None:
         from ..ui import render
 
         self._theme_source = render.THEME.name
-        self.open_mode(self.start_mode or self.HOME)
+        if self.start_mode:
+            self.open_mode(self.start_mode)
+        elif self.START_AT_PICKER:
+            self.to_picker()
+        else:
+            self.open_mode(self.HOME)
 
     def _go(self, screen) -> None:
         """Первый экран кладём на стек, дальше — заменяем: стек не растёт."""

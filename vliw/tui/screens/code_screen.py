@@ -1305,9 +1305,23 @@ class CodeScreen(ModeScreen):
             self.open_drawer(self.drawer_tab)
 
     def action_slash(self) -> None:
-        """«/»: в тексте — символ, вне текста — начало команды."""
+        """«/»: в НАЧАЛЕ строки — каталог команд, внутри строки — символ.
+
+        Раньше в редакторе «/» всегда печатался символом, и каталог команд
+        оставался доступен только по ^P — про который надо знать. А «/» люди
+        жмут первым делом, потому что так работает почти везде.
+
+        Различаем по столбцу: в ассемблере e2k строка со слэша не начинается
+        никогда (комментарий — «!», операция — мнемоника), поэтому «/» в
+        нулевой колонке однозначно значит «хочу команду», а не «печатаю код».
+        """
         edit = self.query_one("#code-edit", AsmArea)
         if edit.has_focus:
+            row, col = edit.cursor_location
+            line = edit.document.get_line(row) if hasattr(edit, "document") else ""
+            if col == 0 and not str(line).strip():
+                self.action_command()
+                return
             edit.insert("/")
             return
         self.action_command()

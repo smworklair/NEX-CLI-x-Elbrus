@@ -821,6 +821,13 @@ class CodeScreen(ModeScreen):
                 # двух вкладках сразу — это не два ответа, а один вопрос
                 # «а это то же самое или другое?».
                 VerticalScroll(Static(id="sched-side-body"), id="sched-side"),
+                # Пустая решётка — самый частый первый экран (буфер не
+                # разобрался, или каналы спорят с моделью), и до сих пор она
+                # была просто пустым прямоугольником в треть экрана: вкладка
+                # подписана «расписание», а расписания нет и почему — молчок.
+                # Прямоугольник, который ничего не говорит, дороже строки,
+                # которая говорит.
+                Static(id="sched-empty"),
                 id="dock-sched")
 
             # РАЗБОР: такт под курсором, его цепочка зависимостей и каталог
@@ -1643,7 +1650,14 @@ class CodeScreen(ModeScreen):
         self.action_run_code()
 
     def context_bits(self) -> str:
-        """Числа участка для правого края верхней строки.
+        return "   ·   ".join(self.context_parts())
+
+    def context_parts(self) -> list[str]:
+        """Числа участка для правого края верхней строки, по кускам.
+
+        Куски, а не готовая строка: в узком окне хвост режется, и резать его
+        надо по смысловым кускам, а не по буквам. Обрезок «examples/probe.s ·»
+        читается как поломка, а не как «здесь не поместилось».
 
         Порядок — по убыванию важности НАРОЧНО.
 
@@ -1671,7 +1685,7 @@ class CodeScreen(ModeScreen):
         if self.app.session.code_path:
             bits.append(self.app.session.code_path)
         bits.append(s.model().name)
-        return "   ·   ".join(bits)
+        return bits
 
     #: Сколько подсказок держим внизу. Их было семь, и они не помещались:
     #: на 120 колонках последняя обрезалась на полуслове. Полоса подсказок
@@ -1884,49 +1898,102 @@ class CodeScreen(ModeScreen):
         self._draw_title()
 
     def _draw_title(self) -> None:
-        """Полоса файлов: что открыто и что правится сейчас.
+        """Полоса файлов: что открыто, что правится и во что обходится.
 
-        Заменяет рамку с подписью «ИСХОДНИК». Имя рамки отвечало на вопрос,
-        которого никто не задаёт (что это за прямоугольник — и так видно,
-        в нём код), а имя файла — на тот, который задают всегда: правлю я
-        свой `.s` или демо-пример, который не жалко.
+        Заменяет и рамку «ИСХОДНИК», и шапку режима. Имя рамки отвечало на
+        вопрос, которого никто не задаёт (что это за прямоугольник — и так
+        видно, в нём код), а шапка повторяла числа из строки состояния.
+
+        Числа справа имеют ПРИОРИТЕТ над вкладками. Пока приоритета не было,
+        шесть открытых файлов вытесняли их за край молча — и «15→8 т.»
+        пропадало ровно тогда, когда открыто много всего и разобраться
+        нужнее всего. Вкладки вместо этого сдвигаются окном вокруг активной:
+        она видна всегда, а про уехавшие говорят «‹ 2».
         """
         try:
             strip = self.query_one("#code-head", FileStrip)
         except Exception:
             return
         raised = palette.SURFACES["raised"]
-        line = Text()
-        line.append(" ▍", style=palette.mode_hex(self.mode))
-        line.append("NEX ", style=f"{palette.mode_hex(self.mode)} bold")
-        spans: list[tuple[int, int, int, bool]] = []
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        title = palette.role_hex("title")
+        mark_c = palette.mode_hex(self.mode)
+
+        head = Text()
+        head.append(" ▍", style=mark_c)
+        head.append("NEX ", style=f"{mark_c} bold")
+        width = strip.size.width or 120
+        # Хвост ужимаем по кускам, пока он не станет длиннее половины
+        # строки: вкладкам тоже нужно место, а имя профиля машины постоянно
+        # и уезжает первым — числа участка меняются от правки к правке.
+        parts = self.context_parts()
+        tail = "   ·   ".join(parts)
+        while len(parts) > 1 and len(tail) > width // 2:
+            parts.pop()
+            tail = "   ·   ".join(parts)
+        # Место под вкладки — всё, что осталось от марки и чисел.
+        room = width - head.cell_len - len(tail) - 3
+
         n = len(self.files)
+        if not n:
+            # `refresh_context` зовётся из on_mount, то есть ДО on_ready,
+            # где заводится первая вкладка. Рисуем то, что уже есть.
+            head.append(" " * max(1, width - head.cell_len - len(tail) - 1))
+            head.append(tail, style=dim)
+            strip.spans = []
+            strip.update(head)
+            return
         # Последнюю вкладку закрыть нельзя: правят всегда что-то, и пустой
         # редактор без единого буфера — состояние, из которого не выйти.
         closable = n > 1
+        chunks: list[Text] = []
         for i, rec in enumerate(self.files):
             on = i == self.file_i
-            start = line.cell_len
-            name = rec["name"][:22]
-            line.append(f" {name}", style=(
-                f"{palette.role_hex('title')} bold on {raised}" if on
-                else palette.role_hex("dim")))
+            base = f"{title} bold on {raised}" if on else dim
+            t = Text()
+            t.append(f" {rec['name'][:22]}", style=base)
             # Признак «правлен после прогона» на самой вкладке: он про ЭТОТ
             # буфер, а в общей строке состояния был бы про какой-то.
-            mark = " ●" if (on and self._stale()) else "  "
-            line.append(mark, style=(f"{palette.role_hex('warning')} on {raised}"
-                                     if on else palette.role_hex("faint")))
-            line.append(" ✕ " if closable else " ",
-                        style=(f"{palette.role_hex('dim')} on {raised}" if on
-                               else palette.role_hex("faint")))
-            spans.append((start, line.cell_len, i, closable))
-            line.append(" ", style=palette.role_hex("faint"))
-        # Хвост строки: числа участка, прижатые вправо. Раньше они стояли
-        # отдельной шапкой режима — целой строкой ради того же самого.
-        tail = self.context_bits()
-        pad = max(1, strip.size.width - line.cell_len - len(tail) - 1)
+            t.append(" ●" if (on and self._stale()) else "  ",
+                     style=(f"{palette.role_hex('warning')} on {raised}"
+                            if on else faint))
+            t.append(" ✕ " if closable else " ",
+                     style=(f"{dim} on {raised}" if on else faint))
+            chunks.append(t)
+
+        # Окно вкладок вокруг активной: растём от неё в обе стороны, пока
+        # помещается. Активная в окне по построению — с неё и начали.
+        lo = hi = self.file_i
+        used = chunks[self.file_i].cell_len
+        while True:
+            grew = False
+            if hi + 1 < n and used + chunks[hi + 1].cell_len + 1 <= room:
+                hi += 1
+                used += chunks[hi].cell_len + 1
+                grew = True
+            if lo - 1 >= 0 and used + chunks[lo - 1].cell_len + 1 <= room:
+                lo -= 1
+                used += chunks[lo].cell_len + 1
+                grew = True
+            if not grew:
+                break
+
+        line = head
+        spans: list[tuple[int, int, int, bool]] = []
+        if lo:
+            line.append(f" ‹{lo} ", style=faint)
+        for i in range(lo, hi + 1):
+            begin = line.cell_len
+            line.append_text(chunks[i])
+            spans.append((begin, line.cell_len, i, closable))
+            line.append(" ", style=faint)
+        if hi < n - 1:
+            line.append(f"› {n - 1 - hi} ", style=faint)
+
+        pad = max(1, width - line.cell_len - len(tail) - 1)
         line.append(" " * pad)
-        line.append(tail, style=palette.role_hex("dim"))
+        line.append(tail, style=dim)
         strip.spans = spans
         strip.update(line)
 
@@ -1959,8 +2026,14 @@ class CodeScreen(ModeScreen):
             item.tooltip = f"{label}\nклик — открыть вкладкой"
             rows.append(item)
 
+        # Файлы с OBSOLETE в имени в «настоящий код» не идут. В репозитории
+        # такой один — probe_ILLUSTRATION_OBSOLETE.s, и он сам про себя
+        # пишет: «ЭТО НЕ ВЫВОД КОМПИЛЯТОРА, рисованная от руки иллюстрация,
+        # не использовать как источник данных». Оставлен намеренно, как
+        # экспонат; выдавать экспонат за вывод lcc — ровно то враньё, от
+        # которого весь проект и защищается пометками источника у чисел.
         real = sorted(p for p in examples_dir().parent.glob("*.s")
-                      if p.is_file())
+                      if p.is_file() and "OBSOLETE" not in p.name.upper())
         if real:
             rows.append(Static(Text("\n настоящий код", style=title)))
         for path in real:
@@ -2101,8 +2174,7 @@ class CodeScreen(ModeScreen):
                             f"{plural(bad, 'строка', 'строки', 'строк')} "
                             f"не разобрать", style=palette.role_hex("warning"))
             else:
-                line.append("пусто — набери операции e2k или /example",
-                            style=dim)
+                line.append("буфер пуст", style=dim)
             self.query_one("#code-status", Static).update(line)
             return
         if self.comp is not None:
@@ -2112,8 +2184,12 @@ class CodeScreen(ModeScreen):
                 line.append(f" → {self.orc.schedule.slot_utilization * 100:.0f}%",
                             style=palette.role_hex("success"))
         else:
-            line.append("буфер не сходится с моделью",
-                        style=palette.role_hex("warning"))
+            # Дальше про резерв не говорим: сравнивать не с чем, а длинная
+            # фраза на 80 колонках обрезалась бы посреди слова. Обрезанная
+            # подсказка хуже отсутствующей — она выглядит как поломка.
+            line.append("не по модели", style=palette.role_hex("warning"))
+            self.query_one("#code-status", Static).update(line)
+            return
         if self._have_orc():
             orc = self.orc.schedule.makespan
             src = self.comp.makespan if self.comp is not None else None
@@ -2137,7 +2213,7 @@ class CodeScreen(ModeScreen):
             line.append("   ·   буфер правили — F5",
                         style=palette.role_hex("warning"))
         else:
-            line.append("   ·   F5 — во сколько тактов это влезает",
+            line.append("   ·   F5 — посчитать резерв",
                         style=palette.role_hex("accent2"))
         self.query_one("#code-status", Static).update(line)
 
@@ -2199,6 +2275,7 @@ class CodeScreen(ModeScreen):
         if self.drawer_tab == "sched":
             self._draw_dock_note()
         self._draw_sched_side()
+        self._draw_sched_empty(left)
 
         wrap = self.query_one("#code-grid-orc-wrap")
         wrap.display = both
@@ -2207,6 +2284,47 @@ class CodeScreen(ModeScreen):
                 Text(f"  точный поиск   ·   {self.orc.schedule.makespan} т.",
                      style=palette.role_hex("accent")))
             self._fill_grid("code-grid-orc", self.orc.schedule, "orc")
+
+    def _draw_sched_empty(self, left) -> None:
+        """Вместо пустого прямоугольника — почему пусто и что делать."""
+        try:
+            note = self.query_one("#sched-empty", Static)
+            wrap = self.query_one("#code-grid-wrap")
+        except Exception:
+            return
+        t = Text()
+        if self.parsed is None or not self.parsed.ops:
+            t.append("  в буфере нет ни одной операции e2k.\n\n",
+                     style=palette.role_hex("dim"))
+            t.append("  ^B", style=palette.role_hex("accent2"))
+            t.append("  открыть каталог и взять пример или настоящий .s\n",
+                     style=palette.role_hex("dim"))
+            if self.problems:
+                bad = len(self.problems)
+                t.append(f"  вкладка ЗАМЕЧАНИЯ  почему не разобрались "
+                         f"{bad} "
+                         f"{plural(bad, 'строка', 'строки', 'строк')}\n",
+                         style=palette.role_hex("warning"))
+        elif left is None:
+            t.append("  расписание из буфера не восстановилось: "
+                     "раскладка по каналам спорит с моделью машины.\n\n",
+                     style=palette.role_hex("warning"))
+            t.append("  вкладка ЗАМЕЧАНИЯ", style=palette.role_hex("accent2"))
+            t.append("  что именно не сошлось\n",
+                     style=palette.role_hex("dim"))
+            t.append("  F5", style=palette.role_hex("accent2"))
+            t.append("  точный поиск всё равно посчитает: он строит "
+                     "расписание сам, а не читает написанное\n",
+                     style=palette.role_hex("dim"))
+        else:
+            note.display = False
+            wrap.display = True
+            return
+        note.update(t)
+        note.display = True
+        # Решётку прячем: пустая таблица с одной шапкой тактов рядом с
+        # объяснением читается как «что-то сломалось наполовину».
+        wrap.display = False
 
     def _draw_sched_side(self) -> None:
         """Колонка разбора: за счёт чего поиск выигрывает эти такты."""

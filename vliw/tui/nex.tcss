@@ -756,9 +756,15 @@ ModeScreen.tight #p-console { height: 8; }
    вкладке.
 */
 
+/* min-height 10 — не «на глаз», а по решётке: волосок сверху (1), полоса
+   вкладок (1), шапка тактов (1), ШЕСТЬ каналов (6) и полоса горизонтальной
+   прокрутки (1). Шесть каналов обязаны быть видны целиком: обрезанный
+   шестой — это ,5, тот самый монопольный делитель, и без него решётка
+   перестаёт отвечать на свой вопрос. При min-height 8 на терминале 80x24
+   ,5 уезжал за нижний край молча. */
 #code-dock {
     height: 34%;
-    min-height: 8;
+    min-height: 10;
     width: 100%;
     background: $nex-panel;
     border-top: solid $nex-line 45%;
@@ -839,6 +845,8 @@ ModeScreen.tight #p-console { height: 8; }
 }
 
 /* --- вкладки ЗАМЕЧАНИЯ и ВЫВОД ----------------------------------------- */
+
+#sched-empty { display: none; height: 1fr; width: 1fr; padding: 1 1 0 1; }
 
 #dock-lint { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
 #dock-term { height: 1fr; width: 100%; }
@@ -970,7 +978,7 @@ ModeScreen.tight #code-side { display: none; }
    него отбирает у кода больше, чем стоит. Ниже 34 строк док становится
    фиксированной полосой, а всё, что осталось, достаётся редактору. */
 ModeScreen.low #code-dock { height: 11; }
-ModeScreen.very-low #code-dock { height: 9; }
+ModeScreen.very-low #code-dock { height: 10; }
 
 /* Разворот дока: полэкрана вкладке, остальное коду. Редактор не прячется
    никогда — иначе непонятно, к чему относится то, что в доке. */

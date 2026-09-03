@@ -2300,6 +2300,106 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                          "курсор кода встал не в свою клетку")
         self.assertEqual(back, line, "клетка увела на чужую строку")
 
+    def test_numbers_survive_many_open_tabs(self) -> None:
+        """Числа участка не вытесняются вкладками, активная всегда видна.
+
+        Пока приоритета не было, шесть открытых файлов молча выдавливали
+        «15→8 т.» за край — ровно тогда, когда открыто много всего и
+        разобраться нужнее всего. А активная вкладка уезжала следом, и
+        экран показывал содержимое файла, чьего имени на нём нет.
+        """
+        from vliw.tui.screens.code_screen import FileStrip, SideItem
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(100, 30)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    for item in list(sc.query(SideItem)):
+                        item.post_message(SideItem.Picked(item.key))
+                        await pilot.pause()
+                    await pilot.pause()
+                    strip = sc.query_one("#code-head", FileStrip)
+                    return (len(sc.files), sc.files[sc.file_i]["name"],
+                            str(strip.content),
+                            [i for _s, _e, i, _c in strip.spans])
+
+        n, active, painted, shown = asyncio.run(go())
+        self.assertGreater(n, 3, "вкладок мало — тест ничего не проверяет")
+        self.assertIn("оп.", painted, "числа участка вытеснены вкладками")
+        self.assertIn(active, painted,
+                      f"активной вкладки {active} нет на экране")
+        self.assertIn(n - 1, shown,
+                      "активная вкладка есть в тексте, но по ней не кликнуть")
+        self.assertLess(len(shown), n,
+                        "все вкладки влезли — окно не проверено, нужно уже")
+
+    def test_empty_schedule_says_why_it_is_empty(self) -> None:
+        """Пустая вкладка объясняет пустоту, а не молчит прямоугольником.
+
+        Буфер без операций — самый частый первый экран. До сих пор вкладка
+        «расписание» показывала в этом случае пустой прямоугольник в треть
+        экрана: подписана, а внутри ничего и почему — молчок.
+        """
+        async def body(screen, pilot, session):
+            edit = screen.query_one("#code-edit")
+            edit.text = ""
+            screen.reparse()
+            await pilot.pause()
+            await pilot.pause()
+            return (screen.query_one("#sched-empty").display,
+                    str(screen.query_one("#sched-empty").content),
+                    screen.query_one("#code-grid-wrap").display)
+
+        shown, text, grid = self._screen(body)
+        self.assertTrue(shown, "пустая решётка снова молчит")
+        self.assertIn("ни одной операции", text)
+        self.assertFalse(grid, "пустая таблица осталась рядом с объяснением")
+
+    def test_the_sixth_channel_fits_on_a_short_terminal(self) -> None:
+        """Канал ,5 обязан быть виден: это монопольный делитель.
+
+        Шесть каналов — инвариант решётки, записанный в её коде: обрезанный
+        шестой делает её бесполезной ровно там, где она нужнее всего. На
+        80x24 он уезжал за нижний край молча, без полосы прокрутки и без
+        единого признака, что там что-то есть.
+        """
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    grid = app.screen.query_one("#code-grid")
+                    return "\n".join(grid.render_line(y).text
+                                     for y in range(grid.size.height))
+
+        painted = asyncio.run(go())
+        for chan in (",0", ",5"):
+            self.assertIn(chan, painted,
+                          f"канал {chan} не поместился на терминале 80x24")
+
+    def test_catalog_does_not_pass_the_exhibit_off_as_real_code(self) -> None:
+        """В «настоящем коде» нет файлов-экспонатов.
+
+        probe_ILLUSTRATION_OBSOLETE.s сам про себя пишет: «ЭТО НЕ ВЫВОД
+        КОМПИЛЯТОРА, рисованная от руки иллюстрация, не использовать как
+        источник данных». Оставлен намеренно — но выдавать его за вывод lcc
+        значит ровно то враньё, от которого весь проект защищается
+        пометками источника у каждого числа.
+        """
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(screen, pilot, session):
+            return [i.key for i in screen.query(SideItem)]
+
+        keys = self._screen(body)
+        self.assertTrue(any(k.endswith("probe.s") for k in keys),
+                        "настоящий код пропал из каталога совсем")
+        self.assertFalse([k for k in keys if "OBSOLETE" in k.upper()],
+                         "экспонат подан как настоящий код")
+
     def test_gutter_keeps_the_arrow_out_of_the_text(self) -> None:
         """Ширина гуттера учитывает колонку действия.
 

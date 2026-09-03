@@ -1722,6 +1722,12 @@ class CodeScreen(ModeScreen):
                 k for k, _, _ in EXAMPLES) + "]",
              "help": "каталог примеров: без имени — список, с именем — в буфер",
              "local": True},
+            {"name": "gen", "arg": "<сколько> <операция> [плотно]",
+             "help": "сгенерировать ситуацию: /gen 8 muls · /gen цепочка 5 fmul",
+             "local": True},
+            {"name": "fill", "arg": "<тактов>",
+             "help": "заполнитель на N тактов: /fill 20",
+             "local": True},
         ]
 
     # --- живой разбор -----------------------------------------------------
@@ -3010,6 +3016,66 @@ class CodeScreen(ModeScreen):
             return
         self._load_example(text, name)
 
+    def _generate(self, kind: str, arg: str) -> None:
+        """`/gen` и `/fill` — ситуация одной командой вместо ручного набора.
+
+        Отличие от `/example`: там пять готовых текстов, здесь любая ситуация
+        нужного размера. И она заведомо законна — каналы берутся из модели
+        машины, поэтому `muls,2` (где умножение не исполняется) сгенерировать
+        физически нельзя.
+
+            /gen 8 muls          восемь независимых, по одной в такт
+            /gen 8 muls плотно   они же, разложенные по всем каналам
+            /gen цепочка 5 fmul  пять зависимых подряд
+            /fill 20             двадцать тактов заполнителя
+        """
+        from ...core import asmgen
+
+        model = self.app.session.model()
+        con = self.console
+        words = arg.split()
+
+        def fail(text: str) -> None:
+            if con is not None:
+                con.note("  " + text, "error")
+
+        try:
+            if kind == "fill":
+                cycles = int(words[0]) if words else 10
+                text = asmgen.filler(model, max(1, min(cycles, 200)))
+                name = f"заполнитель {cycles}"
+            else:
+                chain_mode = bool(words) and words[0] in ("цепочка", "chain")
+                if chain_mode:
+                    words = words[1:]
+                packed = any(w in ("плотно", "packed") for w in words)
+                words = [w for w in words if w not in ("плотно", "packed")]
+                if len(words) < 2:
+                    fail("нужно: /gen <сколько> <операция>   ·   "
+                         "например /gen 8 muls")
+                    fail("операции: " + ", ".join(asmgen.known_names()).lower())
+                    return
+                count = max(1, min(int(words[0]), 200))
+                op = asmgen.resolve(words[1])
+                if op is None:
+                    fail(f"операция «{words[1]}» неизвестна")
+                    fail("известны: " + ", ".join(asmgen.known_names()).lower())
+                    return
+                if chain_mode:
+                    text = asmgen.chain(model, op, count)
+                    name = f"цепочка {count} {words[1]}"
+                else:
+                    text = asmgen.independent(model, op, count, packed=packed)
+                    name = f"{count} {words[1]}" + (" плотно" if packed else "")
+        except ValueError as e:
+            fail(str(e) if str(e) else "не понял число")
+            return
+
+        # Своей вкладкой, как пример: набранное человеком не затирается.
+        self.open_file(text, f"{name}.s")
+        if con is not None:
+            con.note(f"  сгенерировано: {name} — F5 прогнать", "success")
+
     def _list_examples(self) -> None:
         con = self.console
         if con is None:
@@ -3224,6 +3290,9 @@ class CodeScreen(ModeScreen):
             return
         if head == "example":
             self._load_example_named(arg.strip().lower())
+            return
+        if head in ("gen", "fill"):
+            self._generate(head, arg.strip())
             return
         super().handle_line(line)
 

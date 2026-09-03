@@ -680,6 +680,7 @@ class CodeScreen(ModeScreen):
         # полосе вкладок). Рядом с F12 нарочно: одна пара клавиш на всё
         # управление высотой окна снизу.
         Binding("f11", "zoom_dock", "развернуть док", priority=True),
+        Binding("f2", "rename_buffer", "переименовать вкладку", priority=True),
         # ^P — открыть док на ВЫВОДЕ и начать команду. Не «/» и не «:»:
         # оба знака печатные и в ассемблере встречаются (`//` в комментарии,
         # двоеточие в метке `main:`), отбирать их у текста нельзя. Поэтому
@@ -779,6 +780,9 @@ class CodeScreen(ModeScreen):
         # больше высоты и добавляет то, чему в трети экрана места нет
         # (вторую решётку рядом, полные тексты замечаний, журнал сессии).
         self.zoom = ""
+        #: Последний клик по вкладке дока: (инструмент, момент). Нужен, чтобы
+        #: поймать двойной — см. `panel_tool`.
+        self._tab_click: tuple[str, float] = ("", 0.0)
 
     # --- раскладка --------------------------------------------------------
     #
@@ -981,13 +985,25 @@ class CodeScreen(ModeScreen):
 
     # --- открытые файлы ----------------------------------------------------
 
-    def _buffer_name(self) -> str:
-        """Как назвать текущий буфер во вкладке."""
+    def _buffer_name(self, rec: dict | None = None) -> str:
+        """Как назвать буфер во вкладке.
+
+        Имя выводится из источника: файл — по имени файла, пример — по имени
+        примера. У своего участка источника нет, выводить не из чего, и тогда
+        единственное его имя — то, что уже стоит в записи: так названа
+        «+ новая вкладка», так же лежит имя после F2.
+
+        Раньше `rec` не передавался и последняя ветка возвращала «буфер» всем
+        безымянным. А зовут отсюда `_stash_current`, то есть при каждом уходе
+        со вкладки: стоило завести вторую, как первая теряла имя.
+        """
         path = self.app.session.code_path
         if path:
             return path.rsplit("/", 1)[-1]
         if self._example:
             return self._example + ".s"
+        if rec is not None and rec.get("name"):
+            return rec["name"]
         return "буфер"
 
     def _stash_current(self) -> None:
@@ -998,7 +1014,7 @@ class CodeScreen(ModeScreen):
         rec["text"] = self.query_one("#code-edit", AsmArea).text
         rec["path"] = self.app.session.code_path
         rec["example"] = self._example
-        rec["name"] = self._buffer_name()
+        rec["name"] = self._buffer_name(rec)
 
     def open_file(self, text: str, name: str, path: str = "",
                   example: str = "") -> None:
@@ -1061,6 +1077,13 @@ class CodeScreen(ModeScreen):
         """Клик по каталогу слева — файл открывается вкладкой."""
         event.stop()
         key = event.key
+        if key == "buf:new":
+            self._new_buffer()
+            return
+        if key.startswith("buf:"):
+            self.select_file(int(key[4:]))
+            self._draw_side()
+            return
         if key.startswith("ex:"):
             name = key[3:]
             text = example_text(name)
@@ -1078,6 +1101,69 @@ class CodeScreen(ModeScreen):
                 con.note(f"  {key}: {exc}", "error")
             return
         self.open_file(text, key.rsplit("/", 1)[-1], path=key)
+
+    def _new_buffer(self) -> None:
+        """Пустая вкладка под свой участок.
+
+        Имя даётся сразу и по порядку («участок 2»), а не спрашивается: пока
+        в буфере ничего нет, называть нечего, а диалог на пустом месте —
+        лишний шаг. Переименовать можно в любой момент по F2.
+        """
+        n = 1
+        used = {rec["name"] for rec in self.files}
+        while f"участок {n}.s" in used:
+            n += 1
+        self.open_file("! новый участок — F5 прогнать, «/» команды\n",
+                       f"участок {n}.s")
+        self._draw_side()
+        self.query_one("#code-edit", AsmArea).focus()
+
+    def action_rename_buffer(self) -> None:
+        """F2 — переименовать текущую вкладку.
+
+        Имя вкладки — единственное, чем участки различаются на экране, когда
+        их несколько. «участок 2.s» рядом с «участок 3.s» не различает
+        ничего, поэтому переименование обязано быть под рукой, а не через
+        сохранение в файл.
+        """
+        if not self.files:
+            return
+        # Модального окна ввода в проекте нет, и заводить его ради одного
+        # имени незачем: строка команд уже есть, у неё история и каталог.
+        # F2 просто открывает её с готовым «/rename » и текущим именем —
+        # остаётся поправить.
+        self.open_drawer("term")
+        bar = self.query_one("#prompt", PromptBar)
+        bar.focus_input()
+        bar.set_value("/rename " + self.files[self.file_i]["name"])
+
+    def _rename_buffer(self, name: str) -> None:
+        name = (name or "").strip()
+        if not name or not self.files:
+            return
+        if any(i != self.file_i and rec["name"] == name
+               for i, rec in enumerate(self.files)):
+            con = self.console
+            if con is not None:
+                con.note(f"  вкладка «{name}» уже есть", "error")
+            return
+        rec = self.files[self.file_i]
+        was = rec["name"]
+        rec["name"] = name
+        # Путь снимаем: имя разошлось с файлом, и ^S не должен молча писать
+        # в старый — это были бы чужие правки под чужим именем. Пример — по
+        # той же причине: иначе имя вывелось бы из него обратно. И то же
+        # самое в сессии: активная вкладка отражена там, а `_stash_current`
+        # читает путь именно оттуда — оставить его значило бы вернуть старое
+        # имя на первом же переключении вкладок.
+        rec["path"] = rec["example"] = ""
+        self._example = ""
+        self.app.session.code_path = ""
+        self.refresh_context()
+        self._draw_side()
+        con = self.console
+        if con is not None:
+            con.note(f"  вкладка «{was}» → «{name}»", "success")
 
     def _take_pending_note(self) -> None:
         """Пометка от мостика журнала («в код») — строкой в отчёт.
@@ -1182,8 +1268,20 @@ class CodeScreen(ModeScreen):
         except Exception:
             pass
 
+    #: Строка, начатая со слэша, — набор команды, а не кода. В ассемблере
+    #: e2k строка со слэша не начинается никогда (комментарий это «!»),
+    #: поэтому спутать нельзя.
+    _CMD_TAIL = re.compile(r"^\s*/([a-zа-я_]*)$", re.I)
+
     def _suggest_items(self, line: str, row: int):
         model = self.app.session.model()
+
+        # Команды — первым делом: «/» люди жмут, ожидая список, как в любом
+        # современном редакторе. Раньше каталог жил только на ^P, про который
+        # надо знать, и найти /gen или /fill было неоткуда.
+        m = self._CMD_TAIL.match(line)
+        if m:
+            return self._cmd_items(m.group(1))
 
         m = self._CHAN_TAIL.search(line)
         if m:
@@ -1195,6 +1293,30 @@ class CodeScreen(ModeScreen):
         if m:
             return self._mnem_items(m.group(1), model)
         return []
+
+    def _cmd_items(self, prefix: str):
+        """Команды инструмента в том же всплывающем списке, что и мнемоники.
+
+        Скрипты сокращения работы (/gen, /fill) стоят первыми: ради них список
+        и заводился — набрать десяток широких команд руками дороже всего
+        остального в этом экране.
+        """
+        первые = ("gen", "fill", "example", "rewrite")
+        cmds = list(self.app.commands) + self.extra_commands()
+        seen: set[str] = set()
+        rows: list[tuple[str, str, str, str]] = []
+        for cmd in sorted(cmds, key=lambda c: (
+                первые.index(c["name"]) if c["name"] in первые else 99,
+                c["name"])):
+            name = cmd["name"]
+            if name in seen or not name.startswith(prefix.lower()):
+                continue
+            seen.add(name)
+            arg = cmd.get("arg", "")
+            rows.append((name[len(prefix):] + (" " if arg else ""),
+                         "/" + name + (" " + arg if arg else ""),
+                         cmd.get("help", ""), "text"))
+        return rows[:12]
 
     def _mnem_items(self, prefix: str, model):
         """Мнемоники e2k с латентностью и каналами прямо в подсказке."""
@@ -1305,23 +1427,22 @@ class CodeScreen(ModeScreen):
             self.open_drawer(self.drawer_tab)
 
     def action_slash(self) -> None:
-        """«/»: в НАЧАЛЕ строки — каталог команд, внутри строки — символ.
+        """«/» в редакторе печатается, а список команд всплывает у курсора.
 
-        Раньше в редакторе «/» всегда печатался символом, и каталог команд
-        оставался доступен только по ^P — про который надо знать. А «/» люди
-        жмут первым делом, потому что так работает почти везде.
-
-        Различаем по столбцу: в ассемблере e2k строка со слэша не начинается
-        никогда (комментарий — «!», операция — мнемоника), поэтому «/» в
-        нулевой колонке однозначно значит «хочу команду», а не «печатаю код».
+        Раньше каталог жил только на ^P, про который надо знать, и найти
+        /gen или /fill было неоткуда. Теперь строка, начатая со слэша,
+        подхватывается тем же всплывающим списком, что дополняет мнемоники:
+        видно имя, аргументы и пояснение, Enter вставляет. В ассемблере e2k
+        строка со слэша не начинается никогда, поэтому спутать набор команды
+        с набором кода нельзя.
         """
         edit = self.query_one("#code-edit", AsmArea)
         if edit.has_focus:
-            row, col = edit.cursor_location
-            line = edit.document.get_line(row) if hasattr(edit, "document") else ""
-            if col == 0 and not str(line).strip():
-                self.action_command()
-                return
+            # Слэш ПЕЧАТАЕТСЯ всегда, и каталог показывает всплывающий список
+            # (см. _cmd_items) — прямо у курсора, как дополнение кода в IDE.
+            # Перехватывать клавишу и открывать нижнюю панель было хуже вдвойне:
+            # список команд уезжал вниз экрана, а набранное «/» пропадало, и
+            # дописать «/gen 8 muls» одной строкой становилось нельзя.
             edit.insert("/")
             return
         self.action_command()
@@ -1512,32 +1633,63 @@ class CodeScreen(ModeScreen):
         t.append("\n")
         target.update(t)
 
-    def on_input_submitted(self, event) -> None:
-        """Вопрос из панели справа."""
-        if event.input.id != "ai-input":
-            return
-        event.stop()
-        question = event.value.strip()
-        event.input.value = ""
-        if not question:
-            return
-        self._answer_in_ai(question)
-
     def _answer_in_ai(self, question: str) -> None:
-        """Ответ модели — под явной подписью, что он сгенерирован."""
+        """Ответ модели — под явной подписью, что он сгенерирован.
+
+        ЖДАТЬ ЗДЕСЬ ДОЛГО, и молчать об этом нельзя. Локальная модель на
+        холодную поднимает сервер и считает системный промпт: замерено — 70
+        секунд до первого куска. Панель всё это время показывала пустоту, и
+        выглядело это ровно как «не работает»; так и было доложено. Поэтому
+        состояние прогрева пишется сразу, ДО первого токена, и с честной
+        оценкой, сколько ждать.
+        """
+        try:
+            target = self.query_one("#ai-answer", Static)
+        except Exception:
+            return
+        self._ai_question = question
+        self._ai_text = ""
+        self._draw_ai_answer(waiting=True)
+        self._ai_worker(question, self.panel_facts("code"))
+
+    def _draw_ai_answer(self, waiting: bool = False) -> None:
+        """Перерисовать блок ответа: вопрос, состояние, накопленный текст."""
         try:
             target = self.query_one("#ai-answer", Static)
         except Exception:
             return
         t = Text()
         t.append("\nСПРОШЕНО\n", style=palette.role_hex("accent2"))
-        t.append(f"  {question}\n", style=palette.role_hex("text"))
+        t.append(f"  {getattr(self, '_ai_question', '')}\n",
+                 style=palette.role_hex("text"))
         t.append("\nОТВЕТ", style=palette.role_hex("accent2"))
         t.append("  сгенерирован по числам выше\n",
                  style=palette.role_hex("faint"))
+
+        text = getattr(self, "_ai_text", "")
+        if text:
+            t.append(text, style=palette.role_hex("text"))
+        elif waiting:
+            from ...agent import local as agent_local
+
+            state, note = agent_local.warm_state()
+            if state == "ready":
+                t.append("  считаю…\n", style=palette.role_hex("dim"))
+            elif state == "failed":
+                t.append(f"  модель недоступна: {note}\n",
+                         style=palette.role_hex("error"))
+                t.append("  числа выше посчитаны без неё и остаются верны.\n",
+                         style=palette.role_hex("dim"))
+            else:
+                t.append("  модель прогревается — поднимается сервер и\n",
+                         style=palette.role_hex("warning"))
+                t.append("  считается системный промпт. Первый ответ\n",
+                         style=palette.role_hex("warning"))
+                t.append("  примерно через минуту, дальше секунды.\n",
+                         style=palette.role_hex("warning"))
+                t.append("\n  Числа выше уже посчитаны и модели не ждут.\n",
+                         style=palette.role_hex("dim"))
         target.update(t)
-        self._ai_text = ""
-        self._ai_worker(question, self.panel_facts("code"))
 
     @work(thread=True, exclusive=True, group="ai-side")
     def _ai_worker(self, question: str, facts: list[str]) -> None:
@@ -1560,18 +1712,14 @@ class CodeScreen(ModeScreen):
             self.app.call_from_thread(self._ai_piece, f"\nне вышло: {e}")
 
     def _ai_piece(self, piece: str) -> None:
-        """Кусок ответа приехал — дописать под подписью «сгенерирован»."""
+        """Кусок ответа приехал — дописать, не потеряв сам вопрос.
+
+        Раньше здесь рисовался только ответ, и первый же кусок затирал строку
+        «СПРОШЕНО»: через минуту ожидания человек переставал видеть, на что
+        ему вообще отвечают.
+        """
         self._ai_text = getattr(self, "_ai_text", "") + piece
-        try:
-            target = self.query_one("#ai-answer", Static)
-        except Exception:
-            return
-        t = Text()
-        t.append("\nОТВЕТ", style=palette.role_hex("accent2"))
-        t.append("  сгенерирован по числам выше\n",
-                 style=palette.role_hex("faint"))
-        t.append(self._ai_text, style=palette.role_hex("text"))
-        target.update(t)
+        self._draw_ai_answer()
 
     def action_explain(self) -> None:
         """^G — объяснятель справа. Второе нажатие убирает.
@@ -1639,14 +1787,29 @@ class CodeScreen(ModeScreen):
             log.write(row)
 
     def on_input_submitted(self, event) -> None:
-        """Строка консоли ЯДРА. Чужие поля ввода не трогаем."""
-        if getattr(event.input, "id", "") != "core-input":
+        """ОДИН обработчик на все поля ввода экрана, разводка по id.
+
+        Метод обязан быть ровно один: Python оставляет в классе последнее
+        определение, и второй такой же молча убивает первый — обработчик
+        просто перестаёт вызываться, без единой ошибки. Ровно так и вышло,
+        когда строку вопроса к ИИ завели отдельным методом: панель
+        открывалась, поле принимало текст, а Enter не делал ничего.
+        """
+        which = getattr(event.input, "id", "")
+        if which == "core-input":
+            event.stop()
+            line = event.value.strip()
+            event.input.value = ""
+            if line:
+                self._exec_core(line)
             return
-        event.stop()
-        line = event.value.strip()
-        event.input.value = ""
-        if line:
-            self._exec_core(line)
+        if which == "ai-input":
+            event.stop()
+            question = event.value.strip()
+            event.input.value = ""
+            if question:
+                self._answer_in_ai(question)
+            return
 
     def _exec_core(self, line: str) -> None:
         """Выполнить строку интерпретатора и показать её ответ."""
@@ -2006,6 +2169,9 @@ class CodeScreen(ModeScreen):
             {"name": "fill", "arg": "<тактов>",
              "help": "заполнитель на N тактов: /fill 20",
              "local": True},
+            {"name": "rename", "arg": "<имя>",
+             "help": "переименовать текущую вкладку (F2)",
+             "local": True},
         ]
 
     # --- живой разбор -----------------------------------------------------
@@ -2128,7 +2294,7 @@ class CodeScreen(ModeScreen):
                 rec = self.files[self.file_i]
                 rec["path"] = self.app.session.code_path
                 rec["example"] = ""
-                rec["name"] = self._buffer_name()
+                rec["name"] = self._buffer_name(rec)
         self.reparse()
         # Журнал общий на сессию: команда могла приехать из другого режима,
         # и счётчик отчёта в строке состояния обязан это показать сразу.
@@ -2304,7 +2470,32 @@ class CodeScreen(ModeScreen):
         dim = palette.role_hex("dim")
         faint = palette.role_hex("faint")
 
-        rows.append(Static(Text(" примеры машины", style=title)))
+        # ОТКРЫТОЕ — первым. Каталог был только списком того, что можно
+        # открыть, и молчал о том, что уже открыто: имена буферов жили лишь
+        # в узкой полосе вкладок сверху, где после третьего файла начинается
+        # прокрутка. Работа же идёт с несколькими участками сразу — ради
+        # этого вкладки и заводились.
+        rows.append(Static(Text(" открыто", style=title)))
+        for i, rec in enumerate(self.files):
+            t = Text()
+            here = i == self.file_i
+            t.append("  " + ("▸ " if here else "  "),
+                     style=palette.role_hex("accent2" if here else "faint"))
+            nm = rec["name"]
+            t.append(nm if len(nm) <= 13 else nm[:12] + "…",
+                     style=title if here else dim)
+            item = SideItem(f"buf:{i}", t, classes="side-item")
+            item.tooltip = (f"{rec['name']}\nклик — перейти"
+                            "\nдвойной клик — переименовать")
+            rows.append(item)
+
+        t = Text()
+        t.append("  + новая вкладка", style=palette.role_hex("accent2"))
+        item = SideItem("buf:new", t, classes="side-item")
+        item.tooltip = "пустой буфер под свой участок"
+        rows.append(item)
+
+        rows.append(Static(Text("\n примеры машины", style=title)))
         for key, label, _note in EXAMPLES:
             t = Text()
             t.append("  " + key, style=palette.role_hex("accent2"))
@@ -2337,6 +2528,7 @@ class CodeScreen(ModeScreen):
             rows.append(item)
 
         rows.append(Static(Text("\n ^B убрать колонку", style=faint)))
+        rows.append(Static(Text(" F2 переименовать", style=faint)))
         box.mount(*rows)
 
     def redraw(self) -> None:
@@ -3146,12 +3338,13 @@ class CodeScreen(ModeScreen):
     # --- разворот дока ------------------------------------------------------
 
     def action_zoom_dock(self) -> None:
-        """Док на две трети экрана и обратно — двойной клик по полосе вкладок.
+        """Док на весь экран и обратно: F11 или двойной клик по вкладке.
 
-        Разворот здесь ДОБАВЛЯЕТ, а не убирает: редактор остаётся на экране,
-        а вкладка получает то, чему в трети экрана места не было — вторую
-        решётку рядом с первой, полные тексты замечаний с советами, журнал
-        сессии вместо ленты вывода.
+        Развёрнутая вкладка получает то, чему в трети экрана места не было, —
+        вторую решётку рядом с первой, полные тексты замечаний с советами,
+        журнал сессии вместо ленты вывода. Редактор на это время уходит
+        совсем: расписание в шесть каналов на сотню тактов читается только во
+        всю ширину, а половинка не давала ни того ни другого.
         """
         self.set_zoom("" if self.zoom else "dock")
 
@@ -3262,7 +3455,19 @@ class CodeScreen(ModeScreen):
 
     def panel_tool(self, tool: str) -> None:
         if tool.startswith("dock-"):
+            # Двойной клик по НАЗВАНИЮ вкладки разворачивает док на весь
+            # экран — тот же жест, что в IDE. Полоса вкладок его тоже ловит
+            # (`DockTabs.on_click`), но только на голом промежутке между
+            # кнопками: `Tool.on_click` останавливает событие, и до полосы
+            # клик по самой вкладке не доходит вовсе. А целятся именно в
+            # название, поэтому повтор считается здесь.
+            now = time.monotonic()
+            twice = (tool == self._tab_click[0]
+                     and now - self._tab_click[1] <= DockTabs.DOUBLE_CLICK_S)
+            self._tab_click = ("", 0.0) if twice else (tool, now)
             self.open_drawer(tool.split("-", 1)[1])
+            if twice:
+                self.action_zoom_dock()
         elif tool == "code-save":
             self.action_save_code()
         elif tool == "code-rewrite":
@@ -3573,6 +3778,9 @@ class CodeScreen(ModeScreen):
             return
         if head in ("gen", "fill"):
             self._generate(head, arg.strip())
+            return
+        if head == "rename":
+            self._rename_buffer(arg)
             return
         super().handle_line(line)
 

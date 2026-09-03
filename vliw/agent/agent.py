@@ -48,9 +48,17 @@ def _scenario_hint() -> re.Pattern:
 
 _SCENARIO_HINT = _scenario_hint()
 
+#: Реплики не по делу. Список шире приветствий намеренно: «спасибо» и «ок»
+#: получали такой же нелепый хвост «Дальше: /explain 13», потому что под
+#: правило приветствия не подпадали, а системный промпт требует заканчивать
+#: командой. Проверять в благодарности нечего ровно так же, как в «привет».
 _SMALLTALK = re.compile(
     r"^(привет|прив|здравствуй(те)?|хай|hello|hi|hey|"
-    r"добр(ый|ого)\s+(день|вечер|утро)|йоу)[\s!.]*$",
+    r"добр(ый|ого)\s+(день|вечер|утро)|йоу|"
+    r"спасибо|спс|благодарю|thanks|thank\s+you|"
+    r"пока|до\s+свидания|бывай|bye|"
+    r"ок|окей|ok|okay|ясно|понял|понятно|угу|ага|"
+    r"как\s+дела|что\s+умеешь|кто\s+ты)[\s!.?)]*$",
     re.I,
 )
 
@@ -207,12 +215,13 @@ class Agent:
             yield ("text", answer)
             return
 
+        small = _is_smalltalk(question)
         system = context.system_prompt(self.session, self._needs_layout(question),
-                                       panel=panel)
+                                       panel=panel, smalltalk=small)
         chunks: list[str] = []
         try:
             for piece in llm.stream(system, question, self._history_pairs(),
-                                    nudge=not _is_smalltalk(question)):
+                                    nudge=not small):
                 chunks.append(piece)
                 yield ("text", piece)
             turn.answer = "".join(chunks).strip()

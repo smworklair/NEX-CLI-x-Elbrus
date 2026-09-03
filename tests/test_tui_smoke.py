@@ -1545,13 +1545,21 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(tab, "sched",
                          "набор в редакторе не должен переключать вкладку")
 
-    def test_slash_at_line_start_opens_the_command_catalog(self):
-        """«/» в пустой строке — каталог команд, а не символ.
+    def test_slash_at_line_start_suggests_the_commands(self):
+        """«/» в пустой строке — список команд у курсора.
 
         До этого каталог жил только на ^P, про который надо знать, — а «/»
         люди жмут первым делом, потому что так работает почти везде. Команды
         при этом есть: /gen, /fill, /example, /rewrite, и найти их было
         неоткуда.
+
+        Раньше проверялось, что слэш НЕ печатается, а открывается нижняя
+        панель. Так было хуже вдвойне: список уезжал вниз экрана, далеко от
+        курсора, а набранный символ пропадал — дописать «/gen 8 muls» одной
+        строкой становилось нельзя. Теперь слэш печатается, а команды
+        подсказывает тот же всплывающий список, что дополняет мнемоники, —
+        как дополнение кода в IDE. Смысл проверки тот же: «/» обязан
+        показывать команды, а не молчать.
         """
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
@@ -1560,11 +1568,19 @@ class TestCodeScreen(unittest.TestCase):
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
-            return edit.text, screen.drawer_tab
+            sug = screen.query_one("#suggest")
+            return edit.text, sug.display, [i[1] for i in sug.items]
 
-        text, tab = self._screen(body)
-        self.assertEqual(text, "", "слэш не должен печататься в пустой строке")
-        self.assertEqual(tab, "term", "каталог команд не открылся")
+        text, shown, labels = self._screen(body)
+        self.assertEqual(text, "/", "слэш обязан напечататься")
+        self.assertTrue(shown, "список команд не всплыл")
+        # В метке рядом с именем стоят аргументы («/gen <сколько> …») —
+        # ради них список и нужен, поэтому сверяем начало, а не равенство.
+        heads = [l.split()[0] for l in labels]
+        self.assertIn("/gen", heads, f"нет /gen среди {labels}")
+        self.assertIn("/fill", heads, f"нет /fill среди {labels}")
+        self.assertEqual(heads[:2], ["/gen", "/fill"],
+                         "скрипты сокращения работы обязаны стоять первыми")
 
     def test_broken_example_is_actually_caught(self):
         """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""
@@ -2150,6 +2166,49 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
         self.assertFalse(self._screen(body),
                          "без прогонов мостик обязан прятаться")
 
+    def test_double_click_on_a_dock_tab_zooms_the_dock(self) -> None:
+        """Двойной клик по НАЗВАНИЮ вкладки разворачивает док и сворачивает.
+
+        Тот же жест, что в IDE, и целятся в него именно в название вкладки.
+        Полоса вкладок двойной клик тоже ловит (`DockTabs.on_click`), но
+        только на голом промежутке между кнопками шириной в пару символов:
+        `Tool.on_click` останавливает событие, и до полосы клик по самой
+        вкладке не доходит вовсе. Полгода жест числился сделанным и не
+        работал нигде, куда человек мог попасть.
+        """
+        from vliw.tui.widgets import Tool
+
+        async def body(screen, pilot, session):
+            dock = screen.query_one("#code-dock")
+            tab = screen.query_one("#tab-lint", Tool)
+            await pilot.click(tab)
+            await pilot.pause()
+            one = (screen.drawer_tab, screen.zoom, dock.size.height)
+            await pilot.click(tab)
+            await pilot.pause()
+            two = (screen.zoom, dock.size.height)
+            await pilot.click(tab)
+            await pilot.click(tab)
+            await pilot.pause()
+            back = (screen.zoom, dock.size.height)
+            # Медленные клики — не двойной: иначе спокойное переключение
+            # вкладок туда-обратно случайно разворачивало бы док.
+            await pilot.click(tab)
+            await asyncio.sleep(0.6)
+            await pilot.click(tab)
+            await pilot.pause()
+            return one, two, back, screen.zoom
+
+        one, two, back, slow = self._screen(body)
+        self.assertEqual(one[:2], ("lint", ""),
+                         "одиночный клик обязан только переключать вкладку")
+        self.assertEqual(two[0], "dock", "двойной клик не развернул док")
+        self.assertGreater(two[1], one[2] * 2,
+                           f"док не вырос: {one[2]} → {two[1]}")
+        self.assertEqual(back, ("", one[2]),
+                         "повторный двойной клик не свернул док обратно")
+        self.assertEqual(slow, "", "два медленных клика — не двойной")
+
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestCodeFilesAreTabs(unittest.TestCase):
@@ -2351,8 +2410,18 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                 async with app.run_test(size=(100, 30)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    for item in list(sc.query(SideItem)):
-                        item.post_message(SideItem.Picked(item.key))
+                    # Ключи снимаем заранее, а виджет ищем перед каждым
+                    # кликом заново: панель перерисовывается на каждом
+                    # выборе (в ней есть раздел «открыто», он обязан
+                    # показывать активную вкладку), старые виджеты при этом
+                    # отсоединяются, и сообщение отсоединённому уходит в
+                    # никуда — цикл по снятому заранее списку открывал ровно
+                    # одну вкладку и молчал об этом.
+                    for key in [i.key for i in sc.query(SideItem)]:
+                        live = [i for i in sc.query(SideItem) if i.key == key]
+                        if not live:
+                            continue
+                        live[0].post_message(SideItem.Picked(key))
                         await pilot.pause()
                     await pilot.pause()
                     strip = sc.query_one("#code-head", FileStrip)
@@ -2447,6 +2516,70 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
         width, expected = self._screen(body)
         self.assertEqual(width, expected)
+
+    def test_own_tab_keeps_its_name(self) -> None:
+        """Имя своего участка не сбрасывается уходом на другую вкладку.
+
+        Имя вкладки — единственное, чем участки различаются на экране, и
+        держаться оно обязано ровно столько, сколько живёт вкладка.
+
+        Ломалось так: имя пересчитывалось из сессии при каждом уходе со
+        вкладки (`_stash_current`), а у своего участка выводить его не из
+        чего — ни файла, ни примера. Все безымянные схлопывались в «буфер»,
+        и «участок 1.s» терял имя ровно в тот момент, когда заводили
+        «участок 2.s», то есть когда различать их и понадобилось.
+        """
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(screen, pilot, session):
+            for _ in range(3):
+                screen.post_message(SideItem.Picked("buf:new"))
+                await pilot.pause()
+            made = [f["name"] for f in screen.files]
+            for key in ("buf:0", "buf:1", "buf:3", "buf:2"):
+                screen.post_message(SideItem.Picked(key))
+                await pilot.pause()
+            return made, [f["name"] for f in screen.files]
+
+        made, after = self._screen(body)
+        self.assertEqual(made[1:], ["участок 1.s", "участок 2.s", "участок 3.s"],
+                         "новые вкладки нумеруются не по порядку")
+        self.assertEqual(after, made, "имена вкладок пережили не всё хождение")
+
+    def test_rename_sticks_and_does_not_take_a_busy_name(self) -> None:
+        """F2 переименовывает вкладку, и имя держится; занятое — отклоняется.
+
+        Две вкладки с одним именем — способ потерять правки, а не удобство:
+        `open_file` ищет уже открытую именно по имени и перешла бы на чужую.
+        """
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(screen, pilot, session):
+            screen.post_message(SideItem.Picked("buf:new"))
+            await pilot.pause()
+            screen.handle_line("/rename моё ядро.s")
+            await pilot.pause()
+            renamed = [f["name"] for f in screen.files]
+            screen.post_message(SideItem.Picked("buf:0"))
+            await pilot.pause()
+            screen.post_message(SideItem.Picked("buf:1"))
+            await pilot.pause()
+            survived = [f["name"] for f in screen.files]
+            screen.handle_line("/rename " + screen.files[0]["name"])
+            await pilot.pause()
+            screen.action_rename_buffer()
+            await pilot.pause()
+            return (renamed, survived, [f["name"] for f in screen.files],
+                    screen.query_one("#prompt").input.value)
+
+        renamed, survived, busy, prefilled = self._screen(body)
+        self.assertEqual(renamed[1], "моё ядро.s", "/rename не переименовал")
+        self.assertEqual(survived, renamed,
+                         "имя не пережило переключения вкладок")
+        self.assertEqual(busy, survived,
+                         "занятое имя отдано второй вкладке")
+        self.assertEqual(prefilled, "/rename моё ядро.s",
+                         "F2 обязана подставить команду с текущим именем")
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")

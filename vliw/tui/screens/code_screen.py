@@ -41,7 +41,7 @@ from textual.widgets.text_area import TextAreaTheme
 from ...core import asm_parser, doctor
 from .. import palette
 from ..widgets import (BridgeRow, Console, ConsoleJournal, HintBar,
-                       PanelPrompt, PromptBar, Tool, TopBar, plural)
+                       PanelPrompt, PromptBar, Tool, plural)
 from .base import ModeScreen
 
 #: Каталог примеров. Файлы лежат в `examples/code/*.s` и загружаются по
@@ -695,6 +695,8 @@ class CodeScreen(ModeScreen):
 
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
+        # Каталог слева закрыт: ^B открывает. См. compose.
+        self.side_shown = False
         # Живой разбор: считается на каждую правку, стоит микросекунды.
         self.parsed = None
         self.local_dag = None
@@ -764,17 +766,19 @@ class CodeScreen(ModeScreen):
     # строки состояния.
 
     def compose(self):
-        yield TopBar(self.mode, self.mode_title, self.mode_subtitle,
-                     id="topbar")
-        # Полоса файлов: что открыто и что правится сейчас. Одна строка
-        # вместо рамки с заголовком «ИСХОДНИК · ассемблер e2k (.s) · имя» —
-        # тот же ответ, но без двух строк бордюра вокруг и с возможностью
-        # держать открытыми несколько участков разом.
+        # ОДНА верхняя строка на всё: марка, вкладки открытых файлов и
+        # числа справа. Строк было две — шапка режима и полоса файлов, —
+        # и они говорили одно и то же дважды: «КОД редактор» дублировало
+        # то, что и так видно (в окне код), а «15→8 т. · 15 оп.» стояло
+        # ещё и в строке состояния внизу. Одно число в двух местах на
+        # экране — это не подстраховка, а шум.
         yield FileStrip(id="code-head")
         with Horizontal(id="code-body"):
             # Каталог слева: примеры машины и настоящие .s из репозитория.
-            # Убирается по ^B целиком, и редактор просто становится шире —
-            # панель ничего не держит и ни от чего не зависит.
+            # ЗАКРЫТ по умолчанию (^B открывает). Открытым он отбирал у кода
+            # двадцать колонок навсегда, чтобы показать восемь имён и полтора
+            # экрана пустоты под ними — а нужен он ровно дважды: в первую
+            # минуту знакомства и когда открываешь второй файл.
             yield VerticalScroll(id="code-side")
             yield AsmArea(id="code-edit")
 
@@ -801,12 +805,21 @@ class CodeScreen(ModeScreen):
                 # колонки, а по умолчанию DataTable добавляет по два
                 # пробела на клетку — канал ,5 уезжал за край.
                 Vertical(DataTable(id="code-grid", cursor_type="cell",
-                                   zebra_stripes=False, cell_padding=0),
+                                   zebra_stripes=False, cell_padding=0,
+                                   fixed_columns=1),
                          id="code-grid-wrap"),
                 Vertical(Static(id="code-grid-orc-head"),
                          DataTable(id="code-grid-orc", cursor_type="cell",
-                                   zebra_stripes=False, cell_padding=0),
+                                   zebra_stripes=False, cell_padding=0,
+                                   fixed_columns=1),
                          id="code-grid-orc-wrap"),
+                # Разбор решётки (загрузка портов, «что переставить») — ТОЛЬКО
+                # в развороте дока по F11. В трети экрана он отбирал у решётки
+                # треть ширины, переносил свои строки на 34 колонках («т12 →
+                # т5,» / «канал ,4») и вдобавок дублировал список перестановок,
+                # который целиком лежит во вкладке ЗАМЕЧАНИЯ. Одно и то же в
+                # двух вкладках сразу — это не два ответа, а один вопрос
+                # «а это то же самое или другое?».
                 VerticalScroll(Static(id="sched-side-body"), id="sched-side"),
                 id="dock-sched")
 
@@ -1630,7 +1643,9 @@ class CodeScreen(ModeScreen):
         self.action_run_code()
 
     def context_bits(self) -> str:
-        """Шапка режима. Порядок — по убыванию важности НАРОЧНО.
+        """Числа участка для правого края верхней строки.
+
+        Порядок — по убыванию важности НАРОЧНО.
 
         В узком окне шапка обрезается справа, и первой должна уезжать не
         главная цифра, а имя профиля машины: оно постоянно, а «15→8 т.»
@@ -1658,25 +1673,31 @@ class CodeScreen(ModeScreen):
         bits.append(s.model().name)
         return "   ·   ".join(bits)
 
+    #: Сколько подсказок держим внизу. Их было семь, и они не помещались:
+    #: на 120 колонках последняя обрезалась на полуслове. Полоса подсказок
+    #: с обрезанной подсказкой — уже не подсказка, а бахрома.
+    MAX_HINTS = 5
+
     def hint_pairs(self) -> list[tuple[str, str]]:
+        """Ровно то, без чего не начать. Остальное — в подсказках у кнопок.
+
+        Порядок — по убыванию нужности: режется хвост, и первым уезжать
+        должно наименее важное. F6 встаёт в список, только когда ему есть
+        что делать: пока точного поиска нет, «переписать по оракулу» —
+        обещание без покрытия.
+        """
         pairs = [("F5", "прогнать")]
-        pairs.append(("F12", "док ↓" if self.drawer_open else "док ↑"))
-        pairs.append(("F11", "свернуть док" if self.zoom else "развернуть док"))
-        pairs.append(("^P", "команда"))
-        # F6 появляется только когда ему есть что делать: пока точного поиска
-        # нет, «переписать по оракулу» — обещание без покрытия.
         if self._have_orc():
-            pairs.append(("F6", "переписать по оракулу"))
-        pairs.append(("^S", "сохранить"))
-        pairs.append(("^G", "закрыть объяснятель"
-                      if list(self.query(PanelPrompt)) else "объяснить"))
-        return pairs
+            pairs.append(("F6", "переписать"))
+        pairs.append(("F12", "док" if self.drawer_open else "док ↑"))
+        pairs.append(("^P", "команда"))
+        pairs.append(("^G", "спросить"))
+        pairs.append(("^B", "файлы ↩" if self.side_shown else "файлы"))
+        return pairs[:self.MAX_HINTS]
 
     def toggle_hints(self) -> list[tuple[str, str]]:
-        """Про развороты панелей здесь молчим: панелей с рамками не
-        осталось, разворачивается только док (F11). Осталась колонка
-        слева — единственное, что ещё убирается своей клавишей."""
-        return [("^B", "каталог" if self.side_shown else "каталог ↩")]
+        """Всё нужное уже в hint_pairs, и там же ограничение по длине."""
+        return []
 
     def extra_commands(self) -> list[dict]:
         return [
@@ -1852,6 +1873,16 @@ class CodeScreen(ModeScreen):
 
     # --- отрисовка --------------------------------------------------------
 
+    def refresh_context(self) -> None:
+        """Числа участка живут в верхней строке — шапки режима здесь нет."""
+        self._draw_title()
+
+    def on_resize(self, event) -> None:
+        """Числа в верхней строке прижаты вправо, а «вправо» зависит от
+        ширины окна: без перерисовки они после ресайза висят не у края."""
+        super().on_resize(event)
+        self._draw_title()
+
     def _draw_title(self) -> None:
         """Полоса файлов: что открыто и что правится сейчас.
 
@@ -1866,6 +1897,8 @@ class CodeScreen(ModeScreen):
             return
         raised = palette.SURFACES["raised"]
         line = Text()
+        line.append(" ▍", style=palette.mode_hex(self.mode))
+        line.append("NEX ", style=f"{palette.mode_hex(self.mode)} bold")
         spans: list[tuple[int, int, int, bool]] = []
         n = len(self.files)
         # Последнюю вкладку закрыть нельзя: правят всегда что-то, и пустой
@@ -1888,9 +1921,12 @@ class CodeScreen(ModeScreen):
                                else palette.role_hex("faint")))
             spans.append((start, line.cell_len, i, closable))
             line.append(" ", style=palette.role_hex("faint"))
-        # Хвост строки: язык буфера. Он один на все вкладки и потому стоит
-        # не на вкладке, а в свободном месте справа от них.
-        line.append("  ассемблер e2k (.s)", style=palette.role_hex("faint"))
+        # Хвост строки: числа участка, прижатые вправо. Раньше они стояли
+        # отдельной шапкой режима — целой строкой ради того же самого.
+        tail = self.context_bits()
+        pad = max(1, strip.size.width - line.cell_len - len(tail) - 1)
+        line.append(" " * pad)
+        line.append(tail, style=palette.role_hex("dim"))
         strip.spans = spans
         strip.update(line)
 
@@ -2024,7 +2060,11 @@ class CodeScreen(ModeScreen):
                     label = f"т{o.cycle}→{orc}"
                     role = "warning"
                 else:
-                    label = f"т{o.cycle} ="
+                    # Точный поиск оставил операцию там же. Знака «=» здесь
+                    # нет нарочно: он стоял бы у большинства строк, занимал
+                    # колонку гуттера на всём файле и сообщал «делать
+                    # нечего». Молчание сообщает то же самое бесплатно.
+                    label = f"т{o.cycle}"
                     role = "faint"
                 if o.line in bad:
                     label = "▲ " + label
@@ -2043,41 +2083,39 @@ class CodeScreen(ModeScreen):
         edit.set_marks(marks)
 
     def _draw_status(self) -> None:
-        """Строка итога под редактором: чем этот код обходится."""
+        """Правый край строки состояния: чего этот код стоит.
+
+        Здесь ТОЛЬКО то, чего нет в верхней строке. Раньше стояло «15 оп. ·
+        15 команд · исходник 15 т. → поиск 8 т.», и ровно те же «15→8 т. ·
+        15 оп.» стояли в шапке — одно число в двух местах экрана это не
+        подстраховка, а шум. Наверху осталось «сколько и во сколько», здесь
+        — «что с этим делать»: сколько машины простаивает и сколько тактов
+        лежит на полу.
+        """
         line = Text()
         dim = palette.role_hex("dim")
         if self.parsed is None or not self.parsed.ops:
             if self.problems:
                 bad = len(self.problems)
-                line.append(f"  ни одной операции: {bad} "
+                line.append(f"ни одной операции: {bad} "
                             f"{plural(bad, 'строка', 'строки', 'строк')} "
-                            f"не разобрать — см. ЧТО НЕ ТАК",
-                            style=palette.role_hex("warning"))
+                            f"не разобрать", style=palette.role_hex("warning"))
             else:
-                line.append("  пусто — набери операции e2k или "
-                            "/code load examples/probe.s", style=dim)
+                line.append("пусто — набери операции e2k или /example",
+                            style=dim)
             self.query_one("#code-status", Static).update(line)
             return
-        n = len(self.parsed.ops)
-        line.append(f"  {n} оп.   ·   {self.parsed.bundles} "
-                    f"{plural(self.parsed.bundles, 'команда', 'команды', 'команд')}",
-                    style=dim)
-        errs = sum(1 for p in self.problems if p.severity == "error")
-        if errs:
-            line.append(f"   ·   ▲ {errs} "
-                        f"{plural(errs, 'ошибка', 'ошибки', 'ошибок')}",
-                        style=palette.role_hex("error"))
         if self.comp is not None:
-            line.append(f"   ·   исходник {self.comp.makespan} т.",
-                        style=palette.role_hex("text"))
             slots = self.comp.slot_utilization
-            line.append(f"  (слоты {slots * 100:.0f}%)", style=dim)
+            line.append(f"слоты {slots * 100:.0f}%", style=dim)
+            if self._have_orc():
+                line.append(f" → {self.orc.schedule.slot_utilization * 100:.0f}%",
+                            style=palette.role_hex("success"))
         else:
-            line.append("   ·   буфер не сходится с моделью",
+            line.append("буфер не сходится с моделью",
                         style=palette.role_hex("warning"))
-        if self.orc is not None and not self._stale():
+        if self._have_orc():
             orc = self.orc.schedule.makespan
-            line.append(f"   →   поиск {orc} т.", style=palette.role_hex("accent"))
             src = self.comp.makespan if self.comp is not None else None
             # Резерв — только когда машина знает, из чего он складывается.
             # При заметной доле UNKNOWN точный поиск обыгрывает компилятор не
@@ -2090,16 +2128,16 @@ class CodeScreen(ModeScreen):
                             style=palette.role_hex("warning"))
             elif src is not None and src > orc:
                 gap = src - orc
-                line.append(f"   ·   резерв {gap} т. ({100 * gap / src:.0f}%)",
+                line.append(f"   ·   резерв {gap} т. "
+                            f"({100 * gap / src:.0f}%)",
                             style=palette.role_hex("success"))
             elif src is not None:
                 line.append("   ·   резерва нет", style=dim)
         elif self._stale():
-            line.append("   ·   ", style=dim)
-            line.append("буфер правили — F5", style=palette.role_hex("warning"))
+            line.append("   ·   буфер правили — F5",
+                        style=palette.role_hex("warning"))
         else:
-            line.append("   ·   ", style=dim)
-            line.append("F5 — во сколько тактов это влезает",
+            line.append("   ·   F5 — во сколько тактов это влезает",
                         style=palette.role_hex("accent2"))
         self.query_one("#code-status", Static).update(line)
 
@@ -2260,6 +2298,15 @@ class CodeScreen(ModeScreen):
         cw = self._cell_w()
         span = max(sched.span_cycles, 1)
 
+        # Канал — ЗАКРЕПЛЁННАЯ первая колонка, а не подпись строки
+        # (`add_row(label=...)`). Подпись строки у DataTable уезжает вместе
+        # с содержимым при прокрутке вбок — а вбок здесь прокручивают
+        # всегда, тактов много. Стоило уехать трём знакам `,0`, и решётка
+        # переставала отвечать на свой единственный вопрос: в какой канал
+        # встала операция. Плюс ширина подписи считается лениво и в узком
+        # окне схлопывалась в ноль — подписи пропадали совсем.
+        table.add_column(Text(""), width=3, key="chan")
+
         # РЕШЁТКА РАЗВЁРНУТА: такты по горизонтали, каналы по вертикали.
         #
         # Было наоборот, и форма не совпадала с содержимым. Настоящее
@@ -2301,9 +2348,9 @@ class CodeScreen(ModeScreen):
                     continue
                 cells.append(self._cell_text(instr, cw, instr in bad))
             idle = port not in used
-            label = Text(model.port_label(port),
-                         style=palette.role_hex("faint" if idle else "dim"))
-            table.add_row(*cells, label=label)
+            head = Text(model.port_label(port),
+                        style=palette.role_hex("faint" if idle else "dim"))
+            table.add_row(head, *cells)
 
     def _cell_text(self, instr: int, width: int, bad: bool) -> Text:
         """Клетка — мнемоника из исходника, а не «i7»: код перед глазами."""
@@ -2333,17 +2380,19 @@ class CodeScreen(ModeScreen):
             if which != "src" or instr != op.index:
                 continue
             table = self.query_one("#code-grid", DataTable)
-            # Решётка развёрнута: строка — канал, колонка — такт.
-            if port < table.row_count and cycle < len(table.columns):
-                table.move_cursor(row=port, column=cycle)
+            # Решётка развёрнута: строка — канал, колонка — такт (+1 на
+            # закреплённую колонку канала слева).
+            if port < table.row_count and cycle + 1 < len(table.columns):
+                table.move_cursor(row=port, column=cycle + 1)
             return
 
     def on_data_table_cell_selected(self, event) -> None:
         """Клик по клетке — курсор на строку этой операции в исходнике."""
         event.stop()
         which = "orc" if event.data_table.id == "code-grid-orc" else "src"
-        # Решётка развёрнута: coordinate.row — канал, coordinate.column — такт.
-        instr = self._grid_cells.get((which, event.coordinate.column,
+        # Решётка развёрнута: coordinate.row — канал, coordinate.column —
+        # такт. Минус один: нулевая колонка занята закреплённым каналом.
+        instr = self._grid_cells.get((which, event.coordinate.column - 1,
                                       event.coordinate.row))
         if instr is None or self.parsed is None or instr >= len(self.parsed.ops):
             return
@@ -2958,8 +3007,8 @@ class CodeScreen(ModeScreen):
 
     def _cell_to_code(self) -> None:
         table = self.query_one("#code-grid", DataTable)
-        instr = self._grid_cells.get(("src", table.cursor_row,
-                                      table.cursor_column))
+        instr = self._grid_cells.get(("src", table.cursor_column - 1,
+                                      table.cursor_row))
         if instr is not None and self.parsed is not None:
             self._goto_line(self.parsed.ops[instr].line)
 

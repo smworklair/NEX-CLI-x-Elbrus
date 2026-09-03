@@ -2233,6 +2233,73 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         self.assertIsNone(before)
         self.assertIsNotNone(after, "клик по стрелке не запустил поиск")
 
+    def test_channel_stays_visible_when_the_grid_scrolls_sideways(self) -> None:
+        """Канал — закреплённая колонка, а не подпись строки DataTable.
+
+        Решётка развёрнута: тактов много, и вбок её прокручивают всегда.
+        Подпись строки уезжает вместе с содержимым — стоило уехать трём
+        знакам «,0», и решётка переставала отвечать на свой единственный
+        вопрос: в какой канал встала операция. Вдобавок ширина подписи
+        считается лениво и в узком окне схлопывалась в ноль, унося подписи
+        совсем.
+
+        Окно нарочно узкое: на широком решётка помещается целиком, прокрутки
+        не происходит, и тест не проверял бы ничего.
+        """
+        from textual.widgets import DataTable
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(90, 40)) as pilot:
+                    await pilot.pause()
+                    grid = app.screen.query_one("#code-grid", DataTable)
+                    # Прокрутка ДО упора вправо: проверяем самый плохой
+                    # случай, а не «немножко сдвинули».
+                    grid.scroll_to(x=grid.max_scroll_x, animate=False)
+                    await pilot.pause()
+                    await pilot.pause()
+                    # Смотрим на то, что НАРИСОВАНО, а не на данные: данные
+                    # вернут канал в любом случае, вопрос ровно в том, видно
+                    # ли его на экране после прокрутки.
+                    painted = "\n".join(grid.render_line(y).text
+                                        for y in range(grid.size.height))
+                    return (grid.fixed_columns, grid.scroll_x, painted)
+
+        fixed, scrolled, painted = asyncio.run(go())
+        self.assertEqual(fixed, 1, "колонка канала не закреплена")
+        self.assertGreater(scrolled, 0,
+                           "решётка не прокрутилась — тест ничего не проверил")
+        for chan in (",0", ",5"):
+            self.assertIn(chan, painted,
+                          f"канал {chan} уехал вместе с прокруткой")
+
+    def test_cell_and_line_point_at_each_other(self) -> None:
+        """Курсор кода → клетка решётки → та же строка кода. Круг замкнут.
+
+        Колонка канала сдвинула нумерацию колонок на единицу. Забудь вычесть
+        её в одном из двух направлений — и связь разъезжается на такт: экран
+        работает, курсор ездит, ничего не падает, а показывает не ту
+        операцию. Заметно, только если знать правильный ответ.
+        """
+        from textual.widgets import DataTable
+
+        async def body(screen, pilot, session):
+            op = screen.parsed.ops[3]
+            grid = screen.query_one("#code-grid", DataTable)
+            screen._sync_grid_cursor(op.line)
+            await pilot.pause()
+            cell = (grid.cursor_row, grid.cursor_column)
+            screen._cell_to_code()
+            await pilot.pause()
+            back = screen.query_one("#code-edit").cursor_location[0] + 1
+            return (op.line, op.cycle, op.channel, cell, back)
+
+        line, cycle, channel, cell, back = self._screen(body)
+        self.assertEqual(cell, (channel, cycle + 1),
+                         "курсор кода встал не в свою клетку")
+        self.assertEqual(back, line, "клетка увела на чужую строку")
+
     def test_gutter_keeps_the_arrow_out_of_the_text(self) -> None:
         """Ширина гуттера учитывает колонку действия.
 
@@ -2561,12 +2628,12 @@ class TestLabSleepBar(unittest.TestCase):
                          "клик по факту не открыл режим АГЕНТ")
 
     def test_other_screens_stay_one_line(self):
-        """Строка — пилот РАЗБОРА: ЯДРО/АГЕНТ/КОД её не получают."""
+        """Строка — пилот РАЗБОРА: ЯДРО и АГЕНТ её не получают."""
         from vliw.tui.widgets import TopBar
 
         async def go():
             out = {}
-            for start in ("work", "mind", "code"):
+            for start in ("work", "mind"):
                 app, _ = _make_app(start)
                 with redirect_stdout(io.StringIO()):
                     async with app.run_test(size=(150, 46)) as pilot:
@@ -2580,6 +2647,35 @@ class TestLabSleepBar(unittest.TestCase):
         for start, (sleepers, shown) in asyncio.run(go()).items():
             self.assertEqual(sleepers, [], f"{start}: строка пришла без спроса")
             self.assertFalse(shown, f"{start}: строка не должна рисоваться")
+
+    def test_code_has_no_mode_bar_at_all(self):
+        """У КОДА шапки режима нет: верхняя строка — вкладки файлов.
+
+        Строк наверху было две, и они говорили одно и то же дважды: «КОД
+        редактор» дублировало то, что и так видно, а числа участка стояли
+        ещё и в строке состояния внизу. Сильнее прежней проверки: там
+        требовалось, чтобы вторая строка шапки не рисовалась, здесь — чтобы
+        самой шапки не было.
+        """
+        from vliw.tui.widgets import TopBar
+
+        async def go():
+            app, _ = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 46)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    head = sc.query_one("#code-head")
+                    return (len(list(sc.query(TopBar))),
+                            head.region.y, head.region.height,
+                            str(head.content))
+
+        bars, y, h, text = asyncio.run(go())
+        self.assertEqual(bars, 0, "шапка режима осталась на экране КОД")
+        self.assertEqual((y, h), (0, 1),
+                         "верхняя строка не одна и не самая верхняя")
+        self.assertIn("NEX", text, "марка потерялась вместе с шапкой")
+        self.assertIn("оп.", text, "числа участка не переехали в верхнюю строку")
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")

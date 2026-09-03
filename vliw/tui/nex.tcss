@@ -718,11 +718,14 @@ ModeScreen.tight #p-console { height: 8; }
 
 #code-body { height: 1fr; width: 100%; }
 
-/* Каталог слева: примеры машины и настоящий код репозитория. Убирается
-   по ^B целиком — редактор просто становится шире, ничего не ломаясь.
+/* Каталог слева: примеры машины и настоящий код репозитория. ЗАКРЫТ по
+   умолчанию — ^B открывает. Открытым он отбирал у кода двадцать колонок
+   навсегда, чтобы показать восемь имён и полтора экрана пустоты под ними;
+   нужен он ровно дважды — в первую минуту и когда открываешь второй файл.
    Волосок справа вместо рамки: колонка отделена, а не обведена. */
 #code-side {
-    width: 20;
+    display: none;
+    width: 22;
     height: 100%;
     padding: 0 0 0 1;
     border-right: vkey $nex-line;
@@ -761,13 +764,13 @@ ModeScreen.tight #p-console { height: 8; }
     border-top: solid $nex-line 45%;
 }
 
-#dock-tabs { height: 1; width: 100%; background: $nex-panel; }
+#dock-tabs { height: 1; width: 100%; background: $nex-panel; padding: 0 1; }
 #dock-note { height: 1; width: 1fr; content-align: right middle; padding: 0 1; }
 
 /* --- вкладка РАСПИСАНИЕ ------------------------------------------------ */
 
 #dock-sched { height: 1fr; width: 100%; }
-#code-grid-wrap { width: 1fr; height: 100%; }
+#code-grid-wrap { width: 1fr; height: 100%; padding: 0 0 0 1; }
 #code-grid-orc-wrap { display: none; width: 1fr; height: 100%; }
 #code-grid-orc-head { height: 1; width: 100%; }
 
@@ -790,12 +793,16 @@ ModeScreen.tight #p-console { height: 8; }
     color: $nex-title;
 }
 
-/* Разбор решётки: «что переставить» и загрузка портов. Список «что
-   переставить» — единственное здесь, что говорит, ЧТО ДЕЛАТЬ; прятать
-   ответ, оставляя на виду одни данные, значило бы вернуть экран к набору
-   панелей без вывода. */
+/* Разбор решётки: загрузка портов и «что переставить». Виден ТОЛЬКО в
+   развороте дока (F11).
+
+   Раньше стоял всегда и отбирал у решётки треть ширины. На 34 колонках его
+   строки переносились («т12 → т5,» / «канал ,4»), то есть место он занимал,
+   а читаться переставал. И главное — список перестановок целиком лежит во
+   вкладке ЗАМЕЧАНИЯ: одно и то же в двух вкладках сразу это не два ответа,
+   а один лишний вопрос «это то же самое или другое?». */
 #sched-side {
-    display: block;
+    display: none;
     width: 46;
     height: 100%;
     border-left: vkey $nex-line;
@@ -923,7 +930,7 @@ ModeScreen.tight #p-console { height: 8; }
 
 #code-line-chip:hover { background: $primary 25%; }
 
-#code-status { width: 1fr; height: 1; content-align: right middle; }
+#code-status { width: 1fr; height: 1; content-align: right middle; padding: 0 2 0 0; }
 
 /* Пункты-лаунчеры в строке состояния: ошибки и вывод. Вид — как у обычного
    текста строки состояния, кликабельность проявляется наведением, как у
@@ -948,8 +955,9 @@ ModeScreen.tight #p-console { height: 8; }
    решётка отвечает на главный вопрос вкладки и обязана остаться.
 */
 
-ModeScreen.narrow #sched-side, ModeScreen.narrow #dock-bundles { width: 34; }
-ModeScreen.tight #sched-side, ModeScreen.tight #dock-bundles { display: none; }
+ModeScreen.narrow #dock-bundles { width: 38; }
+ModeScreen.tight #dock-bundles { display: none; }
+ModeScreen.tight #sched-side { display: none; }
 ModeScreen.narrow #core-state-col { width: 26; }
 ModeScreen.tight #core-state-col { display: none; }
 
@@ -968,6 +976,8 @@ ModeScreen.very-low #code-dock { height: 9; }
    никогда — иначе непонятно, к чему относится то, что в доке. */
 ModeScreen.zoom-dock #code-dock { height: 65%; }
 ModeScreen.zoom-dock #code-grid-orc-wrap { display: block; }
+/* Разворот ДОБАВЛЯЕТ: в две трети экрана помещается и разбор решётки. */
+ModeScreen.zoom-dock #sched-side { display: block; }
 
 /* --- подсказка при наборе ---------------------------------------------- */
 /*

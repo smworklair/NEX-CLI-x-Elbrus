@@ -31,6 +31,7 @@ import time
 from rich.segment import Segment
 from rich.style import Style as RichStyle
 from rich.text import Text
+from textual import work
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
@@ -770,6 +771,9 @@ class CodeScreen(ModeScreen):
         self.drawer_open = True
         #: Что было открыто до разворота редактора; None — не развёрнут.
         self._maximized: tuple[bool, bool] | None = None
+        #: Объяснятель справа закрыт по умолчанию: он нужен, когда спросили,
+        #: а не постоянно, и ширину у кода отбирать даром незачем.
+        self.ai_shown = False
         self.drawer_tab = "sched"   # sched | line | lint | term
         # Разворот дока: "" или "dock". Не прячет редактор — отдаёт доку
         # больше высоты и добавляет то, чему в трети экрана места нет
@@ -819,6 +823,24 @@ class CodeScreen(ModeScreen):
             # минуту знакомства и когда открываешь второй файл.
             yield VerticalScroll(id="code-side")
             yield AsmArea(id="code-edit")
+            # Объяснятель справа. ЗАКРЫТ по умолчанию (^G открывает, ▐ в
+            # верхней полосе переключает).
+            #
+            # Почему справа, хотя колонку чата отсюда однажды уже убрали (см.
+            # PanelPrompt): та колонка отбирала треть ширины у РАЗВЁРНУТОЙ
+            # панели, ради содержимого которой её и разворачивали. Здесь
+            # ширину она берёт у редактора, а он теперь во всю строку, и
+            # закрыта она по умолчанию. Справа — потому что так стоят
+            # ассистенты в IDE: объяснение должно быть рядом с тем, что
+            # объясняет, а не вместо него.
+            yield VerticalScroll(
+                Static(id="ai-facts"),
+                Static(id="ai-answer"),
+                Horizontal(Static(" ❯ ", id="ai-mark"),
+                           Input(placeholder="почему этот такт пустой?",
+                                 id="ai-input"),
+                           id="ai-prompt"),
+                id="code-ai")
 
         # --- нижний док -----------------------------------------------
         with Vertical(id="code-dock"):
@@ -1414,20 +1436,151 @@ class CodeScreen(ModeScreen):
             self.topic = topic
             self._title = title
 
-    def action_explain(self) -> None:
-        """^G — спросить про то, что сейчас на экране."""
-        if list(self.query(PanelPrompt)):
-            self.close_panel_prompt()
-            self.refresh_hints()
-            return
-        # Фокус в редакторе — спрашивают про код, что бы ни было открыто
-        # снизу. Это самый частый случай и самый очевидный.
-        if self.query_one("#code-edit", AsmArea).has_focus:
-            topic, title = "code", "код"
-        else:
-            title, _box, _tool, topic = self.TABS[self.drawer_tab]
-        self.open_panel_prompt(self._Subject(topic, title))
+    def action_toggle_ai(self) -> None:
+        """Показать/убрать объяснятель справа."""
+        self.ai_shown = self._toggle("#code-ai", self.ai_shown)
+        if self.ai_shown:
+            self._draw_ai_facts(self._cursor_line)
+        self.refresh_context()
         self.refresh_hints()
+
+    def _draw_ai_facts(self, line: int) -> None:
+        """Верх панели — ПОСЧИТАННОЕ про строку под курсором.
+
+        Разделение здесь принципиальное, а не оформительское. Числа считает
+        точный поиск и разбор буфера; модель их только пересказывает. Поэтому
+        факты стоят отдельным блоком и появляются БЕЗ всякой модели — даже
+        когда она недоступна, панель остаётся полезной. Ниже, под явной
+        подписью, идёт сгенерированный ответ, и спутать одно с другим нельзя.
+
+        Это то же правило, по которому в docs/ISA.md у каждого числа
+        проставлен источник: сказать, откуда взялось, — часть самого ответа.
+        """
+        try:
+            target = self.query_one("#ai-facts", Static)
+        except Exception:
+            return
+        dim = palette.role_hex("dim")
+        t = Text()
+        t.append("ПОСЧИТАНО\n", style=palette.role_hex("title"))
+
+        # Фокус не в коде — объясняем открытую вкладку, а не строку буфера:
+        # человек смотрит туда, значит и вопрос у него оттуда.
+        if not self.query_one("#code-edit", AsmArea).has_focus:
+            title, _box, _tool, topic = self.TABS[self.drawer_tab]
+            t.append(f"  вкладка «{title}»\n", style=dim)
+            for fact in self.panel_facts(topic)[:6]:
+                t.append(f"  {fact}\n", style=dim)
+            target.update(t)
+            return
+
+        op = self._op_at_line(line)
+        cycle, ops = self._bundle_at(line)
+        model = self.app.session.model()
+        if op is None or cycle is None:
+            t.append("  курсор не на операции\n", style=dim)
+            for fact in self.panel_facts("code")[:5]:
+                t.append(f"  {fact}\n", style=dim)
+            target.update(t)
+            return
+
+        chans = ",".join(str(c) for c in model.channels_for(op.op))
+        t.append(f"  {op.mnemonic}", style=palette.op_style(op.op))
+        t.append(f"  такт {cycle}\n", style=dim)
+        t.append(f"  класс {op.op} · каналы {chans}\n", style=dim)
+        t.append(f"  латентность {model.latency(op.op)} т.", style=dim)
+        if model.occupancy(op.op) > 1:
+            t.append(f" · держит порт {model.occupancy(op.op)} т.", style=dim)
+        t.append("\n")
+        free = model.width - len(ops)
+        t.append(f"  в этом такте занято {len(ops)} из {model.width}",
+                 style=palette.role_hex("warning" if free > 3 else "dim"))
+        t.append("\n")
+        target.update(t)
+
+    def on_input_submitted(self, event) -> None:
+        """Вопрос из панели справа."""
+        if event.input.id != "ai-input":
+            return
+        event.stop()
+        question = event.value.strip()
+        event.input.value = ""
+        if not question:
+            return
+        self._answer_in_ai(question)
+
+    def _answer_in_ai(self, question: str) -> None:
+        """Ответ модели — под явной подписью, что он сгенерирован."""
+        try:
+            target = self.query_one("#ai-answer", Static)
+        except Exception:
+            return
+        t = Text()
+        t.append("\nСПРОШЕНО\n", style=palette.role_hex("accent2"))
+        t.append(f"  {question}\n", style=palette.role_hex("text"))
+        t.append("\nОТВЕТ", style=palette.role_hex("accent2"))
+        t.append("  сгенерирован по числам выше\n",
+                 style=palette.role_hex("faint"))
+        target.update(t)
+        self._ai_text = ""
+        self._ai_worker(question, self.panel_facts("code"))
+
+    @work(thread=True, exclusive=True, group="ai-side")
+    def _ai_worker(self, question: str, facts: list[str]) -> None:
+        """Тот же агент, что в остальных панелях, — не облегчённая копия.
+
+        Факты экрана уходят вместе с вопросом (`panel=`), поэтому модель
+        отвечает по ПОСЧИТАННЫМ числам, а не по своим представлениям о том,
+        как устроен Эльбрус. Это и есть та рамка, ради которой объяснятель
+        вообще уместен: числа не его, его — только слова вокруг них.
+        """
+        agent = self.app.session.agent()
+        try:
+            for kind, value in agent.ask_stream(question,
+                                                panel=("код", facts)):
+                if kind == "text":
+                    self.app.call_from_thread(self._ai_piece, value)
+                elif kind == "error":
+                    self.app.call_from_thread(self._ai_piece, "\n" + value)
+        except Exception as e:
+            self.app.call_from_thread(self._ai_piece, f"\nне вышло: {e}")
+
+    def _ai_piece(self, piece: str) -> None:
+        """Кусок ответа приехал — дописать под подписью «сгенерирован»."""
+        self._ai_text = getattr(self, "_ai_text", "") + piece
+        try:
+            target = self.query_one("#ai-answer", Static)
+        except Exception:
+            return
+        t = Text()
+        t.append("\nОТВЕТ", style=palette.role_hex("accent2"))
+        t.append("  сгенерирован по числам выше\n",
+                 style=palette.role_hex("faint"))
+        t.append(self._ai_text, style=palette.role_hex("text"))
+        target.update(t)
+
+    def action_explain(self) -> None:
+        """^G — объяснятель справа. Второе нажатие убирает.
+
+        Один ключ — одно поведение, каким бы ни был фокус. Раньше ^G открывал
+        всплывающую строку внизу; теперь объяснение живёт рядом с тем, что
+        объясняет, как ассистент в IDE. Всплывающая строка осталась для
+        развёрнутых панелей в других режимах, здесь её место занял этот
+        столбец — он не всплывает поверх и не исчезает при первом Esc в
+        сторону.
+
+        КОНТЕКСТ объяснятель берёт из фокуса: курсор в коде — разбирает
+        строку под ним, фокус во вкладке дока — её содержимое. Знать, на что
+        человек смотрит, важнее, чем спрашивать его об этом.
+        """
+        if self.ai_shown:
+            self.action_toggle_ai()
+            return
+        self.action_toggle_ai()
+        try:
+            self.query_one("#ai-input", Input).focus()
+        except Exception:
+            pass
 
     def action_ai_or_complete(self) -> None:
         """Tab: в редакторе — отступ. Справочник живёт на ^G, не на Tab.
@@ -1695,9 +1848,15 @@ class CodeScreen(ModeScreen):
     #: углу. Заодно это ответ на «верхняя полоса пустая»: там теперь не
     #: воздух, а единственные органы управления раскладкой, до которых иначе
     #: надо было помнить клавиши ^B и F12.
+    #: Кнопки панелей: (что, значок, клавиша). Клавиша написана ПРЯМО на
+    #: кнопке, а не спрятана в подсказку: полоса подсказок вмещает пять
+    #: пунктов, а клавиш восемь, и панельные из неё вылетали первыми —
+    #: узнать про ^B было неоткуда. Кнопка со своей клавишей объясняет себя
+    #: сама и заодно освобождает место в подсказках тому, у чего кнопки нет.
     TOGGLES = (
-        ("side", "▌", "каталог слева (^B)"),
-        ("dock", "▄", "панель снизу (F12)"),
+        ("side", "▌", "^B"),
+        ("dock", "▄", "F12"),
+        ("ai", "▐", "^G"),
     )
 
     def _append_toggles(self, line) -> list[tuple[int, int, str]]:
@@ -1707,11 +1866,14 @@ class CodeScreen(ModeScreen):
         состояние читается, не нажимая.
         """
         zones: list[tuple[int, int, str]] = []
-        for which, glyph, _tip in self.TOGGLES:
-            shown = self.side_shown if which == "side" else self.drawer_open
+        for which, glyph, key in self.TOGGLES:
+            shown = {"side": self.side_shown, "dock": self.drawer_open,
+                     "ai": self.ai_shown}[which]
             begin = line.cell_len
-            line.append(" " + glyph + " ",
+            line.append("  " + glyph,
                         style=palette.role_hex("accent2" if shown else "faint"))
+            line.append(key, style=palette.role_hex(
+                "dim" if shown else "faint"))
             zones.append((begin, line.cell_len, which))
         return zones
 
@@ -1744,6 +1906,8 @@ class CodeScreen(ModeScreen):
         event.stop()
         if event.which == "side":
             self.action_toggle_side()
+        elif event.which == "ai":
+            self.action_toggle_ai()
         else:
             self.action_toggle_drawer()
         self.refresh_context()
@@ -1799,10 +1963,14 @@ class CodeScreen(ModeScreen):
         pairs = [("F5", "прогнать")]
         if self._have_orc():
             pairs.append(("F6", "переписать"))
-        pairs.append(("F12", "док" if self.drawer_open else "док ↑"))
+        # Панели сюда НЕ идут: у них есть кнопки в верхней полосе, и клавиша
+        # написана на самой кнопке. Здесь остаётся то, что иначе не найти
+        # никак: разворот дока и выход к выбору режима — последнее особенно,
+        # инструмент открывается сразу КОДОМ, и без этой строки непонятно,
+        # как попасть в остальные три экрана.
+        pairs.append(("F11", "свернуть" if self.zoom else "развернуть"))
         pairs.append(("^P", "команда"))
-        pairs.append(("^G", "спросить"))
-        pairs.append(("^B", "файлы ↩" if self.side_shown else "файлы"))
+        pairs.append(("^O", "режимы"))
         return pairs[:self.MAX_HINTS]
 
     def toggle_hints(self) -> list[tuple[str, str]]:
@@ -2094,7 +2262,7 @@ class CodeScreen(ModeScreen):
         if hi < n - 1:
             line.append(f"› {n - 1 - hi} ", style=faint)
 
-        pad = max(1, width - line.cell_len - len(tail) - len(self.TOGGLES) * 3 - 2)
+        pad = max(1, width - line.cell_len - len(tail) - len(self.TOGGLES) * 6 - 2)
         line.append(" " * pad)
         line.append(tail, style=dim)
         strip.spans = spans
@@ -3405,9 +3573,14 @@ class CodeScreen(ModeScreen):
         if sug is not None and sug.display:
             sug.hide()
             return
-        # Объяснятель закрывается ПЕРВЫМ из окон: он всплывающий и лежит
-        # поверх нижнего края. Без этой ветки Esc просто уводил фокус из его
-        # строки в редактор, а панель оставалась висеть.
+        # Объяснятель закрывается ПЕРВЫМ из окон: его открывают под конкретный
+        # вопрос и закрывают, получив ответ, — в отличие от дока, который
+        # часть обычного вида. Без этой ветки Esc просто уводил бы фокус из
+        # его строки в редактор, а столбец оставался висеть.
+        if self.ai_shown:
+            self.action_toggle_ai()
+            self.query_one("#code-edit", AsmArea).focus()
+            return
         if list(self.query(PanelPrompt)):
             self.close_panel_prompt()
             self.refresh_hints()

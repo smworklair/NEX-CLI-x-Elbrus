@@ -2446,7 +2446,7 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
             about_code = self._facts(screen)
             screen.action_explain()          # ^G закрывает
             await pilot.pause()
-            closed = len(list(screen.query(PanelPrompt)))
+            closed = int(screen.ai_shown)
             # Фокус не в тексте — спрашивают про открытую вкладку.
             screen.open_drawer("lint")
             screen.query_one("#dock-lint").focus()
@@ -2463,10 +2463,17 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
 
     @staticmethod
     def _facts(screen):
-        from vliw.tui.widgets import PanelPrompt
+        """Что объяснятель показывает в блоке ПОСЧИТАНО.
 
-        panels = list(screen.query(PanelPrompt))
-        return list(panels[0].facts) if panels else []
+        С 03.09.2026 он живёт столбцом справа, а не всплывающей строкой:
+        объяснение должно стоять рядом с тем, что объясняет. Поведение, ради
+        которого тест написан, то же — знать, на что человек смотрит.
+        """
+        from textual.widgets import Static
+
+        if not screen.ai_shown:
+            return []
+        return str(screen.query_one("#ai-facts", Static).render()).splitlines()
 
     def test_escape_closes_it_before_anything_else(self) -> None:
         """Esc убирает объяснятель первым: он всплывающий и лежит поверх."""
@@ -2475,11 +2482,11 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
         async def body(screen, pilot, session):
             screen.action_explain()
             await pilot.pause()
-            opened = len(list(screen.query(PanelPrompt)))
+            opened = int(screen.ai_shown)
             await pilot.press("escape")
             await pilot.pause()
             await pilot.pause()
-            return (opened, len(list(screen.query(PanelPrompt))),
+            return (opened, int(screen.ai_shown),
                     screen.app.screen.__class__.__name__)
 
         opened, after, where = self._screen(body)

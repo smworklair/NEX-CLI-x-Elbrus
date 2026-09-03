@@ -735,6 +735,25 @@ ModeScreen.tight #p-console { height: 8; }
 .side-item { height: 1; width: 100%; }
 .side-item:hover { background: $primary 20%; }
 
+/* Объяснятель справа. Закрыт по умолчанию — как каталог слева: нужен, когда
+   спросили, а не постоянно. Ширина 34: меньше — ответ рвётся на каждом
+   слове, больше — отбирает у кода без нужды. */
+#code-ai {
+    display: none;
+    width: 34;
+    height: 100%;
+    padding: 0 1;
+    border-left: vkey $nex-line;
+    scrollbar-size-vertical: 1;
+}
+
+#ai-facts { width: 100%; height: auto; }
+#ai-answer { width: 100%; height: auto; }
+
+#ai-prompt { width: 100%; height: 1; dock: bottom; }
+#ai-mark { width: 3; height: 1; color: $accent; }
+#ai-input { width: 1fr; height: 1; border: none; background: transparent; }
+
 #code-edit {
     height: 1fr;
     /* 1fr, а не 100%: слева от редактора может встать колонка примеров. */
@@ -973,6 +992,7 @@ ModeScreen.tight #core-state-col { display: none; }
    открыть пример можно командой /example. Двадцать колонок из восьмидесяти
    — четверть экрана под список из десяти имён. */
 ModeScreen.tight #code-side { display: none; }
+ModeScreen.tight #code-ai { display: none; }
 
 /* Низкий терминал: доку хватает восьми строк по min-height, но процент от
    него отбирает у кода больше, чем стоит. Ниже 34 строк док становится

@@ -64,6 +64,8 @@ class AgentScreen(ModeScreen):
         self._asked: list[dict] = []
         self._last_q = ""
         self._t0 = 0.0
+        #: Сколько реплик общей переписки уже в ленте (см. _sync_dialog).
+        self._shown = 0
 
     # --- раскладка --------------------------------------------------------
 
@@ -146,6 +148,18 @@ class AgentScreen(ModeScreen):
                 else journal.action_wipe()
             return
         super().panel_tool(tool)
+
+    def on_screen_resume(self) -> None:
+        """Вернулись на экран — подобрать реплики, добавленные в другом окне.
+
+        Экран живёт по одному экземпляру на сессию (`NexApp._mode_screen`),
+        поэтому повторный вход ленту не пересобирает: она осталась какой
+        была. А разговор мог уйти вперёд — его продолжили в колонке КОДа.
+        """
+        try:
+            self._sync_dialog()
+        except Exception:
+            pass
 
     def on_ready(self) -> None:
         grid = self.query_one("#question-chips", ItemGrid)
@@ -245,6 +259,10 @@ class AgentScreen(ModeScreen):
         self.chat.remove_children()
         self._buf = ""
         self._answer = None
+        # Чистим и общую переписку: иначе очищенная лента возвращалась бы
+        # целиком при следующем входе на экран (её поднимает _replay_dialog).
+        self.app.session.dialog.clear()
+        self._shown = 0
         self._greet()
         self._bubble(Static(Text("— лента очищена, история вопросов слева —",
                                  style=palette.role_hex("faint")),
@@ -276,6 +294,42 @@ class AgentScreen(ModeScreen):
         t.append("что он сделал перед ответом — в трассе справа; "
                  "любой ответ можно перепроверить командой.", style=dim)
         self._bubble(Static(t, classes="msg-note"))
+        self._sync_dialog()
+
+    def _sync_dialog(self) -> None:
+        """Досыпать в ленту реплики, которых в ней ещё нет.
+
+        Спрашивают агента из трёх мест — колонки в КОДЕ, вкладки АГЕНТ и
+        этого экрана, — и до общей переписки это были три разных разговора:
+        задал вопрос в колонке, развернул на весь экран, а тут пусто. Лента
+        поднимается из `session.dialog`, поэтому «развернуть» значит
+        продолжить, а не начать заново.
+
+        Показанное считается по счётчику, а не перерисовывается целиком:
+        ответ приходит потоком в живой виджет, и снос-монтаж на каждый
+        токен мигал бы всей лентой.
+        """
+        for msg in self.app.session.dialog[self._shown:]:
+            if msg["role"] == "you":
+                head = Text()
+                head.append("▌ ", style=palette.role_hex("faint"))
+                head.append("вы", style=palette.role_hex("dim"))
+                head.append("\n")
+                head.append(msg["text"], style=palette.role_hex("title"))
+                self._bubble(Static(head, classes="msg-you"))
+                continue
+            mark = Text()
+            mark.append("▌ ", style=palette.role_hex("mind"))
+            mark.append("nex", style=f"{palette.role_hex('mind')} bold")
+            self._bubble(Static(mark, classes="msg-mark"))
+            body = (self._render_answer(msg["text"]) if msg["text"]
+                    else Text("…", style=palette.role_hex("faint")))
+            widget = Static(body, classes="msg-nex")
+            self._bubble(widget)
+            # Последняя реплика может быть ещё в пути — в неё и польётся
+            # поток ответа (см. _chunk).
+            self._answer = widget
+        self._shown = len(self.app.session.dialog)
 
     def _check_model(self) -> None:
         self.run_worker(self._model_worker, thread=True, group="mind")
@@ -308,23 +362,19 @@ class AgentScreen(ModeScreen):
 
         self._last_q = question
         self._t0 = time.monotonic()
-        head = Text()
-        head.append("▌ ", style=palette.role_hex("faint"))
-        head.append("вы", style=palette.role_hex("dim"))
-        head.append("\n")
-        head.append(question, style=palette.role_hex("title"))
-        self._bubble(Static(head, classes="msg-you"))
-
-        mark = Text()
-        mark.append("▌ ", style=palette.role_hex("mind"))
-        mark.append("nex", style=f"{palette.role_hex('mind')} bold")
-        self._bubble(Static(mark, classes="msg-mark"))
-
+        # Переписка одна на сессию: этот же разговор виден в колонке агента
+        # и во вкладке АГЕНТ нижнего дока КОДа. См. Session.dialog.
+        self.app.session.dialog.append({"role": "you", "text": question,
+                                        "facts": []})
+        self.app.session.dialog.append({"role": "nex", "text": "",
+                                        "facts": [], "waiting": True})
         self._buf = ""
         self._actions = []
-        self._answer = Static(Text("…", style=palette.role_hex("faint")),
-                              classes="msg-nex")
-        self._bubble(self._answer)
+        # Лента рисуется из переписки, а не отдельным кодом на каждый путь:
+        # вопрос мог прийти и отсюда, и из колонки в КОДе, и рисовать его
+        # двумя способами значит однажды получить два разных вида одного
+        # разговора. `_sync_dialog` заодно отдаёт виджет ответа под поток.
+        self._sync_dialog()
         self.set_busy(True)
         self.run_worker(lambda: self._ask_worker(question), thread=True,
                         exclusive=True, group="mind")
@@ -349,6 +399,10 @@ class AgentScreen(ModeScreen):
             self._bubble(Static(t, classes="msg-note"))
             return
         self._buf += value
+        dialog = self.app.session.dialog
+        if dialog and dialog[-1]["role"] == "nex":
+            dialog[-1]["text"] = self._buf
+            dialog[-1]["waiting"] = False
         if self._answer is not None:
             self._answer.update(self._render_answer(self._buf))
             self.chat.scroll_end(animate=False)

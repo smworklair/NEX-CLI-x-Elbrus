@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import unittest
 from contextlib import redirect_stdout
 
@@ -36,8 +37,22 @@ from vliw.ui import render
 
 
 def _make_app(start_mode):
-    """Приложение и сессия — собранные ровно так же, как в `cli.run_tui()`."""
+    """Приложение и сессия — собранные ровно так же, как в `cli.run_tui()`.
+
+    Раскладка при этом уводится во ВРЕМЕННЫЙ файл. Экран сохраняет её между
+    запусками (`~/.config/nex/layout.json`), и без подмены тесты, во-первых,
+    затирали бы настоящие настройки того, кто их гоняет, а во-вторых —
+    влияли бы друг на друга: один открыл проводник в чужой папке, другой
+    ищет в ней свой файл и не находит.
+    """
+    import tempfile
+    from pathlib import Path
+
     from vliw.tui.app import NexApp
+    from vliw.tui.screens.code_screen import CodeScreen
+
+    CodeScreen.LAYOUT_FILE = Path(tempfile.mkdtemp(prefix="nex-test-")) \
+        / "layout.json"
 
     args = cli._build_parser().parse_args([])
     session = cli.Session(args=args)
@@ -181,8 +196,13 @@ class TestPanelMaximize(unittest.TestCase):
     """
 
     @staticmethod
-    async def _click(pilot, panel):
+    async def _click(pilot, panel, times: int = 1):
         """Клик В СЕРЕДИНУ панели — туда, куда целится человек.
+
+        `times=2` — настоящий двойной клик одним вызовом пилота. Два
+        отдельных вызова подряд считались двойным только пока машина не
+        занята: между ними проходит реальное время, и на полном прогоне
+        зазор перерастал порог — тест падал через раз, хотя жест исправен.
 
         Раньше здесь звался `panel.on_click(...)` напрямую, поддельным
         событием. Проверялся при этом сам обработчик, а не жест, и все
@@ -191,7 +211,8 @@ class TestPanelMaximize(unittest.TestCase):
         доходил. Настоящий клик через пилота ловит и это.
         """
         await pilot.click(offset=(panel.region.x + panel.region.width // 2,
-                                  panel.region.y + panel.region.height // 2))
+                                  panel.region.y + panel.region.height // 2),
+                          times=times)
 
     def _run(self, steps):
         async def go():
@@ -225,8 +246,7 @@ class TestPanelMaximize(unittest.TestCase):
             under = app.screen.get_widget_at(
                 panel.region.x + panel.region.width // 2,
                 panel.region.y + panel.region.height // 2)[0]
-            await self._click(pilot, panel)
-            await self._click(pilot, panel)
+            await self._click(pilot, panel, times=2)
             await pilot.pause()
             return app.screen.maximized, type(under).__name__
 
@@ -252,8 +272,7 @@ class TestPanelMaximize(unittest.TestCase):
     def test_escape_minimizes(self):
         """Esc сворачивает — и это не ломает свой Esc у экрана РАЗБОР."""
         async def steps(app, pilot, panel):
-            await self._click(pilot, panel)
-            await self._click(pilot, panel)
+            await self._click(pilot, panel, times=2)
             await pilot.pause()
             before = app.screen.maximized
             await pilot.press("escape")
@@ -1594,8 +1613,19 @@ class TestCodeScreen(unittest.TestCase):
         heads = [l.split()[0] for l in labels]
         self.assertIn("/gen", heads, f"нет /gen среди {labels}")
         self.assertIn("/fill", heads, f"нет /fill среди {labels}")
-        self.assertEqual(heads[:2], ["/gen", "/fill"],
-                         "скрипты сокращения работы обязаны стоять первыми")
+        # Первыми идут ЗАГОТОВКИ (`CodeScreen.SNIPPETS`), а не /gen с /fill.
+        # Решение сменилось осознанно: заготовка вставляет готовый кусок
+        # ассемблера одним Enter, а генератору надо ещё сказать, сколько и
+        # чего. Сначала — то, что работает без аргументов.
+        from vliw.tui.screens.code_screen import CodeScreen
+
+        snippets = {"/" + n for n, _note, _body in CodeScreen.SNIPPETS}
+        self.assertIn(heads[0], snippets,
+                      f"первой стоит не заготовка, а {heads[0]}")
+        # Но и команды обязаны быть видны: восемь строк в окне, и заготовки
+        # не должны выдавить всё остальное.
+        self.assertTrue(snippets.issuperset(heads[:3]),
+                        "заготовки перемешаны с командами в начале списка")
 
     def test_broken_example_is_actually_caught(self):
         """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""
@@ -2300,11 +2330,23 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
         self.assertEqual(self._screen(body), 1)
 
-    def test_catalog_on_the_left_opens_a_real_file(self) -> None:
-        """Каталог слева — вход в работу: клик открывает файл вкладкой."""
+    def test_explorer_opens_a_real_file(self) -> None:
+        """Проводник справа — вход в работу: клик открывает файл вкладкой.
+
+        Раньше файлы рядом лежали плоским списком в левой колонке и
+        показывали один каталог. Теперь это проводник (^E): папки, вход
+        внутрь, поиск по имени. Проверяется то же самое — клик по файлу
+        открывает его вкладкой и запоминает путь, иначе ^S не знает, куда
+        писать.
+        """
         from vliw.tui.screens.code_screen import SideItem
+        from vliw.tui.screens.code_screen import examples_dir
 
         async def body(screen, pilot, session):
+            screen.action_toggle_explorer()
+            screen.explorer_dir = examples_dir().parent
+            screen._draw_explorer()
+            await pilot.pause()
             item = next(i for i in screen.query(SideItem)
                         if i.key.endswith("probe.s"))
             item.post_message(SideItem.Picked(item.key))
@@ -2432,7 +2474,19 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                     # отсоединяются, и сообщение отсоединённому уходит в
                     # никуда — цикл по снятому заранее списку открывал ровно
                     # одну вкладку и молчал об этом.
-                    for key in [i.key for i in sc.query(SideItem)]:
+                    # Только участки: у заметки чисел участка нет и быть
+                    # не должно (см. CodeScreen.context_parts), а тест — про
+                    # то, что вкладки не выдавливают числа. Файлы берём в
+                    # проводнике: в левой колонке теперь только вкладки.
+                    from vliw.tui.screens.code_screen import examples_dir
+
+                    sc.action_toggle_explorer()
+                    sc.explorer_dir = examples_dir()
+                    sc._draw_explorer()
+                    await pilot.pause()
+                    keys = [i.key for i in sc.query(SideItem)
+                            if i.key.endswith(".s") or i.key == "new:s"]
+                    for key in keys:
                         live = [i for i in sc.query(SideItem) if i.key == key]
                         if not live:
                             continue
@@ -2442,14 +2496,17 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                     strip = sc.query_one("#code-head", FileStrip)
                     return (len(sc.files), sc.files[sc.file_i]["name"],
                             str(strip.content),
-                            [i for _s, _e, i, _c in strip.spans])
+                            [i for _s, _e, i, _c in strip.spans], sc.file_i)
 
-        n, active, painted, shown = asyncio.run(go())
+        n, active, painted, shown, current = asyncio.run(go())
         self.assertGreater(n, 3, "вкладок мало — тест ничего не проверяет")
         self.assertIn("оп.", painted, "числа участка вытеснены вкладками")
         self.assertIn(active, painted,
                       f"активной вкладки {active} нет на экране")
-        self.assertIn(n - 1, shown,
+        # Активная — та, что реально активна, а не «последняя открытая»:
+        # файл, уже лежащий во вкладке, повторное открытие не дублирует, а
+        # переключает на неё, и последним кликом активной может стать первая.
+        self.assertIn(current, shown,
                       "активная вкладка есть в тексте, но по ней не кликнуть")
         self.assertLess(len(shown), n,
                         "все вкладки влезли — окно не проверено, нужно уже")
@@ -2499,7 +2556,7 @@ class TestCodeFilesAreTabs(unittest.TestCase):
             self.assertIn(chan, painted,
                           f"канал {chan} не поместился на терминале 80x24")
 
-    def test_catalog_does_not_pass_the_exhibit_off_as_real_code(self) -> None:
+    def test_explorer_marks_the_exhibit(self) -> None:
         """В «настоящем коде» нет файлов-экспонатов.
 
         probe_ILLUSTRATION_OBSOLETE.s сам про себя пишет: «ЭТО НЕ ВЫВОД
@@ -2508,16 +2565,29 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         значит ровно то враньё, от которого весь проект защищается
         пометками источника у каждого числа.
         """
-        from vliw.tui.screens.code_screen import SideItem
+        from vliw.tui.screens.code_screen import SideItem, examples_dir
 
         async def body(screen, pilot, session):
-            return [i.key for i in screen.query(SideItem)]
+            screen.action_toggle_explorer()
+            screen.explorer_dir = examples_dir().parent
+            screen._draw_explorer()
+            await pilot.pause()
+            items = list(screen.query(SideItem))
+            keys = [i.key for i in items]
+            marks = {i.key: str(i.render()) for i in items}
+            return keys, marks
 
-        keys = self._screen(body)
+        keys, marks = self._screen(body)
         self.assertTrue(any(k.endswith("probe.s") for k in keys),
-                        "настоящий код пропал из каталога совсем")
-        self.assertFalse([k for k in keys if "OBSOLETE" in k.upper()],
-                         "экспонат подан как настоящий код")
+                        "настоящий код пропал из проводника совсем")
+        exhibit = [k for k in keys if "OBSOLETE" in k.upper()]
+        self.assertTrue(exhibit,
+                        "файл с диска пропал — проводник обязан показывать "
+                        "то, что есть, а не редактированную правду")
+        for key in exhibit:
+            self.assertIn("экспонат", marks[key],
+                          "экспонат подан как обычный код: "
+                          f"{marks[key]!r}")
 
     def test_gutter_keeps_the_arrow_out_of_the_text(self) -> None:
         """Ширина гуттера учитывает колонку действия.
@@ -2599,12 +2669,16 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestAgentIsAPanelNotAMode(unittest.TestCase):
-    """АГЕНТ в КОДЕ — объяснятель по ^G, знающий, на что человек смотрит.
+    """АГЕНТ в КОДЕ — вкладка дока по ^G, знающая, на что человек смотрит.
 
     Целого экрана и четверти главного меню он не стоит: по замерам проекта
     подсказка обученной модели оракулу дала 5% даже с идеальной подсказкой,
     а интервальная нижняя граница отсекла 89% узлов перебора. Место в
     интерфейсе должно совпадать с этими числами.
+
+    Колонки справа у него больше нет: она показывала ТОТ ЖЕ разговор, что
+    вкладка (`session.dialog`), и два окна в одно и то же — не два способа
+    работать, а лишний вопрос «в котором из них я сейчас спрашиваю».
     """
 
     @staticmethod
@@ -2633,6 +2707,10 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
             # Фокус не в тексте — спрашивают про открытую вкладку.
             screen.open_drawer("lint")
             screen.query_one("#dock-lint").focus()
+            # Пауза обязательна: фокус в Textual применяется сообщением, и
+            # без неё ^G сработает, пока курсор ещё формально в редакторе, —
+            # то есть тест спросит не о том, о чём собирался.
+            await pilot.pause()
             screen.action_explain()
             await pilot.pause()
             return about_code, closed, self._facts(screen)
@@ -2646,22 +2724,27 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
 
     @staticmethod
     def _facts(screen):
-        """Что объяснятель показывает в блоке ПОСЧИТАНО.
+        """Что агент видит про экран — блок «что видит агент» его вкладки.
 
-        С 03.09.2026 он живёт столбцом справа, а не всплывающей строкой:
-        объяснение должно стоять рядом с тем, что объясняет. Поведение, ради
-        которого тест написан, то же — знать, на что человек смотрит.
+        Место менялось дважды: всплывающая строка → колонка справа →
+        вкладка дока. Поведение, ради которого тест написан, всё то же —
+        агент обязан знать, на что человек смотрел, когда его позвал.
         """
         from textual.widgets import Static
 
         if not screen.ai_shown:
             return []
-        return str(screen.query_one("#ai-facts", Static).render()).splitlines()
+        text = str(screen.query_one("#agent-seen", Static).render())
+        return [line.strip() for line in text.splitlines() if line.strip()]
 
-    def test_escape_closes_it_before_anything_else(self) -> None:
-        """Esc убирает объяснятель первым: он всплывающий и лежит поверх."""
-        from vliw.tui.widgets import PanelPrompt
+    def test_escape_returns_to_the_code_and_keeps_the_dock(self) -> None:
+        """Esc из агента возвращает курсор в код, а док не закрывает.
 
+        Раньше агент был всплывающей колонкой, и Esc убирал её первой. Он
+        стал вкладкой дока — а док по Esc не закрывается ни на одной
+        вкладке: он часть обычного вида, а не окно поверх работы. Закрыть
+        агента по-прежнему можно тем же ^G, которым его открыли.
+        """
         async def body(screen, pilot, session):
             screen.action_explain()
             await pilot.pause()
@@ -2669,12 +2752,18 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
             await pilot.press("escape")
             await pilot.pause()
             await pilot.pause()
-            return (opened, int(screen.ai_shown),
+            focused = screen.app.focused
+            screen.action_explain()
+            await pilot.pause()
+            return (opened, getattr(focused, "id", ""),
+                    int(screen.ai_shown),
                     screen.app.screen.__class__.__name__)
 
-        opened, after, where = self._screen(body)
-        self.assertEqual(opened, 1)
-        self.assertEqual(after, 0, "Esc не убрал объяснятель")
+        opened, focused, closed_by_key, where = self._screen(body)
+        self.assertEqual(opened, 1, "^G не открыл агента")
+        self.assertEqual(focused, "code-edit",
+                         f"Esc не вернул курсор в код, а в {focused!r}")
+        self.assertEqual(closed_by_key, 0, "^G не закрыл агента")
         self.assertEqual(where, "CodeScreen", "Esc унёс с экрана целиком")
 
     def test_tab_stays_an_indent_in_the_editor(self) -> None:
@@ -2700,6 +2789,754 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
         self.assertTrue(added and added.isspace(),
                         f"Tab перестал делать отступ, добавлено {added!r}")
         self.assertEqual(panels, 0, "Tab открыл объяснятель вместо отступа")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestNonAsmFilesDoNotPretend(unittest.TestCase):
+    """Скрипт и заметка не притворяются участком e2k.
+
+    Каталог слева заводит файлы трёх типов: участок `.s`, скрипт `.py`,
+    заметка `.md` — работа вокруг участка состоит не из одного участка.
+    Но инструмент разбирает ТОЛЬКО `.s`, и об этом он обязан говорить, а не
+    показывать на скрипт сорок замечаний «строку не разобрать» (это правда,
+    которая ничего не значит) и не предлагать F5, который откажет.
+    """
+
+    def _open(self, kind):
+        """Открыть файл такого типа и вернуть, что о нём думает экран.
+
+        Заводить `.py` из панели больше нельзя (см. docs/REDESIGN.md), но
+        ОТКРЫТЬ лежащий рядом скрипт человек может в любой момент — через
+        проводник. Проверяется именно этот путь.
+        """
+        import tempfile
+        from pathlib import Path
+
+        async def go(path):
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.open_file(path.read_text(), path.name, path=str(path))
+                    await pilot.pause()
+                    sc.reparse()
+                    await pilot.pause()
+                    edit = sc.query_one("#code-edit")
+                    return (sc.files[sc.file_i]["name"], sc._is_asm(),
+                            len(sc.problems), sc.parsed, edit.runnable,
+                            [k for k, _v in sc.hint_pairs()],
+                            str(sc.query_one("#code-status").render()))
+
+        work = Path(tempfile.mkdtemp(prefix="nex-kind-"))
+        path = work / f"скрипт.{kind}"
+        path.write_text("import subprocess\nprint('hello')\n")
+        return asyncio.run(go(path))
+
+    def test_python_buffer_is_not_parsed_as_assembly(self) -> None:
+        name, is_asm, problems, parsed, runnable, keys, status = self._open("py")
+        self.assertTrue(name.endswith(".py"), f"открыли не .py, а {name}")
+        self.assertFalse(is_asm, "скрипт сочтён участком e2k")
+        self.assertIsNone(parsed, "скрипт разобран ассемблерным парсером")
+        self.assertEqual(problems, 0,
+                         "на скрипт выданы замечания по машине e2k")
+        self.assertFalse(runnable,
+                         "у скрипта в гуттере стрелка запуска — она откажет")
+        self.assertNotIn("F5", keys,
+                         "F5 предложен там, где он ничего не сделает")
+        self.assertIn("не e2k", status,
+                      f"строка состояния молчит про тип файла: {status!r}")
+
+    def test_asm_buffer_still_works(self) -> None:
+        """Контроль: на `.s` всё остаётся как было."""
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.post_message(SideItem.Picked("new:s"))
+                    await pilot.pause()
+                    return (sc.files[sc.file_i]["name"], sc._is_asm(),
+                            sc.query_one("#code-edit").runnable,
+                            [k for k, _v in sc.hint_pairs()])
+
+        name, is_asm, runnable, keys = asyncio.run(go())
+        self.assertTrue(name.endswith(".s"))
+        self.assertTrue(is_asm)
+        self.assertTrue(runnable)
+        self.assertIn("F5", keys)
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
+class TestLayoutSurvivesRestart(unittest.TestCase):
+    """Раскладка живёт дольше сессии.
+
+    Высоту дока человек ставит под свою работу — мышью за границу, — и
+    теряла она при каждом запуске. Настройка, которую надо задавать заново
+    каждый день, настройкой не является.
+    """
+
+    def test_dock_height_and_tab_come_back(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path
+        from vliw.tui.screens.code_screen import CodeScreen
+
+        home = Path(tempfile.mkdtemp(prefix="nex-layout-"))
+        saved = CodeScreen.LAYOUT_FILE
+        CodeScreen.LAYOUT_FILE = home / "layout.json"
+        try:
+            # `_make_app` уводит раскладку во временный файл на каждый вызов
+            # (см. её докстринг), поэтому обоим запускам файл назначаем
+            # здесь — иначе второй прочитает не тот, что записал первый.
+            async def first():
+                app, _s = _make_app("code")
+                CodeScreen.LAYOUT_FILE = home / "layout.json"
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(150, 42)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        sc.dock_h = 20
+                        sc.open_drawer("core")
+                        await pilot.pause()
+
+            async def second():
+                app, _s = _make_app("code")
+                CodeScreen.LAYOUT_FILE = home / "layout.json"
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(150, 42)) as pilot:
+                        await pilot.pause()
+                        await pilot.pause()
+                        sc = app.screen
+                        sc._load_layout()
+                        sc._apply_dock_height(sc.query_one("#code-dock"))
+                        await pilot.pause()
+                        return (sc.dock_h, sc.drawer_tab,
+                                sc.query_one("#code-dock").size.height)
+
+            asyncio.run(first())
+            self.assertTrue(CodeScreen.LAYOUT_FILE.exists(),
+                            "раскладка не записалась")
+            height, tab, real = asyncio.run(second())
+            self.assertEqual(height, 20, "высота дока не пережила запуск")
+            self.assertEqual(tab, "core", "вкладка не пережила запуск")
+            self.assertEqual(real, 20, "высота записана, но не применена")
+        finally:
+            CodeScreen.LAYOUT_FILE = saved
+
+    def test_broken_file_does_not_break_the_screen(self) -> None:
+        """Испорченный файл раскладки не мешает работать.
+
+        Настройка, без которой инструмент прекрасно работает, не имеет права
+        его ронять.
+        """
+        import tempfile
+        from pathlib import Path
+        from vliw.tui.screens.code_screen import CodeScreen
+
+        home = Path(tempfile.mkdtemp(prefix="nex-layout-bad-"))
+        bad = home / "layout.json"
+        bad.write_text("{это не json")
+        saved = CodeScreen.LAYOUT_FILE
+        CodeScreen.LAYOUT_FILE = bad
+        try:
+            async def go():
+                app, _s = _make_app("code")
+                CodeScreen.LAYOUT_FILE = bad
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        app.screen._load_layout()
+                        await pilot.pause()
+                        return app.screen.__class__.__name__
+
+            self.assertEqual(asyncio.run(go()), "CodeScreen")
+        finally:
+            CodeScreen.LAYOUT_FILE = saved
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — заготовки не проверяем")
+class TestSnippetsAreLegalCode(unittest.TestCase):
+    """Заготовки по «/» вставляют РАБОЧИЙ ассемблер, а не текст.
+
+    Смысл заготовок в том, что набрать десяток широких команд руками — самое
+    дорогое на этом экране. Но заготовка, которая даёт код с ошибками по
+    машине, хуже отсутствующей: человек получает замечания на то, чего не
+    писал, и не знает, кому верить.
+
+    Каналы в заготовках сверены с тремя источниками: опрос ассемблера
+    (`tools/probe_matrix.py`), руководство МЦСТ и таблица декодирования QEMU
+    (`target/e2k/alop.decode`).
+    """
+
+    def _insert(self, name):
+        from vliw.tui.screens.code_screen import AsmArea
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    edit = sc.query_one("#code-edit", AsmArea)
+                    edit.replace("", (0, 0), edit.document.end)
+                    await pilot.pause()
+                    edit.focus()
+                    edit.insert("/" + name)
+                    await pilot.pause()
+                    await pilot.pause()
+                    took = sc.action_suggest_take()
+                    await pilot.pause()
+                    sc.reparse()
+                    await pilot.pause()
+                    errs = [p for p in sc.problems if p.severity == "error"]
+                    return (edit.text,
+                            len(sc.parsed.ops) if sc.parsed else 0,
+                            sc.comp.makespan if sc.comp is not None else None,
+                            [e.text for e in errs])
+
+        return asyncio.run(go())
+
+    def test_every_snippet_parses_without_errors(self) -> None:
+        from vliw.tui.screens.code_screen import CodeScreen
+
+        for name, _note, _body in CodeScreen.SNIPPETS:
+            text, ops, _span, errs = self._insert(name)
+            self.assertNotIn("/" + name, text,
+                             f"запрос «/{name}» остался в коде — он не "
+                             "разберётся и даст замечание")
+            self.assertFalse(errs, f"/{name} дал ошибки по машине: {errs}")
+            if name != "bundle":
+                self.assertGreater(ops, 0, f"/{name} не дал ни одной операции")
+
+    def test_two_inserts_do_not_fight_for_registers(self) -> None:
+        """Вторая вставка берёт СВОИ регистры, а не те же самые.
+
+        Первая версия заготовок вставляла готовый текст с вбитыми
+        `%r10, %r11, %r20`. Вторая вставка писала в те же регистры, разбор
+        честно показывал конфликт — на коде, которого человек не писал, — и
+        половину заготовки приходилось править руками. Такая заготовка
+        экономит меньше, чем стоит.
+        """
+        from vliw.tui.screens.code_screen import AsmArea
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    edit = sc.query_one("#code-edit", AsmArea)
+                    edit.replace("", (0, 0), edit.document.end)
+                    await pilot.pause()
+                    edit.focus()
+                    for _ in range(2):
+                        edit.insert("/chain")
+                        await pilot.pause()
+                        await pilot.pause()
+                        sc.action_suggest_take()
+                        await pilot.pause()
+                        sc.reparse()
+                        await pilot.pause()
+                    errs = [p for p in sc.problems if p.severity == "error"]
+                    return edit.text, [e.text for e in errs]
+
+        text, errs = asyncio.run(go())
+        self.assertFalse(errs, f"две вставки подряд дали ошибки: {errs}")
+        dsts = [line.split(",")[-1].strip()
+                for line in text.splitlines() if "muls" in line]
+        self.assertEqual(len(dsts), len(set(dsts)),
+                         f"заготовки пишут в одни и те же регистры: {dsts}")
+
+    def test_pauses_come_from_the_machine_model(self) -> None:
+        """`nop` в заготовке равен латентности минус такт выдачи.
+
+        Константа здесь соврала бы при первой же правке модели: числа в
+        `model.py` сняты измерением и меняются, а заготовка обязана
+        оставаться верной, иначе она учит неправде.
+        """
+        async def go():
+            app, session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    model = session.model()
+                    return {
+                        "chain": (sc._snippet_text("chain"),
+                                  model.latency("MUL")),
+                        "div": (sc._snippet_text("div"), model.latency("DIV")),
+                        "load": (sc._snippet_text("load"),
+                                 model.latency("LOAD")),
+                    }
+
+        for kind, (text, latency) in asyncio.run(go()).items():
+            self.assertIn(f"nop {latency - 1}", text,
+                          f"/{kind}: пауза не по модели (латентность "
+                          f"{latency}): {text!r}")
+
+    def test_par4_and_queue_show_the_same_work_costing_differently(self) -> None:
+        """Пара заготовок, ради которой они и заводились.
+
+        Четыре умножения в одном такте против тех же четырёх в один канал —
+        это и есть дыра машины, которую инструмент показывает. Если числа
+        сравняются, заготовки перестанут что-либо демонстрировать.
+        """
+        _t, ops_par, span_par, _e = self._insert("par4")
+        _t, ops_q, span_q, _e = self._insert("queue")
+        self.assertEqual(ops_par, ops_q, "работа должна быть одна и та же")
+        self.assertLess(span_par, span_q,
+                        f"параллельно {span_par} т., в очередь {span_q} т. — "
+                        "разницы нет, заготовки ничего не показывают")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
+class TestColumnsYieldToTheEditor(unittest.TestCase):
+    """На узком окне колонки уступают редактору, а не душат его.
+
+    Правило `.tight #code-explorer { display: none }` стояло в nex.tcss и не
+    работало ВООБЩЕ: колонки показываются inline-стилем (`_toggle` пишет
+    `display` прямо в виджет), а inline сильнее таблицы стилей. На 80
+    клетках редактору оставалось 27 — строка `muls,0 %r10, %r11, %r20` туда
+    не помещается, то есть код переставал читаться как код ровно там, где
+    места и так мало.
+
+    Возвращаться колонки обязаны сами и ровно те, что человек открывал:
+    иначе окно решает за него.
+    """
+
+    def _widths(self, sizes):
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.action_toggle_side()
+                    sc.action_toggle_explorer()
+                    await pilot.pause()
+                    out = []
+                    for width in sizes:
+                        await pilot.resize_terminal(width, 40)
+                        await pilot.pause()
+                        await pilot.pause()
+                        out.append((width,
+                                    int(sc.side_shown),
+                                    int(sc.explorer_shown),
+                                    sc.query_one("#code-edit").size.width))
+                    return out
+
+        return asyncio.run(go())
+
+    def test_editor_never_gets_squeezed(self) -> None:
+        rows = self._widths((150, 120, 100, 80))
+        for width, _side, _expl, edit in rows:
+            self.assertGreaterEqual(
+                edit, 60,
+                f"на {width} клетках редактору осталось {edit}: "
+                f"строка ассемблера туда не влезает")
+
+    def test_columns_come_back_when_there_is_room(self) -> None:
+        rows = self._widths((150, 80, 150))
+        wide_before, narrow, wide_after = rows
+        self.assertEqual((wide_before[1], wide_before[2]), (1, 1))
+        self.assertEqual((narrow[1], narrow[2]), (0, 0),
+                         "на 80 клетках колонки не уступили")
+        self.assertEqual((wide_after[1], wide_after[2]), (1, 1),
+                         "колонки не вернулись, когда место появилось")
+
+    def test_explorer_goes_first(self) -> None:
+        """Первым уступает проводник: он справочный, вкладки — работа."""
+        rows = self._widths((150, 100))
+        _w, side, expl, _edit = rows[1]
+        self.assertEqual((side, expl), (1, 0),
+                         "на 100 клетках ушла не та колонка")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — первый экран не проверяем")
+class TestEmptyBufferExplainsTheScreen(unittest.TestCase):
+    """Пустой буфер отвечает, что это за окно, и уходит с первым же кодом.
+
+    Заведено по жалобе владельца: «что это вообще за окно, что там можно
+    делать». Экран не объяснял себя нигде — подсказки внизу говорят про
+    клавиши, но не про то, зачем сюда пришли. А приветствие поверх чужого
+    кода — уже не приветствие, а помеха, поэтому оно обязано исчезать.
+    """
+
+    def _hello(self, body):
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.post_message(SideItem.Picked("new:s"))
+                    await pilot.pause()
+                    return await body(sc, pilot)
+
+        return asyncio.run(go())
+
+    def test_it_says_what_the_screen_is_for(self) -> None:
+        async def body(sc, pilot):
+            hello = sc.query_one("#code-hello")
+            return hello.display, str(hello.render())
+
+        shown, text = self._hello(body)
+        self.assertTrue(shown, "пустой буфер молчит о том, что это за окно")
+        for must in ("КОД", "lcc", "F5"):
+            self.assertIn(must, text,
+                          f"в первом экране нет «{must}»: {text!r}")
+
+    def test_it_disappears_once_there_is_code(self) -> None:
+        async def body(sc, pilot):
+            edit = sc.query_one("#code-edit")
+            edit.replace("{\n  muls,0 %r1, %r2, %r3\n}\n",
+                         (0, 0), edit.document.end)
+            await pilot.pause()
+            sc.reparse()
+            await pilot.pause()
+            return sc.query_one("#code-hello").display
+
+        self.assertFalse(self._hello(body),
+                         "приветствие осталось поверх кода")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — проводник не проверяем")
+class TestExplorerSearchStaysCheap(unittest.TestCase):
+    """Поиск в проводнике не обходит чужие библиотеки и не молчит о пределах.
+
+    Первая версия звала `sorted(folder.rglob("*"))` на КАЖДУЮ набранную
+    букву: в корне этого проекта — 40 497 путей за секунду, из них 35 681 в
+    `.venv`. Обход спускался туда честно, чтобы затем выбросить всё
+    фильтром «имя начинается с точки»; отсекать надо до спуска.
+    """
+
+    def _screen(self, body):
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    sc.action_toggle_explorer()
+                    await pilot.pause()
+                    return await body(sc, pilot)
+
+        return asyncio.run(go())
+
+    def test_search_does_not_walk_hidden_and_vendor_trees(self) -> None:
+        """Скрытые каталоги и чужие библиотеки в обход не попадают."""
+        import tempfile
+        from pathlib import Path
+
+        work = Path(tempfile.mkdtemp(prefix="nex-find-"))
+        (work / "мой.s").write_text("{}\n")
+        for junk in (".venv/lib", "__pycache__", "node_modules/pkg"):
+            d = work / junk
+            d.mkdir(parents=True)
+            (d / "мой_чужой.s").write_text("{}\n")
+
+        def body(sc, pilot):
+            async def run():
+                sc.explorer_dir = work
+                sc.explorer_query = "мой"
+                return sc._explorer_rows()
+            return run()
+
+        rows = self._screen(body)
+        names = [label for _key, label, _d in rows]
+        self.assertIn("мой.s", names, "свой файл не найден")
+        self.assertFalse([n for n in names if "чужой" in n],
+                         f"обход залез в скрытое и чужое: {names}")
+
+    def test_typing_stays_in_the_search_and_not_in_the_code(self) -> None:
+        """Набор в поиске не проваливается в редактор.
+
+        Список проводника пересобирается на каждый знак, и снос его детей
+        уводил фокус в код: слово «probe» оказывалось в начале буфера, а
+        поиск оставался пустым. То есть проводник ломался на первой же
+        букве — ровно там, где им начинают пользоваться.
+        """
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 42)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    before = sc.query_one("#code-edit").text
+                    await pilot.press("ctrl+e")
+                    await pilot.pause()
+                    for ch in "probe":
+                        await pilot.press(ch)
+                        await pilot.pause()
+                    await pilot.pause()
+                    return (sc.query_one("#explorer-find").value,
+                            getattr(app.focused, "id", None),
+                            before == sc.query_one("#code-edit").text)
+
+        value, focused, intact = asyncio.run(go())
+        self.assertEqual(value, "probe", "набранное не дошло до поиска")
+        self.assertEqual(focused, "explorer-find", "фокус уехал из поиска")
+        self.assertTrue(intact, "набранное в поиске попало в код")
+
+    def test_arrows_move_the_selection(self) -> None:
+        """Стрелки ходят по находкам, Enter открывает выделенное."""
+        async def go():
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(150, 42)) as pilot:
+                    await pilot.pause()
+                    sc = app.screen
+                    await pilot.press("ctrl+e")
+                    await pilot.pause()
+                    for ch in "probe":
+                        await pilot.press(ch)
+                        await pilot.pause()
+                    await pilot.pause()
+                    await pilot.press("down")
+                    await pilot.pause()
+                    rows = sc._explorer_rows()
+                    want = rows[sc._explorer_at][1] if rows else ""
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    await pilot.pause()
+                    return sc._explorer_at, want, sc.files[sc.file_i]["name"]
+
+        at, want, opened = asyncio.run(go())
+        self.assertEqual(at, 1, "стрелка не сдвинула выделение")
+        self.assertTrue(want.endswith(opened),
+                        f"открылось не выделенное: ждали {want}, открыт {opened}")
+
+    def test_recent_folders_come_back_in_one_click(self) -> None:
+        """Каталог, откуда ушли, возвращается одним нажатием.
+
+        Ходить от корня каждый раз — самое дорогое в проводнике: свой
+        каталог у человека один и тот же, а путь к нему длинный.
+        """
+        from pathlib import Path
+        from vliw.tui.screens.code_screen import SideItem, examples_dir
+
+        def body(sc, pilot):
+            async def run():
+                start = str(sc.explorer_dir)
+                sc.post_message(
+                    SideItem.Picked("dir:" + str(examples_dir())))
+                await pilot.pause()
+                await pilot.pause()
+                rows = sc._explorer_rows()
+                back = [r for r in rows if r[1].startswith("↩")]
+                if not back:
+                    return start, None, None
+                sc.post_message(SideItem.Picked(back[0][0]))
+                await pilot.pause()
+                await pilot.pause()
+                return start, back[0][1], str(sc.explorer_dir)
+            return run()
+
+        start, label, now = self._screen(body)
+        self.assertIsNotNone(label, "недавнего каталога нет в списке")
+        self.assertEqual(now, start, "возврат по истории не сработал")
+
+    def test_enter_opens_the_first_hit(self) -> None:
+        """Enter в строке поиска открывает находку — без мыши.
+
+        Проводник задуман как «найти свой .s, не выходя из работы». Если
+        после набора имени приходится тянуться к мыши, половина смысла
+        теряется.
+        """
+        from vliw.tui.screens.code_screen import examples_dir
+
+        def body(sc, pilot):
+            async def run():
+                sc.explorer_dir = examples_dir().parent
+                sc.explorer_query = "probe"
+                sc._draw_explorer()
+                await pilot.pause()
+                sc._open_first_found()
+                await pilot.pause()
+                await pilot.pause()
+                return sc.files[sc.file_i]["name"]
+            return run()
+
+        self.assertEqual(self._screen(body), "probe.s",
+                         "Enter не открыл первую находку")
+
+    def test_search_says_when_it_stopped_early(self) -> None:
+        """Оборванный обход объясняет себя, а не притворяется полным.
+
+        Короткий список без объяснения читается как «твоего файла нет» — и
+        это худший ответ из возможных, потому что он неправда.
+        """
+        import tempfile
+        from pathlib import Path
+
+        work = Path(tempfile.mkdtemp(prefix="nex-find-many-"))
+        for i in range(80):
+            (work / f"файл{i}.s").write_text("{}\n")
+
+        def body(sc, pilot):
+            async def run():
+                sc.explorer_dir = work
+                sc.explorer_query = "файл"
+                rows = sc._explorer_rows()
+                return len(rows), sc._find_cut
+            return run()
+
+        found, cut = self._screen(body)
+        self.assertEqual(found, 60, "предел находок не сработал")
+        self.assertIn("60", cut, f"про обрыв обхода не сказано: {cut!r}")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — каталог не проверяем")
+class TestSideCatalogDeletesOnlyOurFiles(unittest.TestCase):
+    """✕ в проводнике стирает файл рабочего каталога — и только его.
+
+    Удаление необратимо, поэтому проверяются три вещи: спрашивают перед
+    удалением, отменить можно, и файлы САМОГО ПАКЕТА (примеры машины лежат
+    в нём) удалить нельзя — иначе промах мимо имени портит установку
+    инструмента.
+    """
+
+    def _run(self, body):
+        import tempfile
+        from pathlib import Path
+
+        async def go(work):
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, Path(work))
+
+        work = tempfile.mkdtemp(prefix="nex-tests-")
+        (Path(work) / "mine.s").write_text("{\n  adds,1 %r1, %r2, %r3\n}\n")
+        here = os.getcwd()
+        try:
+            os.chdir(work)
+            return asyncio.run(go(work))
+        finally:
+            os.chdir(here)
+
+    def test_delete_asks_first_and_can_be_cancelled(self) -> None:
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(sc, pilot, work):
+            sc.action_toggle_explorer()
+            await pilot.pause()
+            sc.post_message(SideItem.Picked("mine.s", sc.DELETE_X + 1))
+            await pilot.pause()
+            asked = (sc._to_delete, (work / "mine.s").exists())
+            sc.post_message(SideItem.Picked("del:no"))
+            await pilot.pause()
+            cancelled = (sc._to_delete, (work / "mine.s").exists())
+            sc.post_message(SideItem.Picked("mine.s", sc.DELETE_X + 1))
+            await pilot.pause()
+            sc.post_message(SideItem.Picked("del:yes"))
+            await pilot.pause()
+            return asked, cancelled, (work / "mine.s").exists()
+
+        asked, cancelled, alive = self._run(body)
+        self.assertEqual(asked, ("mine.s", True),
+                         "клик по ✕ удалил файл, не спросив")
+        self.assertEqual(cancelled, ("", True), "отмена не отменила")
+        self.assertFalse(alive, "подтверждение не удалило файл")
+
+    def test_package_files_are_not_deletable(self) -> None:
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(sc, pilot, work):
+            sc.action_toggle_explorer()
+            await pilot.pause()
+            from vliw.tui.screens.code_screen import examples_dir
+            pkg = [str(p) for p in sorted(examples_dir().glob("*.s"))]
+            if not pkg:
+                return None, None
+            sc.post_message(SideItem.Picked(pkg[0], sc.DELETE_X + 1))
+            await pilot.pause()
+            return sc._to_delete, os.path.exists(pkg[0])
+
+        waiting, alive = self._run(body)
+        if waiting is None:
+            self.skipTest("файлов пакета в каталоге нет")
+        self.assertEqual(waiting, "",
+                         "инструмент предложил удалить файл своего пакета")
+        self.assertTrue(alive, "файл пакета исчез")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — сохранение не проверяем")
+class TestSaveUsesTheTabName(unittest.TestCase):
+    """Ctrl+S берёт имя у вкладки, а существующий файл не переписывает молча.
+
+    Имя человек уже задал — при создании файла или по F2. Спрашивать его
+    второй раз в строке команд значит требовать заново то, что сказано.
+    Но если файл с таким именем на диске уже есть, тихая перезапись — это
+    потеря чужой работы, и тогда решает человек.
+    """
+
+    def _run(self, body):
+        import tempfile
+        from pathlib import Path
+
+        async def go(work):
+            app, _session = _make_app("code")
+            with redirect_stdout(io.StringIO()):
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause()
+                    return await body(app.screen, pilot, Path(work), _session)
+
+        work = tempfile.mkdtemp(prefix="nex-save-")
+        here = os.getcwd()
+        try:
+            os.chdir(work)
+            return asyncio.run(go(work))
+        finally:
+            os.chdir(here)
+
+    def test_ctrl_s_saves_new_buffer_by_its_tab_name(self) -> None:
+        from vliw.tui.screens.code_screen import SideItem
+
+        async def body(sc, pilot, work, session):
+            sc.post_message(SideItem.Picked("new:s"))
+            await pilot.pause()
+            edit = sc.query_one("#code-edit")
+            edit.replace("{\n  adds,1 %r1, %r2, %r3\n}\n",
+                         (0, 0), edit.document.end)
+            await pilot.pause()
+            sc.action_save_code()
+            await pilot.pause()
+            return (sorted(p.name for p in work.glob("*.s")),
+                    session.code_path)
+
+        made, path = self._run(body)
+        self.assertEqual(len(made), 1, f"сохранён не один файл: {made}")
+        self.assertTrue(made[0].endswith(".s"), made)
+        self.assertNotIn(" ", made[0], "в имени файла остался пробел")
+        self.assertTrue(path, "путь не запомнен — второй ^S спросит заново")
+
+    def test_existing_file_is_not_overwritten_silently(self) -> None:
+        from vliw.tui.screens.code_screen import SideItem
+        from vliw.tui.widgets import PromptBar
+
+        async def body(sc, pilot, work, session):
+            sc.post_message(SideItem.Picked("new:s"))
+            await pilot.pause()
+            name = sc.files[sc.file_i]["name"].replace(" ", "_")
+            (work / name).write_text("! чужая работа\n")
+            sc.action_save_code()
+            await pilot.pause()
+            return ((work / name).read_text(),
+                    sc.query_one("#prompt", PromptBar).input.value)
+
+        kept, typed = self._run(body)
+        self.assertIn("чужая работа", kept,
+                      "существующий файл переписан без спроса")
+        self.assertIn("/code save", typed,
+                      "решение не отдано человеку: команда не подставлена")
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")

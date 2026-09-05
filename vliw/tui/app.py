@@ -34,6 +34,11 @@ class NexApp(App):
         self.start_mode = start_mode
         self._theme_source = ""
         self._entered = False
+        #: Установленные экраны режимов: id режима → имя в Textual. Экран
+        #: живёт по ОДНОМУ экземпляру на сессию, см. `_mode_screen`.
+        self._modes: dict[str, str] = {}
+        #: Куда вернуть Esc из открытого блока; None — к выбору режима.
+        self.back_to: str | None = None
 
     # --- палитра ----------------------------------------------------------
 
@@ -111,11 +116,37 @@ class NexApp(App):
             self._entered = True
             self.push_screen(screen)
 
+    def _mode_screen(self, mode: str, cls) -> str:
+        """Имя УСТАНОВЛЕННОГО экрана режима: один экземпляр на сессию.
+
+        Раньше каждый переход собирал экран заново, и уход из КОДа стирал
+        всё, что в нём накопилось: открытые вкладки файлов, положение
+        курсора, посчитанное расписание, историю диалога. В сессии
+        `session.code_text` переживал только АКТИВНЫЙ буфер — то есть
+        возврат отдавал один файл вместо трёх и предлагал считать заново
+        то, что уже посчитано.
+
+        `install_screen` держит экземпляр живым между переключениями: экран
+        уходит с глаз, но не разбирается, и возврат отдаёт ровно то, что
+        было. Это и делает двойной клик по вкладке дешёвым жестом — уйти в
+        блок и вернуться перестало стоить работы.
+        """
+        name = self._modes.get(mode)
+        if name is None:
+            name = f"mode-{mode}"
+            self.install_screen(cls(), name=name)
+            self._modes[mode] = name
+        return name
+
     def to_picker(self) -> None:
         from .screens.picker import MODES, PickerScreen
 
         current = getattr(self.screen, "mode", None)
         index = next((i for i, m in enumerate(MODES) if m["id"] == current), 0)
+        # Через выбор режима человек уходит СОВСЕМ, а не «заглянуть в блок»:
+        # обратный путь на этом обрывается, иначе Esc из выбранного режима
+        # вернул бы в КОД, откуда его никто не открывал.
+        self.back_to = None
         self.set_mode_theme("lab")
         self._go(PickerScreen(selected=index))
 
@@ -156,7 +187,8 @@ class NexApp(App):
         threading.Thread(target=local.warmup, args=(system,),
                          daemon=True).start()
 
-    def open_mode(self, mode: str) -> None:
+    def open_mode(self, mode: str, back_to: str | None = None) -> None:
+        """Открыть режим. `back_to` — куда его вернёт последний Esc."""
         if mode == "work":
             from .screens.core_screen import CoreScreen as cls
         elif mode == "mind":
@@ -168,6 +200,21 @@ class NexApp(App):
             mode = "lab"
         self.session.focus = mode
         self.session.mode = "chat" if mode == "mind" else "explore"
-        self._go(cls())
+        self.back_to = back_to
+        self._go(self._mode_screen(mode, cls))
         if mode in ("mind", "lab"):
             self.warm_model(mode)
+
+    def back_out(self) -> None:
+        """Esc с самого верхнего уровня режима: к выбору режима.
+
+        `back_to` ставится тем, кто увёл человека из его работы и обязан
+        вернуть обратно. Сейчас таких переходов нет — блоки разворачиваются
+        на месте, не меняя экрана, — но крючок оставлен: это единственное
+        место, где решается, куда ведёт последний Esc.
+        """
+        if self.back_to:
+            target, self.back_to = self.back_to, None
+            self.open_mode(target)
+            return
+        self.to_picker()

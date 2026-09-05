@@ -164,20 +164,53 @@ Palette > .option-list--option-highlighted {
 
 /* --- панели ------------------------------------------------------------ */
 
+/*
+   ОКНО — одна строка шапки и содержимое под ней. Ни рамок, ни скруглений.
+
+   Раньше панель была боксом в округлой рамке с именем капсом в бордюре, и
+   на экране таких боксов шесть-семь. Стоило это двух строк высоты на каждый
+   (верх и низ) и двух колонок ширины, то есть на семи панелях — четырнадцати
+   строк экрана под одни бордюры. Но дороже места было другое: КОД к тому
+   моменту переехал на плоские окна с однострочной шапкой, и переход из него
+   в АГЕНТ читался как переход в другую программу. Двойной клик по вкладке
+   теперь водит между ними постоянно — разнобой стало видно на каждом жесте.
+
+   Шапка — не `border_title`, а виджет `.panel-head` первой строкой (см.
+   PanelHead в widgets.py): у надписи, врезанной в рамку, нет подложки, а
+   окна КОДа подписаны полосой на своём фоне. Границ у окна нет вовсе —
+   соседние окна разделяет волосок контейнера-колонки, а окна друг под
+   другом уже разделены полосой шапки.
+*/
 Panel {
-    border: round $nex-line;
-    border-title-align: left;
-    border-title-style: bold;
-    border-title-color: $nex-dim;
-    background: $nex-panel;
-    padding: 0 1;
+    border: none;
+    background: transparent;
+    padding: 0;
     height: 1fr;
 }
 
-Panel:focus-within {
-    border: round $primary;
-    border-title-color: $primary;
+/* Содержимое отступает на клетку от края окна — ровно как во вкладках дока
+   КОДа. Шапка сюда не попадает: у неё свой padding, а класс в CSS Textual
+   сильнее типа. */
+Panel > * { padding-left: 1; }
+
+/* Волосок между колонками — там, где два окна встречаются. Обводить окно со
+   всех сторон незачем: у края экрана граница не нужна, а окна друг под
+   другом уже разделены полосой шапки. */
+#mind-right, #lab-right, #core-right { border-left: vkey $nex-line; }
+
+/* Шапка окна — полоса в одну строку. Фон рисуется и под padding, поэтому
+   подложка идёт во всю ширину окна, а текст отступает на клетку. */
+.panel-head {
+    height: 1;
+    width: 100%;
+    background: $nex-panel;
+    text-style: bold;
+    padding: 0 1;
 }
+
+/* Активное окно помечается ШАПКОЙ, а не цветной рамкой: рамки больше нет,
+   а знать, где фокус, надо по-прежнему. */
+Panel:focus-within > .panel-head { background: $nex-raised; }
 
 /* --- инструменты панели -------------------------------------------------- */
 /* Полоса инструментов живёт ПЕРВЫМ ребёнком панели и видна ВСЕГДА, а не
@@ -727,32 +760,69 @@ ModeScreen.tight #p-console { height: 8; }
     display: none;
     width: 22;
     height: 100%;
-    padding: 0 0 0 1;
     border-right: vkey $nex-line;
+}
+
+/* Список файлов под шапкой: прокручивается он, шапка стоит. */
+#code-side-list {
+    height: 1fr;
+    width: 100%;
+    padding: 0 0 0 1;
     scrollbar-size-vertical: 1;
 }
 
 .side-item { height: 1; width: 100%; }
 .side-item:hover { background: $primary 20%; }
+/* Строка под выделением в проводнике: по ней ходят стрелками, и Enter
+   откроет именно её. Без пометки клавиатурная навигация вслепую. */
+.side-item-on { background: $primary 30%; text-style: bold; }
 
-/* Объяснятель справа. Закрыт по умолчанию — как каталог слева: нужен, когда
-   спросили, а не постоянно. Ширина 34: меньше — ответ рвётся на каждом
-   слове, больше — отбирает у кода без нужды. */
-#code-ai {
+/* Колонки агента справа больше нет: она показывала тот же разговор, что
+   вкладка АГЕНТ нижнего дока (см. CodeScreen.compose). Её место занял
+   ПРОВОДНИК — тоже закрытый по умолчанию: постоянная колонка папок отбирала
+   бы ширину у планировщика, ради которого экран и открывают. */
+#code-explorer {
     display: none;
-    width: 34;
+    width: 30;
     height: 100%;
-    padding: 0 1;
     border-left: vkey $nex-line;
+}
+
+#explorer-search { height: 1; width: 100%; }
+#explorer-mark { width: 3; height: 1; color: $accent; }
+#explorer-find {
+    width: 1fr;
+    height: 1;
+    border: none;
+    background: transparent;
+}
+
+#explorer-list {
+    height: 1fr;
+    width: 100%;
+    /* Отступ в клетку — как у содержимого остальных окон. Без него список
+       прижимался вплотную к волоску-разделителю и выглядел приклеенным к
+       редактору. */
+    padding: 0 0 0 1;
     scrollbar-size-vertical: 1;
 }
 
-#ai-facts { width: 100%; height: auto; }
-#ai-answer { width: 100%; height: auto; }
+/* Прятать колонки правилом нельзя: их показывает inline-стиль, а он
+   сильнее таблицы стилей. Этим занимается CodeScreen._fit_columns —
+   там же считается, сколько клеток обязано остаться редактору. */
 
-#ai-prompt { width: 100%; height: 1; dock: bottom; }
-#ai-mark { width: 3; height: 1; color: $accent; }
-#ai-input { width: 1fr; height: 1; border: none; background: transparent; }
+/* Первый экран поверх редактора: слой overlay, потому что печатать человек
+   должен сразу, а не после того, как уберёт приветствие. Ширину не берёт —
+   у слоя её нет; высоту тоже. */
+#code-hello {
+    display: none;
+    layer: overlay;
+    width: 64;
+    height: auto;
+    offset: 12 2;
+    background: $nex-panel;
+    padding: 0 2 1 0;
+}
 
 #code-edit {
     height: 1fr;
@@ -782,14 +852,27 @@ ModeScreen.tight #p-console { height: 8; }
    перестаёт отвечать на свой вопрос. При min-height 8 на терминале 80x24
    ,5 уезжал за нижний край молча. */
 #code-dock {
-    height: 34%;
-    min-height: 10;
+    /* Стартовое значение; настоящую высоту ставит экран под открытую
+       вкладку либо человек — мышью за границу. См. CodeScreen.TAB_HEIGHT. */
+    height: 12;
+    min-height: 5;
     width: 100%;
     background: $nex-panel;
-    border-top: solid $nex-line 45%;
 }
 
+/* Граница редактор/док — ручка, за которую тянут. Подсветка под курсором
+   говорит, что за неё можно взяться: в терминале форму курсора не сменить,
+   и это единственный способ показать, что строка живая. */
+#dock-split {
+    height: 1;
+    width: 100%;
+    color: $nex-line;
+}
+
+#dock-split:hover { color: $primary; background: $primary 20%; }
+
 #dock-tabs { height: 1; width: 100%; background: $nex-panel; padding: 0 1; }
+#dock-sep { width: auto; height: 1; color: $nex-line; margin: 0 1; }
 #dock-note { height: 1; width: 1fr; content-align: right middle; padding: 0 1; }
 
 /* --- вкладка РАСПИСАНИЕ ------------------------------------------------ */
@@ -797,7 +880,9 @@ ModeScreen.tight #p-console { height: 8; }
 #dock-sched { height: 1fr; width: 100%; }
 #code-grid-wrap { width: 1fr; height: 100%; padding: 0 0 0 1; }
 #code-grid-orc-wrap { display: none; width: 1fr; height: 100%; }
-#code-grid-orc-head { height: 1; width: 100%; }
+/* auto, а не 1: пока точного поиска нет, здесь стоит приглашение его
+   посчитать — три строки вместо пустой половины экрана. */
+#code-grid-orc-head { height: auto; width: 100%; }
 
 #code-grid, #code-grid-orc {
     background: transparent;
@@ -846,6 +931,19 @@ ModeScreen.tight #p-console { height: 8; }
 */
 
 #dock-line { height: 1fr; width: 100%; }
+
+/* Числа и машина — только в развороте РАЗБОРА (см. CodeScreen.compose). */
+#line-side {
+    display: none;
+    width: 38;
+    height: 100%;
+    padding: 0 1;
+    border-left: vkey $nex-line;
+    scrollbar-size-vertical: 1;
+}
+#line-side-body { width: 100%; height: auto; }
+ModeScreen.zoom-dock #line-side { display: block; }
+ModeScreen.tight #line-side { display: none; }
 
 #dock-line-col {
     width: 1fr;
@@ -896,6 +994,62 @@ ModeScreen.tight #p-console { height: 8; }
 */
 
 #dock-core { height: 1fr; width: 100%; }
+
+/* Готовые ядра и глаголы — только в развороте (см. CodeScreen.compose). */
+/* Сеткой, а не строкой: ядер одиннадцать, и в одну строку они уезжают за
+   край — первым пропадает то, что дальше от начала алфавита, без всякой
+   причины. Сетка переносит и держит не больше трёх строк. */
+#core-chips {
+    display: none;
+    height: auto;
+    max-height: 3;
+    width: 100%;
+    padding: 0 1;
+}
+ModeScreen.zoom-dock #core-chips { display: block; }
+/* Панель состояния машины в развороте шире: там она показывает имена,
+   память и накопленный граф целиком, а не первые строки. */
+ModeScreen.zoom-dock #core-state-col { width: 44; }
+
+/* Вкладка АГЕНТ: лента переписки и строка вопроса под ней. Та же переписка,
+   что в колонке справа (`session.dialog`), но во всю ширину дока.
+
+   Всё, чего в свёрнутом виде нет, спрятано ЗДЕСЬ, а не в коде: развёрнутый
+   блок добавляет колонку фактов и трассы, готовые вопросы и свои кнопки.
+   Полный экран — это больше инструментов, а не тот же блок покрупнее. */
+#dock-agent { height: 1fr; width: 100%; }
+#agent-main { height: 1fr; width: 1fr; }
+#agent-log-box { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
+#agent-log { width: 100%; height: auto; padding: 0 1; }
+/* Строка вопроса пристыкована к низу блока: между лентой и ней в развороте
+   встают готовые вопросы, и без dock она уезжала за край — поле ввода
+   пропадало ровно в том виде, где спрашивают чаще всего. */
+#agent-prompt { height: 1; width: 100%; dock: bottom; }
+#agent-mark { width: 3; height: 1; color: $accent; }
+#agent-input { width: 1fr; height: 1; border: none; background: transparent; }
+
+#agent-tools { display: none; height: 1; width: 100%; padding: 0 1; }
+/* Готовые вопросы видны ВСЕГДА: в свёрнутой вкладке они занимали место
+   ничем (четыре строки из тринадцати), а вопрос «о чём его вообще
+   спрашивать» стоит первым у всякого, кто открыл агента. В развороте их
+   больше — там и места больше. */
+#agent-asks { height: auto; max-height: 2; width: 100%; padding: 0 1; }
+ModeScreen.zoom-dock #agent-asks { max-height: 4; }
+#agent-side {
+    display: none;
+    width: 40;
+    height: 100%;
+    padding: 0 1;
+    border-left: vkey $nex-line;
+    scrollbar-size-vertical: 1;
+}
+#agent-seen, #agent-trace { width: 100%; height: auto; }
+
+ModeScreen.zoom-dock #agent-tools { display: block; }
+ModeScreen.zoom-dock #agent-side { display: block; width: 46; }
+/* В узком окне колонка фактов уступает ленте: ответ важнее справки. */
+ModeScreen.narrow #agent-side { width: 30; }
+ModeScreen.tight #agent-side { display: none; }
 #core-log-box { width: 1fr; height: 100%; }
 
 #core-log {
@@ -957,6 +1111,8 @@ ModeScreen.tight #p-console { height: 8; }
 
 #code-line-chip:hover { background: $primary 25%; }
 
+#code-keys { width: auto; height: 1; padding: 0 2 0 1; }
+
 #code-status { width: 1fr; height: 1; content-align: right middle; padding: 0 2 0 0; }
 
 /* Пункты-лаунчеры в строке состояния: ошибки и вывод. Вид — как у обычного
@@ -991,8 +1147,7 @@ ModeScreen.tight #core-state-col { display: none; }
 /* Каталог слева уходит первым: он вход в работу, а не сама работа, и
    открыть пример можно командой /example. Двадцать колонок из восьмидесяти
    — четверть экрана под список из десяти имён. */
-ModeScreen.tight #code-side { display: none; }
-ModeScreen.tight #code-ai { display: none; }
+/* См. выше: ширину колонок решает _fit_columns, а не класс .tight. */
 
 /* Низкий терминал: доку хватает восьми строк по min-height, но процент от
    него отбирает у кода больше, чем стоит. Ниже 34 строк док становится
@@ -1007,7 +1162,11 @@ ModeScreen.very-low #code-dock { height: 10; }
    панель выросла, но код всё равно занимает треть. Симметрично с двойным
    кликом по вкладке файла, который убирает всё вокруг редактора. */
 ModeScreen.zoom-dock #code-body { display: none; }
-ModeScreen.zoom-dock #code-dock { height: 100%; }
+ModeScreen.zoom-dock #dock-split { display: none; }
+/* 1fr, а не 100%: сотня процентов считается от ЭКРАНА, и развёрнутый док
+   уезжал под строку состояния — вместе с ней пропадала строка вопроса
+   агента, то есть ровно то, ради чего его разворачивают. */
+ModeScreen.zoom-dock #code-dock { height: 1fr; }
 ModeScreen.zoom-dock #code-grid-orc-wrap { display: block; }
 /* Разворот ДОБАВЛЯЕТ: в две трети экрана помещается и разбор решётки. */
 ModeScreen.zoom-dock #sched-side { display: block; }

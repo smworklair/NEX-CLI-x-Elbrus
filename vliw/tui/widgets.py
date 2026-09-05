@@ -155,19 +155,69 @@ class TopBar(Vertical):
 # --------------------------------------------------------------------------
 
 
+class PanelHead(Static):
+    """Шапка окна: имя слева, живой итог справа. Одна строка, без рамки.
+
+    Отдельный виджет, а не `border_title`, по одной причине: фон. Заголовок
+    в бордюре — это надпись, врезанная в линию рамки, и подложки у неё нет.
+    Окна КОДа подписаны иначе — полосой в одну строку на своём фоне
+    (#dock-tabs, .panel-head), и пока АГЕНТ, ЯДРО и РАЗБОР носили бордюры с
+    надписью, два стиля окон жили в одном инструменте. Здесь шапка такая же
+    полоса: фон рисуется под padding, то есть тянется во всю ширину окна, а
+    текст отступает на клетку, как и содержимое под ним.
+    """
+
+    def set_head(self, title: str, note: str = "", accent: str = "") -> None:
+        """Имя и правый итог. Итог — то же, что `dock-note` у вкладок КОДа."""
+        t = Text()
+        t.append(title, style=palette.role_hex(accent or "title"))
+        if note:
+            t.append("   " + note, style=palette.role_hex("faint"))
+        self.update(t)
+
+
+#: Максимальный зазор между кликами, чтобы счесть их двойным. Ровно
+#: столько же ждёт сам Textual, считая цепочку кликов
+#: (`App.CLICK_CHAIN_TIME_THRESHOLD`): два разных порога в одном приложении
+#: дали бы жест, который срабатывает то так, то этак.
+DOUBLE_CLICK_S = 0.5
+
+
+def double_click(event, last: float) -> tuple[bool, float]:
+    """Двойной ли это клик. Возвращает (да/нет, что запомнить до следующего).
+
+    Основной источник — `event.chain`: цепочку кликов считает сам Textual, и
+    в живом терминале это самый надёжный признак. Но приходит он не всегда —
+    например, тестовый пилот шлёт каждый клик отдельным событием с chain=1, —
+    поэтому под ним лежит свой счёт по ВРЕМЕНИ СОБЫТИЯ.
+
+    Время именно события, а не обработки: обработка ждёт очереди сообщений и
+    под нагрузкой отстаёт, а с ней разъезжались и два быстрых клика — жест
+    отказывал ровно на медленной машине, где в него и тыкают повторно.
+    """
+    now = getattr(event, "time", 0.0) or time.monotonic()
+    if getattr(event, "chain", 1) >= 2:
+        return True, 0.0
+    if last and now - last <= DOUBLE_CLICK_S:
+        return True, 0.0
+    return False, now
+
+
 class Panel(Vertical):
-    """Рамка с подписью. Подпись — часть рамки, а не строка внутри.
+    """Окно с однострочной шапкой. Подпись — полоса сверху, а не рамка.
 
     Двойной клик разворачивает панель на весь экран (Esc — обратно). Панелей
     на экране шесть-семь, и в каждой либо решётка тактов, либо длинный отчёт;
     в своей трети экрана они читаются с трудом, а развёрнутая — целиком.
 
-    Двойной клик определяется по времени вручную: у Textual 8.2 в событии
-    Click нет поля `chain` (счётчика кликов подряд), есть только `time`.
+    Двойной клик здесь считается вручную, по времени событий, и это не от
+    хорошей жизни: жест ловится на MouseDown (см. `on_mouse_down`), а
+    счётчик кликов подряд Textual кладёт только в Click — `event.chain`. У
+    MouseDown его нет, брать неоткуда.
     """
 
-    #: Максимальный зазор между кликами, чтобы счесть их двойным.
-    DOUBLE_CLICK_S = 0.4
+    #: Порог общий на всё приложение — см. `DOUBLE_CLICK_S` модуля.
+    DOUBLE_CLICK_S = DOUBLE_CLICK_S
 
     #: Без этого Textual разворачивать не даёт: по умолчанию `allow_maximize`
     #: равен `can_focus`, а Panel — контейнер и фокус не принимает.
@@ -213,14 +263,20 @@ class Panel(Vertical):
         self.soft = soft
 
     def on_mount(self) -> None:
-        if self._title:
-            self.border_title = self._title
-        if self._accent:
-            self.styles.border_title_color = palette.role_hex(self._accent)
+        # Шапка монтируется первым ребёнком, а не задаётся текстом рамки:
+        # рамок больше нет (см. nex.tcss, «ОКНО»). Экраны обращаются к своим
+        # детям по id и типу, поэтому лишний Static впереди им не мешает —
+        # но искать «первого ребёнка» после этого нельзя, и в проекте так
+        # никто и не делает.
+        self._head = PanelHead(classes="panel-head")
+        self.mount(self._head, before=0)
+        self._head.set_head(self._title, accent=self._accent)
 
     def set_title(self, title: str) -> None:
         self._title = title
-        self.border_title = title
+        head = getattr(self, "_head", None)
+        if head is not None:
+            head.set_head(title, accent=self._accent)
 
     def on_mouse_down(self, event) -> None:
         """Двойной клик — развернуть/свернуть эту панель.
@@ -1204,6 +1260,30 @@ class Tool(Static):
     """
 
     class Picked(Message):
+        """Инструмент нажали. `at` — время САМОГО клика, не его обработки.
+
+        Время нужно тому, кто ловит двойной клик по вкладке (см.
+        `CodeScreen.panel_tool`). Мерить его в обработчике нельзя: под
+        нагрузкой сообщение доходит с задержкой, и два быстрых клика
+        разъезжаются дальше порога — жест «через раз не срабатывает», причём
+        ровно тогда, когда машине тяжело. У события Textual время проставлено
+        в момент ввода, и от загрузки оно не зависит.
+        """
+
+        def __init__(self, tool: str, at: float = 0.0) -> None:
+            super().__init__()
+            self.tool = tool
+            self.at = at or time.monotonic()
+
+    class Twice(Message):
+        """По инструменту щёлкнули дважды подряд.
+
+        Считать двойной клик экран не может: обработчик `on_tool_picked`,
+        переопределённый в экране, Textual зовёт ДОПОЛНИТЕЛЬНО к базовому
+        (диспетчер обходит весь MRO), и одно нажатие приходило дважды — то
+        есть «двойной» жест срабатывал с первого клика.
+        """
+
         def __init__(self, tool: str) -> None:
             super().__init__()
             self.tool = tool
@@ -1211,12 +1291,19 @@ class Tool(Static):
     def __init__(self, label: str, tool: str, tooltip: str = "", **kw) -> None:
         super().__init__(label, **kw)
         self.tool = tool
+        self._last_click = 0.0
         if tooltip:
             self.tooltip = tooltip
 
     def on_click(self, event) -> None:
         event.stop()
-        self.post_message(self.Picked(self.tool))
+        double, self._last_click = double_click(event, self._last_click)
+        # Одиночное нажатие приходит всегда: двойной клик по вкладке сперва
+        # переключает на неё, а потом уже открывает её блок целиком.
+        self.post_message(self.Picked(self.tool,
+                                      getattr(event, "time", 0.0)))
+        if double:
+            self.post_message(self.Twice(self.tool))
 
     def set_on(self, on: bool) -> None:
         """Пометка-состояние для тумблеров (включён/выключен)."""

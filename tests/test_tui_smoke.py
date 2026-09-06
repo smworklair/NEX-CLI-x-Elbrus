@@ -985,6 +985,7 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
         self.assertEqual(self._screen(body), ["STORE"])
 
 
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
 class TestDialogIsAWorkspace(unittest.TestCase):
     """Развёрнутый ДИАЛОГ — рабочая область: история вопросов + /clear.
 
@@ -2405,6 +2406,15 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                 async with app.run_test(size=(90, 40)) as pilot:
                     await pilot.pause()
                     grid = app.screen.query_one("#code-grid", DataTable)
+                    # Ждём, пока раскладка устоится: max_scroll_x считается по
+                    # ИЗМЕРЕННОЙ ширине колонок, и до конца раскладки он равен
+                    # нулю. Тогда scroll_to(x=0) никуда не прокручивает, и тест
+                    # падал на собственной проверке «решётка не прокрутилась»
+                    # — на загруженной машине примерно раз из шести.
+                    for _ in range(20):
+                        if grid.max_scroll_x > 0:
+                            break
+                        await pilot.pause()
                     # Прокрутка ДО упора вправо: проверяем самый плохой
                     # случай, а не «немножко сдвинули».
                     grid.scroll_to(x=grid.max_scroll_x, animate=False)

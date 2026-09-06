@@ -452,15 +452,46 @@ def cmd_scenarios(session: Session, arg: str) -> None:
     _out(tables.render_scenarios(session.scenario))
 
 
-def cmd_random(session: Session, arg: str) -> None:
+# Потолок для `random N`. Замерено: 6000 узлов — 24 с и 644 МБ, 8000 не
+# укладывается и в 30 с, а на 20 000 процесс убивает OOM-killer. Настоящие
+# участки после lcc — сотни операций (real_candidates_100_400/), так что
+# запас здесь на порядок больше любого реального случая.
+MAX_RANDOM_N = 5000
+
+
+def cmd_random(session: Session, arg: str) -> bool | None:
     parts = arg.split()
     n = 16
     seed = _random.randint(1, 10**6)
     if parts:
         try:
-            n = max(3, int(parts[0]))
+            n = int(parts[0])
         except ValueError:
-            pass
+            print(paint("error", f"число инструкций должно быть целым, "
+                                 f"а не {parts[0]!r}"))
+            return False
+        # Раньше здесь стояло `max(3, ...)`: -5 молча превращалось в 3, и
+        # инструмент считал не ту задачу, о которой его просили, ничего не
+        # сказав. Отказ честнее подмены.
+        if n < 3:
+            print(paint("error", f"граф из {n} инструкций не бывает: "
+                                 f"нужно 3 и больше"))
+            return False
+        # Верхняя граница — защита от OOM, а не вкусовщина. За генерацией
+        # сразу идёт cmd_run, и планирование растёт заметно быстрее линейного:
+        # 2000 узлов — 100 МБ, 4000 — 307 МБ, 6000 — 644 МБ, дальше процесс
+        # съедал ~4 ГБ и его убивал OOM-killer с кодом 137. Бюджет точного
+        # поиска (--budget) этот путь не ограничивает.
+        if n > MAX_RANDOM_N:
+            print(paint("error",
+                        f"{n} инструкций — слишком крупный граф для одного "
+                        f"участка (предел {MAX_RANDOM_N})"))
+            _out(wrap("Планирование растёт быстрее линейного и на таких "
+                      "размерах упирается в память, а не во время: --budget "
+                      "здесь не спасает. Настоящие участки после lcc — сотни "
+                      "операций, см. real_candidates_100_400/.",
+                      render.W, "  "))
+            return False
     if len(parts) > 1:
         try:
             seed = int(parts[1])
@@ -2032,6 +2063,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # UTF-8 включаем ДО разбора аргументов. `--help` обрабатывается внутри
+    # parse_known_args() и завершает процесс там же, поэтому перекодировка из
+    # setup_output() до справки не доходила никогда: на Windows с кодовой
+    # страницей cp1251/cp866 вся русская справка выводилась как «▯▯▯», хотя
+    # обычные команды печатались нормально.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     parser = _build_parser()
     args, extras = parser.parse_known_args(argv)
     render.setup_output(args.color, args.theme)
@@ -2040,6 +2081,16 @@ def main(argv: list[str] | None = None) -> int:
     _apply_mode(session, getattr(args, "mode", None) or "lab")
     if args.profile:
         session.profile = args.profile
+    # Ширину проверяем здесь, до первого использования. Без проверки одно и то
+    # же «невозможное» значение давало три разных исхода: 0 молча игнорировался
+    # (falsy — откат на профиль), -1 порождал машину с именем `.../w-1` и
+    # рапортовал «1 портов», а -3 и ниже роняли наружу `IndexError` из
+    # with_width() — там цикл добора портов не выполняется ни разу и `kept`
+    # остаётся пустым списком.
+    if args.width is not None and args.width < 1:
+        print(paint("error", f"ширина машины не может быть {args.width}: "
+                             f"нужно целое от 1 и выше"))
+        return 1
     if args.width:
         session.width = args.width
 
@@ -2062,14 +2113,26 @@ def main(argv: list[str] | None = None) -> int:
                 _apply_mode(session, chosen)
             return repl(session)
 
-        print_logo()
+        # Логотипа здесь нет намеренно. Это путь одного запуска — для
+        # скриптов, пайпов и CI (контракт кода возврата описан ниже).
+        # Баннер в такой вывод не лезет: он попадал в перенаправленный файл,
+        # в `| grep`, в отчёты испытателей — везде, где нужен только результат.
+        # В интерактивных путях (REPL, возврат из полноэкранного режима,
+        # экран выбора) логотип остаётся — там он к месту.
 
         # Один запуск команды и выход. Код возврата — по контракту для
         # скриптов/CI: 0 = успех, 1 = ошибка (неизвестная команда,
         # неизвестный сценарий/профиль, внутренняя проверка расписания и
         # т.п.), 130 = прервано Ctrl+C (ниже).
         # `python -m vliw lab` / `mind` / `code` — войти в workstation с фокусом панели.
-        if extras[0].lower() in ("chat", "agent", "explore", "lab", "mind",
+        # «agent» из этого списка убран намеренно. Слово занято командой
+        # `agent` («куда встраивается обученная модель», см. COMMANDS) — она
+        # документирована в --help, а позиционный режим `agent` не описан
+        # нигде. Пока он стоял здесь, он перехватывал команду: `python -m vliw
+        # agent` вместо справки уходил в интерактивный цикл и висел на
+        # приглашении до таймаута. Диалоговый режим по-прежнему доступен как
+        # `chat`, `mind` и `--mode mind`.
+        if extras[0].lower() in ("chat", "explore", "lab", "mind",
                                  "code") \
                 and len(extras) == 1:
             _apply_mode(session, extras[0])

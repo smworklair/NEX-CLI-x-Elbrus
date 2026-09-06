@@ -19,6 +19,13 @@ from pathlib import Path
 from vliw.core import asm_parser
 from vliw.core.model import DEFAULT_PROFILE, get_profile
 
+try:
+    import textual  # noqa: F401
+
+    HAS_TEXTUAL = True
+except Exception:  # pragma: no cover - зависит от окружения
+    HAS_TEXTUAL = False
+
 
 def _lint(text: str):
     parsed = asm_parser.parse_asm(text, source="<тест>")
@@ -103,6 +110,10 @@ class TestLint(unittest.TestCase):
                          ["free"])
 
 
+# Каталог примеров лежит в vliw/tui/screens/code_screen.py, а он тянет
+# textual. Без гварда эти два теста падали ModuleNotFoundError вместо
+# пропуска — вопреки обещанию QUICKSTART «Skips without textual are normal».
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — каталог примеров живёт в модуле TUI")
 class TestExampleCatalogue(unittest.TestCase):
     """Примеры из `examples/code/*.s` обязаны говорить о себе правду.
 

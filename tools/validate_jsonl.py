@@ -61,7 +61,16 @@ def check_file(path: Path, profile: str, show: int) -> bool:
             if not line.strip():
                 continue
             n += 1
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                # Номер строки печатаем СВОЙ, а не exc.lineno: разбираем по
+                # строке за раз, и внутри одной строки парсер всегда видит
+                # первую — на файле в 20 000 строк «строка 1» бесполезна.
+                print(f"\n{path.name}: строка {lineno} не разбирается как "
+                      f"JSON ({exc.msg}).")
+                print("  здесь ждут по одному JSON-объекту на строку")
+                return False
             instrs = parse_prompt(row["prompt"])
             decoded = decode_completion(row["completion"])
 
@@ -92,6 +101,15 @@ def check_file(path: Path, profile: str, show: int) -> bool:
             n_instr_max = k if n_instr_max is None else max(n_instr_max, k)
             if "makespan" in row.get("meta", {}):
                 gaps.append(sched.makespan - row["meta"]["makespan"])
+
+    # Пустой файл — это не «всё в порядке». Обрезанный при копировании или
+    # недокачанный датасет проходил как «ИТОГ: ОК» с нулём примеров, и
+    # проверка молча подтверждала то, чего не проверяла.
+    if n == 0:
+        print(f"\n{path.name}  (профиль {model.name})")
+        print("  примеров:             0")
+        print("  ИТОГ: ПУСТО — проверять нечего, ни одного примера в файле")
+        return False
 
     print(f"\n{path.name}  (профиль {model.name})")
     print(f"  примеров:             {n}")

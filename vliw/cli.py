@@ -2141,6 +2141,35 @@ def main(argv: list[str] | None = None) -> int:
             print_logo()
             return repl(session)
 
+        # `run <сценарий>`, `load <файл>` и разборы того же участка (compare,
+        # doctor, bounds, path, analyze) смотрят на ОДИН граф — для них есть
+        # готовый экран, и печатать вместо него отчёт незачем: в живом
+        # терминале со стоящим textual инструмент открывается сразу на этом
+        # участке, а не пересказывает его текстом. Так задумано с самого
+        # начала — это не поведение по умолчанию для тех, кому текст удобнее,
+        # это единственное поведение.
+        # `sweep`, `selfcheck`, `all`, `scenarios` сюда не входят намеренно:
+        # это прогоны по сотням графов разом, а не разбор одного участка, и
+        # single-screen представления для них попросту нет — печатать таблицу
+        # по 200 графам как «графический экран» бессмысленно, а не неудобно.
+        _SINGLE_GRAPH_CMDS = {"run", "load", "compare", "doctor", "bounds",
+                              "path", "analyze"}
+        cmd_name = extras[0].lower()
+        if (cmd_name in _SINGLE_GRAPH_CMDS and not args.plain
+                and args.color is not False and _fullscreen_ok()):
+            try:
+                if cmd_name == "run" and len(extras) > 1:
+                    session.set_scenario(extras[1])
+                elif cmd_name == "load" and len(extras) > 1:
+                    handle_input(session, " ".join(extras))
+            except SystemExit:
+                raise
+            except Exception as e:
+                print(paint("error", f"ошибка команды: {e}"))
+                return 1
+            _apply_mode(session, "lab")
+            return run_tui(session, pick_app=False)
+
         try:
             ok = handle_input(session, " ".join(extras))
         except SystemExit:

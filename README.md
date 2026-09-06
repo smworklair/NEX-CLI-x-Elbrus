@@ -33,6 +33,18 @@ python3 -m vliw selfcheck      # сверить оракул полным пер
 > называется `python3` (используется во всех примерах выше). Больше типичных
 > проблем и полный разбор каждой команды — в **[docs/CLI.md](docs/CLI.md)**.
 
+## Установка для разработки
+
+```bash
+git clone <your-fork-url> vliw-ai-scheduler
+cd vliw-ai-scheduler
+pip install -e ".[tui]"   # ядро работает и без extras; TUI — с ними
+python -m unittest discover -s tests
+```
+
+Короткий старт на английском — в [QUICKSTART.md](QUICKSTART.md),
+правила для контрибьюторов — в [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Что здесь измеряется
 
 Единственная метрика — **число тактов** (makespan) на одном и том же графе
@@ -710,3 +722,7 @@ python -m vliw selfcheck --seeds 40 --time-limit 120
 - Удалённый доступ к серверам Эльбрус: https://dev.mcst.ru/access/
 - Комьюнити-ресурсы по e2k: https://github.com/e2k-community/awesome-e2k
 - Hexagon-бэкенд в LLVM: https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/Hexagon
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).

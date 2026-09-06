@@ -1,0 +1,16 @@
+{
+ "graph": "poly_floyd_int",
+ "nodes": 265,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 2361,
+ "prompt_lines": 268,
+ "max_new_tokens": 3180,
+ "out_tokens": 1735,
+ "gen_s": 367.97341070795665,
+ "backend_setup_s": 0.0009538209997117519,
+ "tok_per_s": 4.715014589401919,
+ "server_ctx": 4096
+}

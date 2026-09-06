@@ -1,0 +1,16 @@
+{
+ "graph": "poly_heat3d",
+ "nodes": 284,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 3166,
+ "prompt_lines": 287,
+ "max_new_tokens": 3408,
+ "out_tokens": 930,
+ "gen_s": 300.3845628729905,
+ "backend_setup_s": 0.0009394939988851547,
+ "tok_per_s": 3.096031271065103,
+ "server_ctx": 4096
+}

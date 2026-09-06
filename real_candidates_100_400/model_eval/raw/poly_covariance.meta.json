@@ -1,0 +1,16 @@
+{
+ "graph": "poly_covariance",
+ "nodes": 186,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 1945,
+ "prompt_lines": 189,
+ "max_new_tokens": 2232,
+ "out_tokens": 2151,
+ "gen_s": 370.33813132403884,
+ "backend_setup_s": 0.0007117190398275852,
+ "tok_per_s": 5.808205577723553,
+ "server_ctx": 4096
+}

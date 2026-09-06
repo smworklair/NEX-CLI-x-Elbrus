@@ -1,0 +1,16 @@
+{
+ "graph": "tsvc_s1111",
+ "nodes": 243,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 2457,
+ "prompt_lines": 246,
+ "max_new_tokens": 2916,
+ "out_tokens": 1639,
+ "gen_s": 360.5379248979734,
+ "backend_setup_s": 0.003507998015265912,
+ "tok_per_s": 4.545985004112428,
+ "server_ctx": 4096
+}

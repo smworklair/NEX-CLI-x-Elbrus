@@ -1,0 +1,644 @@
+{
+ "poly_gemm": {
+  "nodes": 190,
+  "greedy": 35,
+  "lower_bound": 32,
+  "prompt_tokens": 1540,
+  "out_tokens": 2280,
+  "gen_s": 385.06711997900857,
+  "decode": {
+   "n_lines": 185,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 190,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 35
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 35
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 35,
+  "order_ms": 35,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 34
+ },
+ "poly_gesummv": {
+  "nodes": 255,
+  "greedy": 56,
+  "lower_bound": 51,
+  "prompt_tokens": 2675,
+  "out_tokens": 1421,
+  "gen_s": 338.7729218300083,
+  "decode": {
+   "n_lines": 118,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 255,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 56
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 56
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 56,
+  "order_ms": 56,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 53
+ },
+ "poly_symm": {
+  "nodes": 386,
+  "greedy": 72,
+  "lower_bound": 65,
+  "prompt_tokens": 3563,
+  "out_tokens": 533,
+  "gen_s": 233.9151254540193,
+  "decode": {
+   "n_lines": 46,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 386,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 72
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 72
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 72,
+  "order_ms": 72,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 66
+ },
+ "poly_gramschmidt": {
+  "nodes": 313,
+  "greedy": 82,
+  "lower_bound": 75,
+  "prompt_tokens": 2781,
+  "out_tokens": 1315,
+  "gen_s": 322.8139980440028,
+  "decode": {
+   "n_lines": 110,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 313,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 82
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 82
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 82,
+  "order_ms": 82,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 75
+ },
+ "poly_jacobi2d": {
+  "nodes": 349,
+  "greedy": 68,
+  "lower_bound": 59,
+  "prompt_tokens": 3417,
+  "out_tokens": 679,
+  "gen_s": 252.7849914149847,
+  "decode": {
+   "n_lines": 58,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 349,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 68
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 68
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 68,
+  "order_ms": 68,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 66
+ },
+ "poly_adi": {
+  "nodes": 251,
+  "greedy": 114,
+  "lower_bound": 111,
+  "prompt_tokens": 2371,
+  "out_tokens": 1725,
+  "gen_s": 365.60098877199925,
+  "decode": {
+   "n_lines": 143,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 251,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 114
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 114
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 114,
+  "order_ms": 114,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 113
+ },
+ "poly_fdtd": {
+  "nodes": 340,
+  "greedy": 61,
+  "lower_bound": 57,
+  "prompt_tokens": 2882,
+  "out_tokens": 1214,
+  "gen_s": 312.8329966759775,
+  "decode": {
+   "n_lines": 103,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 340,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 61
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 61
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 61,
+  "order_ms": 61,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 59
+ },
+ "poly_floyd_int": {
+  "nodes": 265,
+  "greedy": 47,
+  "lower_bound": 45,
+  "prompt_tokens": 2361,
+  "out_tokens": 1735,
+  "gen_s": 367.97341070795665,
+  "decode": {
+   "n_lines": 145,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 265,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 47
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 47
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 47,
+  "order_ms": 47,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 47
+ },
+ "poly_heat3d": {
+  "nodes": 284,
+  "greedy": 54,
+  "lower_bound": 52,
+  "prompt_tokens": 3166,
+  "out_tokens": 930,
+  "gen_s": 300.3845628729905,
+  "decode": {
+   "n_lines": 79,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 284,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 54
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 54
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 54,
+  "order_ms": 54,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 52
+ },
+ "poly_covariance": {
+  "nodes": 186,
+  "greedy": 93,
+  "lower_bound": 90,
+  "prompt_tokens": 1945,
+  "out_tokens": 2151,
+  "gen_s": 370.33813132403884,
+  "decode": {
+   "n_lines": 182,
+   "n_matched_unique": 149,
+   "n_matches_total": 181,
+   "n_dup_ids": 32,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 37,
+   "coverage": 0.8010752688172043,
+   "first_bad_line": 1,
+   "cut_midline": false,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 93
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 94
+   },
+   {
+    "name": "порядок+такты",
+    "legal": true,
+    "makespan": 94
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 93,
+  "order_ms": 94,
+  "order_coverage": 0.8010752688172043,
+  "L1_rule_ms": 92
+ },
+ "emb_fir": {
+  "nodes": 347,
+  "greedy": 61,
+  "lower_bound": 58,
+  "prompt_tokens": 3773,
+  "out_tokens": 323,
+  "gen_s": 214.21083012694726,
+  "decode": {
+   "n_lines": 28,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 347,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 61
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 61
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 61,
+  "order_ms": 61,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 60
+ },
+ "emb_iir": {
+  "nodes": 256,
+  "greedy": 44,
+  "lower_bound": 43,
+  "prompt_tokens": 2253,
+  "out_tokens": 1843,
+  "gen_s": 391.421013596002,
+  "decode": {
+   "n_lines": 152,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 256,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 44
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 44
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 44,
+  "order_ms": 44,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 43
+ },
+ "tsvc_s1111": {
+  "nodes": 243,
+  "greedy": 51,
+  "lower_bound": 42,
+  "prompt_tokens": 2457,
+  "out_tokens": 1639,
+  "gen_s": 360.5379248979734,
+  "decode": {
+   "n_lines": 140,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 243,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 51
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 51
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 51,
+  "order_ms": 51,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 45
+ }
+}

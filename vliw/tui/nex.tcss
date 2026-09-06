@@ -221,9 +221,29 @@ Panel:focus-within > .panel-head { background: $nex-raised; }
 
 PanelToolbar {
     display: block;
-    height: 1;
+    /* auto, а не 1: лишние чипы уходят второй строкой (см. PanelToolbar),
+       а фиксированная единица их обрезала бы вместе с переносом. */
+    height: auto;
     width: 100%;
+    /* Контентные треки вместо 1fr: иначе колонки тянутся на всю ширину
+       и чипы разъезжаются с дырами (видно в широкой панели GIT). */
+    grid-columns: auto;
 }
+
+/* Марджин чипа — ВНЕ трека не живёт: грид считает его внутрь колонки,
+   и каждый чип ужимался ровно на клетку («решётка ▶» читалась как
+   «решётка»). Зазор между чипами при этом никуда не девается: у чипа
+   паддинг 0 1 с обеих сторон, соседние дают две пустые клетки. Правило
+   только для тулбара — у вкладок дока (DockTabs, обычный Horizontal)
+   марджин как был, так и нужен. */
+PanelToolbar Tool { margin-right: 0; }
+
+/* Тесный экран (80 колонок): дубли-чипы прячутся, тулбар остаётся одной
+   строкой. Без этого перенос добавлял правой колонке строки, которых нет
+   в бюджете высоты, — МАШИНА уезжала за нижний край молча (ловит
+   TestNothingFallsBelowTheFold). Клавиатурные пути те же: чипы — только
+   мышиная affordance, действия доступны как были. */
+ModeScreen.tight .tb-spare { display: none; }
 
 Tool {
     height: 1;
@@ -533,6 +553,10 @@ Panel.-maximized #grid-side { display: block; }
 #diag-filter {
     height: auto;
     width: 100%;
+    /* Без зазора список находок стартовал вплотную под фильтром — та же
+       рамка сверху и снизу читалась одной слипшейся полосой. У соседнего
+       #machine-filter-row тот же приём уже стоит. */
+    margin-bottom: 1;
 }
 
 .diag-sev {
@@ -857,7 +881,11 @@ ModeScreen.tight #p-console { height: 8; }
     height: 12;
     min-height: 5;
     width: 100%;
-    background: $nex-panel;
+    /* Канвас, а не панель: док был единственной светлой плитой на экране
+       (редактор, колонки и подвал — все тёмные) и читался инородным окном
+       поверх чужой программы. Границей остаются волосок сверху и чипы
+       вкладок — плите для этого быть светлой не нужно. */
+    background: $nex-canvas;
 }
 
 /* Граница редактор/док — ручка, за которую тянут. Подсветка под курсором
@@ -871,7 +899,7 @@ ModeScreen.tight #p-console { height: 8; }
 
 #dock-split:hover { color: $primary; background: $primary 20%; }
 
-#dock-tabs { height: 1; width: 100%; background: $nex-panel; padding: 0 1; }
+#dock-tabs { height: 1; width: 100%; background: $nex-canvas; padding: 0 1; }
 #dock-sep { width: auto; height: 1; color: $nex-line; margin: 0 1; }
 #dock-note { height: 1; width: 1fr; content-align: right middle; padding: 0 1; }
 

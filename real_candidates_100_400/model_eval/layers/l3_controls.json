@@ -1,0 +1,622 @@
+{
+ "poly_syrk": {
+  "nodes": 228,
+  "greedy": 53,
+  "lower_bound": 53,
+  "prompt_tokens": 2135,
+  "out_tokens": 1961,
+  "gen_s": 387.7180358279729,
+  "decode": {
+   "n_lines": 168,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 228,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 53
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 53
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 53,
+  "order_ms": 53,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 53
+ },
+ "poly_trmm": {
+  "nodes": 214,
+  "greedy": 36,
+  "lower_bound": 36,
+  "prompt_tokens": 2056,
+  "out_tokens": 2040,
+  "gen_s": 394.55554510100046,
+  "decode": {
+   "n_lines": 175,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 214,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 36
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 36
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 36,
+  "order_ms": 36,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 36
+ },
+ "poly_durbin": {
+  "nodes": 243,
+  "greedy": 44,
+  "lower_bound": 44,
+  "prompt_tokens": 2105,
+  "out_tokens": 1991,
+  "gen_s": 387.5769388800254,
+  "decode": {
+   "n_lines": 162,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 243,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 44
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 44
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 44,
+  "order_ms": 44,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 44
+ },
+ "poly_trisolv_int": {
+  "nodes": 117,
+  "greedy": 128,
+  "lower_bound": 128,
+  "prompt_tokens": 975,
+  "out_tokens": 1404,
+  "gen_s": 219.9912830159883,
+  "decode": {
+   "n_lines": 121,
+   "n_matched_unique": 119,
+   "n_matches_total": 119,
+   "n_dup_ids": 0,
+   "n_extra_ids": 3,
+   "extra_ids_head": [
+    117,
+    118,
+    119
+   ],
+   "n_missing": 1,
+   "coverage": 0.9914529914529915,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 116,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 128
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 140
+   },
+   {
+    "name": "порядок+такты",
+    "legal": true,
+    "makespan": 140
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 128,
+  "order_ms": 140,
+  "order_coverage": 0.9914529914529915,
+  "L1_rule_ms": 128
+ },
+ "poly_seidel": {
+  "nodes": 238,
+  "greedy": 545,
+  "lower_bound": 545,
+  "prompt_tokens": 2420,
+  "out_tokens": 1676,
+  "gen_s": 360.6195769890328,
+  "decode": {
+   "n_lines": 138,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 238,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 545
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 545
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 545,
+  "order_ms": 545,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 545
+ },
+ "poly_jacobi1d": {
+  "nodes": 157,
+  "greedy": 58,
+  "lower_bound": 58,
+  "prompt_tokens": 1738,
+  "out_tokens": 1884,
+  "gen_s": 345.38949688803405,
+  "decode": {
+   "n_lines": 154,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 157,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 58
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 58
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 58,
+  "order_ms": 58,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 58
+ },
+ "poly_gemver": {
+  "nodes": 223,
+  "greedy": 66,
+  "lower_bound": 66,
+  "prompt_tokens": 2400,
+  "out_tokens": 1696,
+  "gen_s": 377.8559534709784,
+  "decode": {
+   "n_lines": 140,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 223,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 66
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 66
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 66,
+  "order_ms": 66,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 66
+ },
+ "poly_lu": {
+  "nodes": 340,
+  "greedy": 58,
+  "lower_bound": 58,
+  "prompt_tokens": 3482,
+  "out_tokens": 614,
+  "gen_s": 262.4729437060305,
+  "decode": {
+   "n_lines": 53,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 340,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 58
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 58
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 58,
+  "order_ms": 58,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 58
+ },
+ "oblas_gemv": {
+  "nodes": 244,
+  "greedy": 54,
+  "lower_bound": 54,
+  "prompt_tokens": 2496,
+  "out_tokens": 1600,
+  "gen_s": 361.56739101500716,
+  "decode": {
+   "n_lines": 133,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 244,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 54
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 54
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 54,
+  "order_ms": 54,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 54
+ },
+ "cm_mul": {
+  "nodes": 112,
+  "greedy": 19,
+  "lower_bound": 19,
+  "prompt_tokens": 927,
+  "out_tokens": 1149,
+  "gen_s": 178.25894342997344,
+  "decode": {
+   "n_lines": 112,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 112,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": false
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 19
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 19
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 19,
+  "order_ms": 19,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 19
+ },
+ "cm_bitextract": {
+  "nodes": 153,
+  "greedy": 26,
+  "lower_bound": 26,
+  "prompt_tokens": 1423,
+  "out_tokens": 1836,
+  "gen_s": 313.3375338619808,
+  "decode": {
+   "n_lines": 175,
+   "n_matched_unique": 0,
+   "n_matches_total": 0,
+   "n_dup_ids": 0,
+   "n_extra_ids": 0,
+   "extra_ids_head": [],
+   "n_missing": 153,
+   "coverage": 0.0,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 0,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 26
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 26
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 26,
+  "order_ms": 26,
+  "order_coverage": 0.0,
+  "L1_rule_ms": 26
+ },
+ "cm_vect": {
+  "nodes": 113,
+  "greedy": 19,
+  "lower_bound": 19,
+  "prompt_tokens": 937,
+  "out_tokens": 1356,
+  "gen_s": 208.8277902029804,
+  "decode": {
+   "n_lines": 119,
+   "n_matched_unique": 117,
+   "n_matches_total": 117,
+   "n_dup_ids": 0,
+   "n_extra_ids": 5,
+   "extra_ids_head": [
+    113,
+    114,
+    115,
+    116,
+    117
+   ],
+   "n_missing": 1,
+   "coverage": 0.9911504424778761,
+   "first_bad_line": 1,
+   "cut_midline": true,
+   "ctx_truncated": true
+  },
+  "raw": {
+   "placed": 112,
+   "legal_errs": 1,
+   "complete": false,
+   "makespan": null
+  },
+  "repaired_touched": 0,
+  "portfolio": [
+   {
+    "name": "модель",
+    "legal": false,
+    "makespan": null
+   },
+   {
+    "name": "жадный",
+    "legal": true,
+    "makespan": 19
+   },
+   {
+    "name": "порядок",
+    "legal": true,
+    "makespan": 24
+   },
+   {
+    "name": "порядок+такты",
+    "legal": true,
+    "makespan": 22
+   }
+  ],
+  "winner": "жадный",
+  "winner_ms": 19,
+  "order_ms": 24,
+  "order_coverage": 0.9911504424778761,
+  "L1_rule_ms": 19
+ }
+}

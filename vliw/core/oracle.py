@@ -246,6 +246,12 @@ def _candidate_subsets(
             probe = base.copy()
             extra = sum(1 for i in nonblk if probe.add(i, ctx.capable[i]))
             for counts in _count_vectors(sizes, extra):
+                # Бюджет обязан ограничивать и этот путь: раньше tick() был
+                # только во внешнем цикле по blocking-комбинациям, и на
+                # реальных графах перечисление векторов (_count_vectors)
+                # крутилось мимо дедлайна — session.results() не возвращался,
+                # фолбэк на портфель не срабатывал.
+                ctx.tick()
                 sub = list(bs)
                 for g, c in zip(groups, counts):
                     sub.extend(g[:c])

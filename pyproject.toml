@@ -1,0 +1,35 @@
+# Packaging for open-source contributors. Core (scheduler + CLI) works on
+# stock Python with no hard dependencies; rich/textual are optional extras
+# (without them the tool still runs, only the fullscreen TUI is off).
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vliw-ai-scheduler"
+version = "0.1.0"
+description = "VLIW instruction-scheduler prototype: greedy baseline vs exact-search oracle (Elbrus e2k machine model)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "shokha" }]
+keywords = ["vliw", "scheduling", "elbrus", "compiler", "instruction-scheduling"]
+dependencies = []
+
+[project.optional-dependencies]
+# Fullscreen TUI + colored output.
+tui = ["rich>=13", "textual>=8.2"]
+# Learned-model track (training/inference). Heavy; not needed for the
+# scheduler, the oracle, or the TUI.
+learned = ["torch", "transformers", "peft", "accelerate", "safetensors"]
+dev = ["rich>=13", "textual>=8.2"]
+
+[project.scripts]
+vliw = "vliw.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vliw*"]
+
+# Runtime data shipped inside the package: Textual CSS + UI themes.
+[tool.setuptools.package-data]
+vliw = ["tui/*.tcss", "ui/themes/*.json"]

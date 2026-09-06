@@ -1,0 +1,16 @@
+{
+ "graph": "cm_vect",
+ "nodes": 113,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 937,
+ "prompt_lines": 116,
+ "max_new_tokens": 1356,
+ "out_tokens": 1356,
+ "gen_s": 208.8277902029804,
+ "backend_setup_s": 0.0009465669863857329,
+ "tok_per_s": 6.493388637029437,
+ "server_ctx": 4096
+}

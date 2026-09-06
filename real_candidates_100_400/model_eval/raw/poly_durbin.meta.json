@@ -1,0 +1,16 @@
+{
+ "graph": "poly_durbin",
+ "nodes": 243,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 2105,
+ "prompt_lines": 246,
+ "max_new_tokens": 2916,
+ "out_tokens": 1991,
+ "gen_s": 387.5769388800254,
+ "backend_setup_s": 0.000760681985411793,
+ "tok_per_s": 5.137044545925151,
+ "server_ctx": 4096
+}

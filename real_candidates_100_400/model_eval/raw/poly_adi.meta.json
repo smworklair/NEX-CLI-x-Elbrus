@@ -1,0 +1,16 @@
+{
+ "graph": "poly_adi",
+ "nodes": 251,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 2371,
+ "prompt_lines": 254,
+ "max_new_tokens": 3012,
+ "out_tokens": 1725,
+ "gen_s": 365.60098877199925,
+ "backend_setup_s": 0.0013730610371567309,
+ "tok_per_s": 4.718258574174061,
+ "server_ctx": 4096
+}

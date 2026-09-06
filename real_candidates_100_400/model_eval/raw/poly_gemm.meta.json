@@ -1,0 +1,16 @@
+{
+ "graph": "poly_gemm",
+ "nodes": 190,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 1540,
+ "prompt_lines": 193,
+ "max_new_tokens": 2280,
+ "out_tokens": 2280,
+ "gen_s": 385.06711997900857,
+ "backend_setup_s": 0.0009850019705481827,
+ "tok_per_s": 5.921045661141599,
+ "server_ctx": 4096
+}

@@ -1,0 +1,16 @@
+{
+ "graph": "oblas_gemv",
+ "nodes": 244,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 2496,
+ "prompt_lines": 247,
+ "max_new_tokens": 2928,
+ "out_tokens": 1600,
+ "gen_s": 361.56739101500716,
+ "backend_setup_s": 0.000811008969321847,
+ "tok_per_s": 4.425177822337387,
+ "server_ctx": 4096
+}

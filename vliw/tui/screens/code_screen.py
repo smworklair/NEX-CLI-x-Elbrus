@@ -1951,6 +1951,12 @@ class CodeScreen(ModeScreen):
         видно имя, аргументы и пояснение, Enter вставляет. В ассемблере e2k
         строка со слэша не начинается никогда, поэтому спутать набор команды
         с набором кода нельзя.
+
+        «/» в любом поле ввода тоже ПЕЧАТАЕТСЯ, а не сносит команду.
+        Биндинг приоритетный, поэтому клавиша доходит сюда раньше виджета:
+        когда фокус в строке ввода, печатаем слэш сами в тот Input, где
+        стоит курсор. Каталог при этом остаётся: на пустом поле это всё тот
+        же «/» с палитрой, на непустом — допечатка к набранному.
         """
         edit = self.query_one("#code-edit", AsmArea)
         if edit.has_focus:
@@ -1961,14 +1967,98 @@ class CodeScreen(ModeScreen):
             # дописать «/gen 8 muls» одной строкой становилось нельзя.
             edit.insert("/")
             return
-        self.action_command()
+        # Фокус в поле ввода — печатать, а не открывать каталог заново.
+        # Иначе набранный путь со слэшами (`/code load /home/.../a.s`)
+        # сносился бы каждым «/» обратно до «/»: action_command() делал
+        # set_value("/"), и от команды оставался только последний сегмент.
+        try:
+            focused = self.app.focused
+        except Exception:
+            focused = None
+        if isinstance(focused, Input):
+            try:
+                self._clear_selection(focused)
+                focused.insert_text_at_cursor("/")
+            except Exception:
+                try:
+                    pos = focused.cursor_position or len(focused.value or "")
+                    val = focused.value or ""
+                    focused.value = val[:pos] + "/" + val[pos:]
+                    focused.cursor_position = pos + 1
+                except Exception:
+                    pass
+            return
+        # Фокус не во вводе (решётка, замечания): открыть каталог, не теряя
+        # уже набранное. Пустое поле — классический «/» с палитрой.
+        self.open_drawer("term")
+        bar = self.query_one("#prompt", PromptBar)
+        bar.focus_input()
+        try:
+            cur = bar.input.value or ""
+        except Exception:
+            cur = ""
+        if not cur:
+            bar.set_value("/")
+            self._clear_selection(bar.input)
+            # Фокус выделяет всё поле АСИНХРОННО, уже после этого метода:
+            # синхронного снятия мало, первый знак всё равно заменил бы «/».
+            try:
+                self.call_after_refresh(self._clear_selection, bar.input)
+            except Exception:
+                pass
+        else:
+            try:
+                self._clear_selection(bar.input)
+                bar.input.insert_text_at_cursor("/")
+            except Exception:
+                bar.set_value(cur + "/")
+
+    @staticmethod
+    def _clear_selection(inp) -> None:
+        """Снять выделение, оставив курсор где был.
+
+        Фокус в Textual выделяет всё поле целиком: после ^P выделение —
+        (0, 1) на префилле «/», и первый же набранный знак ЗАМЕНЯЕТ его.
+        Из «/code load ...» получалось «code load ...» без ведущего слэша —
+        команда переставала быть командой. set_value(cursor_position) само
+        выделение не снимает, поэтому делаем это явно здесь, а не в общем
+        PromptBar.set_value (точечный фикс, без затрагивания остальных).
+        """
+        try:
+            from textual.widgets._input import Selection
+
+            pos = inp.cursor_position or len(inp.value or "")
+            inp.selection = Selection(pos, pos)
+        except Exception:
+            pass
 
     def action_command(self) -> None:
         """^P — док на вкладке ВЫВОД с уже введённым слэшем."""
         self.open_drawer("term")
         bar = self.query_one("#prompt", PromptBar)
         bar.focus_input()
-        bar.set_value("/")
+        try:
+            cur = bar.input.value or ""
+        except Exception:
+            cur = ""
+        if not cur:
+            bar.set_value("/")
+            self._clear_selection(bar.input)
+            # См. выше: выделение от фокуса приходит позже метода.
+            try:
+                self.call_after_refresh(self._clear_selection, bar.input)
+            except Exception:
+                pass
+        else:
+            # Непустое поле не трогаем: ^P — это «идти в строку», а не «стереть
+            # набранное и начать заново». Снос здесь давал тот же эффект, что и
+            # старый action_slash: путь со слэшами невозможно было дописать.
+            # Выделение при этом снимаем, иначе первый знак заменит всё поле.
+            self._clear_selection(bar.input)
+            try:
+                self.call_after_refresh(self._clear_selection, bar.input)
+            except Exception:
+                pass
 
     def open_drawer(self, tab: str) -> None:
         tab = tab if tab in self.TABS else "sched"

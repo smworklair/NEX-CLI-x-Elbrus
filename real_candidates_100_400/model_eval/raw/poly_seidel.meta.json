@@ -1,0 +1,16 @@
+{
+ "graph": "poly_seidel",
+ "nodes": 238,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 2420,
+ "prompt_lines": 241,
+ "max_new_tokens": 2856,
+ "out_tokens": 1676,
+ "gen_s": 360.6195769890328,
+ "backend_setup_s": 0.0007351139793172479,
+ "tok_per_s": 4.647556890820075,
+ "server_ctx": 4096
+}

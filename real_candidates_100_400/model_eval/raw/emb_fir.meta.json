@@ -1,0 +1,16 @@
+{
+ "graph": "emb_fir",
+ "nodes": 347,
+ "adapter": "lora-merged",
+ "backend": "llama-server",
+ "temperature": 0.0,
+ "seed": null,
+ "prompt_tokens": 3773,
+ "prompt_lines": 350,
+ "max_new_tokens": 4164,
+ "out_tokens": 323,
+ "gen_s": 214.21083012694726,
+ "backend_setup_s": 0.0007452029967680573,
+ "tok_per_s": 1.507860269289752,
+ "server_ctx": 4096
+}

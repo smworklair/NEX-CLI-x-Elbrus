@@ -47,7 +47,7 @@ python -m vliw         # interactive loop (/help, /compare, /play, /exit)
 
 Real `.s` through the TUI code editor: open the CODE mode, then
 `/code load real_candidates_100_400/asm/poly_gemm.s`, then `F5`.
-Expect a legal schedule in ~13 s (portfolio fallback) with an empty
+Expect a legal schedule in ~13 s (core search portfolio fallback, NOT the learned model) with an empty
 `validate()`.
 
 ## 4. Test

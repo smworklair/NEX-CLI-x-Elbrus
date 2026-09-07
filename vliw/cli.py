@@ -2157,11 +2157,26 @@ def main(argv: list[str] | None = None) -> int:
         cmd_name = extras[0].lower()
         if (cmd_name in _SINGLE_GRAPH_CMDS and not args.plain
                 and args.color is not False and _fullscreen_ok()):
+            # Аргумент разбираем у ВСЕХ команд списка, а не только у run и
+            # load. Раньше `compare mulclash`, `doctor mulclash`, `bounds`,
+            # `path` и `analyze` молча роняли имя участка и открывали
+            # рабочее место на предыдущем — человек просил один участок,
+            # видел другой, и ни слова об этом.
             try:
-                if cmd_name == "run" and len(extras) > 1:
-                    session.set_scenario(extras[1])
-                elif cmd_name == "load" and len(extras) > 1:
-                    handle_input(session, " ".join(extras))
+                if cmd_name == "load":
+                    # У load аргумент — файл, а не сценарий: разбирать его
+                    # умеет только сама команда. Её ответ обязателен к
+                    # проверке: раньше он игнорировался, и `load нет-файла`
+                    # печатал ошибку, которую тут же накрывал полный экран.
+                    if len(extras) > 1 and not handle_input(session,
+                                                            " ".join(extras)):
+                        return 1
+                else:
+                    # Первый токен, не похожий на флаг (`--model` у compare).
+                    scen = next((t for t in extras[1:]
+                                 if not t.startswith("-")), None)
+                    if scen is not None:
+                        session.set_scenario(scen)
             except SystemExit:
                 raise
             except Exception as e:

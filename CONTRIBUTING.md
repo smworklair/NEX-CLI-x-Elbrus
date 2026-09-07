@@ -35,3 +35,5 @@ python -m unittest discover -s tests
 ## License
 
 By contributing you agree your changes are MIT-licensed like the rest.
+Donat
+https://pay.cloudtips.ru/p/7809ff65

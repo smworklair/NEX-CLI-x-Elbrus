@@ -2492,6 +2492,24 @@ class CodeScreen(ModeScreen):
         self._explorer_hist = hist[:5]
         self._save_layout()
 
+    @staticmethod
+    def _find_hit(query: str, name: str, rel: str) -> bool:
+        """Совпал ли запрос: по имени, а с разделителем — по пути.
+
+        Вставить путь целиком — первое, что делает человек, у которого файл
+        уже открыт в проводнике системы. Раньше это молча не находило
+        ничего: сравнение шло только с ИМЕНЕМ файла, а
+        `examples/stress/deep/hard_mix.s` именем не бывает. Обратные слэши
+        приводим к прямым — на Windows путь копируется из адресной строки
+        именно с ними.
+        """
+        q = query.replace("\\", "/").strip().lower()
+        if not q:
+            return False
+        if "/" in q:
+            return q.strip("/") in rel.replace("\\", "/").lower()
+        return q in name.lower()
+
     def _find_rows(self, folder, query: str) -> list[tuple[str, str, bool]]:
         """Поиск по имени вглубь: обход вширь, с отсечением на ходу.
 
@@ -2530,14 +2548,20 @@ class CodeScreen(ModeScreen):
                     is_dir = entry.is_dir(follow_symlinks=False)
                 except OSError:
                     continue
-                if is_dir:
-                    if depth + 1 < self.FIND_DEPTH:
-                        queue.append((entry.path, depth + 1))
-                    continue
-                if query not in name.lower():
-                    continue
+                # Спуск в папку не зависит от совпадения имени: искомое
+                # лежит ГЛУБЖЕ, даже если сама папка называется иначе.
+                if is_dir and depth + 1 < self.FIND_DEPTH:
+                    queue.append((entry.path, depth + 1))
+
                 shown = entry.path[len(base) + 1:] or name
-                rows.append((entry.path, shown, False))
+                if not self._find_hit(query, name, shown):
+                    continue
+                # Папки в выдаче: раньше их не было вовсе — `continue` стоял
+                # ДО проверки имени, и строка поиска, обещающая «имя файла
+                # ИЛИ ПАПКИ», папку не находила никогда. Клик по такой
+                # строке заходит внутрь, как и в обычном списке.
+                rows.append((entry.path, shown + "/" if is_dir else shown,
+                             is_dir))
                 if len(rows) >= self.FIND_LIMIT:
                     break
         # Обход мог кончиться не потому, что всё просмотрено. Молчать об

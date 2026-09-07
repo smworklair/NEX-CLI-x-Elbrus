@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vliw-ai-scheduler"
-version = "0.1.0"
+version = "1.0.0b1"
 description = "VLIW instruction-scheduler prototype: greedy baseline vs exact-search oracle (Elbrus e2k machine model)"
 readme = "README.md"
 requires-python = ">=3.10"

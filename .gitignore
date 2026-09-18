@@ -62,8 +62,3 @@ real_candidates_100_400/*
 .aider*
 # Метки Windows о зоне скачивания у PDF/документов — мусор в статусе.
 *Zone.Identifier
-# .presentation: выхлоп генераторов (pptx, preview/, brand/) пересоздаётся
-# скриптами make_deck/preview_deck/make_brand.py — в git не тащим.
-.presentation/NEX-CLI-презентация.pptx
-.presentation/preview/
-.presentation/brand/

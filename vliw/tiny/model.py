@@ -22,13 +22,19 @@ def _relu(x: float) -> float:
 
 
 class TinyPriority:
-    def __init__(self, w1, b1, w2, b2, w3, b3) -> None:
+    def __init__(self, w1, b1, w2, b2, w3, b3,
+                 target: str | None = None) -> None:
         self.w1 = w1  # [F][H1]
         self.b1 = b1  # [H1]
         self.w2 = w2  # [H1][H2]
         self.b2 = b2  # [H2]
         self.w3 = w3  # [H2]
         self.b3 = b3  # float
+        #: Чему учили: "rank" (порядок), "cycle" (абсолютный такт, legacy),
+        #: "hold" (держка после раннего старта). Планировщик трактует выход
+        #: по маркеру, а не по имени файла — иначе cycle-веса, прочитанные
+        #: как hold, дали бы молча неверные запреты.
+        self.target = target
 
     @property
     def h1(self) -> int:
@@ -74,6 +80,7 @@ class TinyPriority:
             "features": list(FEATURE_NAMES),
             "n_features": N_FEATURES,
             "hidden": [self.h1, self.h2],
+            "target": self.target,
             "w1": self.w1, "b1": self.b1,
             "w2": self.w2, "b2": self.b2,
             "w3": self.w3, "b3": self.b3,
@@ -87,7 +94,8 @@ class TinyPriority:
     def load(path: str) -> "TinyPriority":
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
-        return TinyPriority(d["w1"], d["b1"], d["w2"], d["b2"], d["w3"], d["b3"])
+        return TinyPriority(d["w1"], d["b1"], d["w2"], d["b2"], d["w3"],
+                            d["b3"], target=d.get("target"))
 
     @staticmethod
     def init(n_features: int = N_FEATURES, hidden: tuple[int, int] = (128, 64),

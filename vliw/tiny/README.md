@@ -20,6 +20,11 @@
 - `weights.json` — supervised на 8000 графах `train_merged` (сид 0) +
   ES-доводка по `train_hard.jsonl` (см. команды ниже). Без ES — 87/120
   на DEV, с ES — 91/120.
+- `weights_hold.json` — вторая defer-голова (цель hold: держка после asap,
+  а не абсолютный такт). Отдельный член портфеля `prio_hold`: min по
+  супермножеству не бывает хуже, по факту +3 на DEV (91→94) и +13 на
+  финале (219→232). Маркер цели — в файле весов (`target`), отсутствие —
+  legacy `cycle`; трактовка — в `scheduler._holds_of`, а не по имени файла.
 
 ## Команды (все — голый Python + numpy только для train)
 
@@ -59,7 +64,8 @@ python -m unittest tests.test_tiny -v
   (джиттер убивает масштаб) — поэтому центры нормализуем; это задокументировано
   в `scheduler.py`. Beam вокруг height без крошек: 76/120 — поиск силен сам
   по себе; крошки добавляют сверху (86→88 на DEV).
-- Портфель: greedy → prio → prio_defer → beam_t* → beam_h*. Ничьи — greedy.
+- Портфель: greedy → prio → prio_defer → prio_hold → beam_t* → beam_h*.
+  Ничьи — greedy.
 
 ## Замер крошек 1+2+3+ES (13.09.2026, конфиг заморожен по DEV, тест — один прогон)
 

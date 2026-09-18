@@ -76,6 +76,16 @@ def load_samples(path: str, max_graphs: int, seed: int, target: str = "rank",
                 # Абсолютный такт оракула: на инференсе станет defer_until
                 # (запрет «не раньше»), c клипом по жадному makespan.
                 y_of = lambda i: float(pl[i][0])
+            elif target == "hold":
+                # Длительность держки: насколько позже раннего старта
+                # оракул ставит узел. Абсолютный такт скачет от графа
+                # к графу и по нормированным фичам не учится (сеть
+                # underpredict'ит в safe-early — см. вскрытие графа 7
+                # в docs/TINY.md); держка инвариантна к размеру графа,
+                # у большинства узлов — честный ноль.
+                from vliw.core.dag import compute_metrics as _cm
+                asap = _cm(dag, prof).asap
+                y_of = lambda i: float(max(0, pl[i][0] - asap[i]))
             else:
                 raise SystemExit(f"неизвестный target {target!r}")
             X = featurize(dag, prof)
@@ -171,8 +181,9 @@ def main() -> None:
     ap.add_argument("--hidden", type=int, nargs=2, default=[128, 64])
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--target", choices=["rank", "cycle"], default="rank",
-                    help="rank: порядок оракула (priority); cycle: такт оракула (defer)")
+    ap.add_argument("--target", choices=["rank", "cycle", "hold"], default="rank",
+                    help="rank: порядок оракула (priority); cycle: такт оракула "
+                         "(defer, legacy); hold: держка после раннего старта (defer)")
     a = ap.parse_args()
     train_path = a.train if Path(a.train).is_absolute() or Path(a.train).exists() \
         else str(_ROOT / a.train)
@@ -186,6 +197,7 @@ def main() -> None:
                                       a.target, extra, a.extra_repeat)
     print(f"graphs={ng} nodes={len(y)} div_heavy={ndiv} feats={X.shape[1]}", flush=True)
     tiny = train(X, y, w, hidden=tuple(a.hidden), epochs=a.epochs, lr=a.lr, seed=a.seed)
+    tiny.target = a.target
     print(f"params={tiny.param_count()}", flush=True)
     out = a.out if Path(a.out).is_absolute() or Path(a.out).parent.exists() \
         else str(_ROOT / a.out)

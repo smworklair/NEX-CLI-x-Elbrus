@@ -5,6 +5,9 @@
                 (правило честности из CAB: не приписывать алгоритму чужое)
   prio        — крошка-1: порядок из скоров MLP
   prio_defer  — крошка-2: тот же порядок + такты как defer_until («не раньше»)
+  prio_hold   — то же, но держки другой головы (цель hold: длительность
+                держки после asap, а не абсолютный такт). Другое мнение —
+                другой член портфеля: min по супермножеству не бывает хуже.
   beam_h_*/beam_t_* — крошка-3 веер: детерминированный джиттер порядка
                 вокруг двух центров (нормированный height и скоры крошки-1,
                 K=16 каждый), точный выбор по makespan. Не модель, а поиск:
@@ -28,6 +31,7 @@ from .model import TinyPriority
 
 _DEFAULT_WEIGHTS = Path(__file__).resolve().parent / "weights.json"
 _DEFAULT_DEFER = Path(__file__).resolve().parent / "weights_defer.json"
+_DEFAULT_HOLD = Path(__file__).resolve().parent / "weights_hold.json"
 
 
 class TinyScheduler:
@@ -35,44 +39,36 @@ class TinyScheduler:
     kind = "learned"
     short = "tiny"
 
-    def __init__(self, weights: str | None = None,
-                 defer_weights: str | None = None,
-                 beam: int = 8) -> None:
+    @staticmethod
+    def _load_net(path: Path, kind: str) -> tuple[TinyPriority | None, str]:
+        """Веса или честный fallback: битые, чужие (другое число фич),
+        отсутствующие — всё это не валит планировщик, а гасит вариант."""
         from .features import N_FEATURES
 
+        if not path.exists():
+            return None, ""
+        try:
+            net = TinyPriority.load(str(path))
+        except Exception as e:  # битые веса — не валим планировщик
+            return None, str(e)
+        if len(net.w1) != N_FEATURES:
+            return None, (f"веса {kind} на {len(net.w1)} фич, нужно "
+                           f"{N_FEATURES} — переобучи (vliw/tiny/train.py)")
+        return net, ""
+
+    def __init__(self, weights: str | None = None,
+                 defer_weights: str | None = None,
+                 hold_weights: str | None = None,
+                 beam: int = 8) -> None:
         p = Path(weights) if weights else _DEFAULT_WEIGHTS
         self.weights_path = str(p)
-        self.tiny: TinyPriority | None = None
-        self.load_error: str = ""
-        if p.exists():
-            try:
-                self.tiny = TinyPriority.load(str(p))
-                # Веса от другого набора фич (старые, до давления на порт)
-                # дали бы IndexError в прямом проходе — честный fallback
-                # на baseline вместо падения, как с битыми весами.
-                if len(self.tiny.w1) != N_FEATURES:
-                    self.load_error = (
-                        f"веса на {len(self.tiny.w1)} фич, нужно "
-                        f"{N_FEATURES} — переобучи (vliw/tiny/train.py)")
-                    self.tiny = None
-            except Exception as e:  # битые веса — не валим планировщик
-                self.load_error = str(e)
-                self.tiny = None
+        self.tiny, self.load_error = self._load_net(p, "priority")
         dp = Path(defer_weights) if defer_weights else _DEFAULT_DEFER
         self.defer_path = str(dp)
-        self.defer: TinyPriority | None = None
-        self.defer_error: str = ""
-        if dp.exists():
-            try:
-                self.defer = TinyPriority.load(str(dp))
-                if len(self.defer.w1) != N_FEATURES:
-                    self.defer_error = (
-                        f"веса на {len(self.defer.w1)} фич, нужно "
-                        f"{N_FEATURES} — переобучи (vliw/tiny/train.py)")
-                    self.defer = None
-            except Exception as e:  # noqa: BLE001
-                self.defer_error = str(e)
-                self.defer = None
+        self.defer, self.defer_error = self._load_net(dp, "defer")
+        hp = Path(hold_weights) if hold_weights else _DEFAULT_HOLD
+        self.hold_path = str(hp)
+        self.hold, self.hold_error = self._load_net(hp, "hold")
         self.beam = beam
 
     def priority(self, dag: DAG, model: MachineModel) -> list[float]:
@@ -81,15 +77,32 @@ class TinyScheduler:
             return [float(h) for h in metrics.height]
         return self.tiny.scores(featurize(dag, model))
 
+    def _holds_of(self, net: TinyPriority | None, dag: DAG,
+                  model: MachineModel, limit: int) -> dict[int, int]:
+        """Запреты «не раньше» из головы сети. Трактовка выхода — по маркеру
+        весов: "hold" значит длительность держки после раннего старта
+        (asap + hold), отсутствие маркера — legacy "cycle" (абсолютный
+        такт)."""
+        if net is None:
+            return {}
+        preds = net.scores(featurize(dag, model))
+        if getattr(net, "target", None) == "hold":
+            asap = compute_metrics(dag, model).asap
+            return {i: c for i, v in enumerate(preds)
+                    for c in (asap[i] + int(round(v)),)
+                    if 0 < c <= limit}
+        return {i: c for i, v in enumerate(preds)
+                for c in (int(round(v)),) if 0 < c <= limit}
+
     def defer_until(self, dag: DAG, model: MachineModel, limit: int) -> dict[int, int]:
         """Такты крошки-2 как запрет «не раньше». Клип по жадному makespan —
         тот же прием, что floor_from_model в CAB: такт выше потолка это сбой
         формата, а не мнение (иначе один выброс растянет расписание)."""
-        if self.defer is None:
-            return {}
-        preds = self.defer.scores(featurize(dag, model))
-        return {i: c for i, v in enumerate(preds)
-                for c in (int(round(v)),) if 0 < c <= limit}
+        return self._holds_of(self.defer, dag, model, limit)
+
+    def hold_until(self, dag: DAG, model: MachineModel, limit: int) -> dict[int, int]:
+        """То же другой головой (цель hold). Отдельный член портфеля."""
+        return self._holds_of(self.hold, dag, model, limit)
 
     def _beam_orders(self, base_prio: list[float], k: int,
                      seed_base: int) -> list[list[float]]:
@@ -137,6 +150,15 @@ class TinyScheduler:
                         and sched2.makespan < best.makespan:
                     best, best_trace, winner = sched2, trace2, "prio_defer"
 
+            hold = self.hold_until(dag, model, base.schedule.makespan)
+            if hold:
+                schedh, traceh = list_schedule(
+                    dag, model, priority=prio, defer_until=hold,
+                    height=metrics.height, collect_trace=True)
+                if not schedh.validate() and schedh.complete \
+                        and schedh.makespan < best.makespan:
+                    best, best_trace, winner = schedh, traceh, "prio_hold"
+
             for j, bp in enumerate(self._beam_orders(prio, self.beam, 2000)):
                 schedj, _ = list_schedule(dag, model, priority=bp,
                                           height=metrics.height)
@@ -159,11 +181,15 @@ class TinyScheduler:
         if self.defer is None:
             notes.append("веса defer не загружены — вариант prio_defer выключен; "
                          + (self.defer_error or ""))
+        if self.hold is None:
+            notes.append("веса hold не загружены — вариант prio_hold выключен; "
+                         + (self.hold_error or ""))
         return SchedulingResult(
             schedule=best, trace=best_trace, optimal=None, notes=notes,
             search_stats={"tiny": True, "tiny_winner": winner,
                           "baseline_makespan": base.schedule.makespan,
                           "weights": self.weights_path,
                           "defer_weights": self.defer_path,
+                          "hold_weights": self.hold_path,
                           "beam": self.beam},
         )

@@ -27,8 +27,9 @@ def main() -> None:
     ap.add_argument("--eval", default="eval_hard.jsonl")
     ap.add_argument("--weights", default="vliw/tiny/weights.json")
     ap.add_argument("--defer-weights", default="vliw/tiny/weights_defer.json")
+    ap.add_argument("--hold-weights", default="vliw/tiny/weights_hold.json")
     ap.add_argument("--limit", type=int, default=0, help="0 = все")
-    ap.add_argument("--beam", type=int, default=8,
+    ap.add_argument("--beam", type=int, default=16,
                     help="ширина веера (по умолчанию как в /tiny)")
     ap.add_argument("--ignore-weights", action="store_true",
                     help="без обученных весов: только жадный + веер вокруг "
@@ -46,6 +47,7 @@ def main() -> None:
     else:
         sched = TinyScheduler(_rp(a.weights),
                               defer_weights=_rp(a.defer_weights),
+                              hold_weights=_rp(a.hold_weights),
                               beam=a.beam)
     base = GreedyListScheduler()
     n = valid = opt = beat = 0

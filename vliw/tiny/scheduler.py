@@ -61,7 +61,7 @@ class TinyScheduler:
     def __init__(self, weights: str | None = None,
                  defer_weights: str | None = None,
                  hold_weights: str | None = None,
-                 beam: int = 8) -> None:
+                 beam: int = 16) -> None:
         p = Path(weights) if weights else _DEFAULT_WEIGHTS
         self.weights_path = str(p)
         self.tiny, self.load_error = self._load_net(p, "priority")

@@ -63,7 +63,10 @@ def forward_np(X: np.ndarray, t) -> np.ndarray:
 
 
 def load_batch(path: str):
+    from vliw.core.baseline import GreedyListScheduler
+
     prof = get_profile("e2k-v6-measured")
+    base = GreedyListScheduler()
     data = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -71,7 +74,8 @@ def load_batch(path: str):
             dag = build_dag(parse_graph_entries(ex["prompt"]))
             X = np.asarray(featurize(dag, prof))
             m = compute_metrics(dag, prof)
-            data.append((dag, prof, X, m.height))
+            data.append((dag, prof, X, m.height, m.asap,
+                         base.schedule(dag, prof).schedule.makespan))
     return data
 
 
@@ -79,9 +83,27 @@ def fitness(w: np.ndarray, shape: tuple, batch) -> float:
     """Средний makespan prio-варианта. Меньше = лучше."""
     t = unpack(w, shape)
     tot = 0.0
-    for dag, prof, X, height in batch:
+    for row in batch:
+        dag, prof, X, height = row[0], row[1], row[2], row[3]
         prio = forward_np(X, t).tolist()
         s, _ = list_schedule(dag, prof, priority=prio, height=height)
+        tot += s.makespan if (not s.validate() and s.complete) else 10_000.0
+    return tot / max(len(batch), 1)
+
+
+def fitness_hold(w: np.ndarray, shape: tuple, batch) -> float:
+    """Средний makespan варианта prio + держки кандидата. Порядок фиксирован
+    (доводим только голову держек), держки — asap + hold с клипом по greedy.
+    Меньше = лучше."""
+    t = unpack(w, shape)
+    tot = 0.0
+    for dag, prof, X, height, asap, base_ms, prio in batch:
+        holds = forward_np(X, t).tolist()
+        defer = {i: c for i, v in enumerate(holds)
+                 for c in (asap[i] + int(round(v)),)
+                 if 0 < c <= base_ms}
+        s, _ = list_schedule(dag, prof, priority=prio, defer_until=defer,
+                             height=height)
         tot += s.makespan if (not s.validate() and s.complete) else 10_000.0
     return tot / max(len(batch), 1)
 
@@ -91,6 +113,10 @@ def main() -> None:
     ap.add_argument("--train", default="train_hard.jsonl")
     ap.add_argument("--init", default="vliw/tiny/weights.json")
     ap.add_argument("--out", default="vliw/tiny/weights_es.json")
+    ap.add_argument("--mode", choices=["prio", "hold"], default="prio",
+                    help="prio: доводить порядок (standalone); hold: доводить "
+                         "держки при фиксированном порядке (--prio-weights)")
+    ap.add_argument("--prio-weights", default="vliw/tiny/weights.json")
     ap.add_argument("--iters", type=int, default=20)
     ap.add_argument("--pop", type=int, default=16, help="четное: антитезные пары")
     ap.add_argument("--sigma", type=float, default=0.01)
@@ -108,8 +134,15 @@ def main() -> None:
     w, shape = pack(t0)
     dim = w.size
     print(f"params={dim}", flush=True)
+    if a.mode == "hold":
+        # Порядок фиксируем (текущие prio-веса), эволюционируют держки.
+        pt = TinyPriority.load(rp(a.prio_weights))
+        data = [row + (forward_np(row[2], pt).tolist(),) for row in data]
+        fit = fitness_hold
+    else:
+        fit = fitness
     rng = np.random.default_rng(a.seed)
-    f0 = fitness(w, shape, data)
+    f0 = fit(w, shape, data)
     print(f"init fitness={f0:.3f}", flush=True)
     best, best_f = w.copy(), f0
 
@@ -120,12 +153,12 @@ def main() -> None:
         eps = rng.normal(0.0, a.sigma, (half, dim))
         fs = np.zeros(a.pop)
         for k in range(half):
-            fs[2 * k] = fitness(w + eps[k], shape, batch)
-            fs[2 * k + 1] = fitness(w - eps[k], shape, batch)
+            fs[2 * k] = fit(w + eps[k], shape, batch)
+            fs[2 * k + 1] = fit(w - eps[k], shape, batch)
         adv = fs.mean() - fs  # плюс за улучшение (makespan ниже среднего)
         step = (adv[:, None] * np.vstack([eps, -eps])).sum(0) / (half * 2 * a.sigma)
         w = w + a.lr * step
-        f = fitness(w, shape, batch)
+        f = fit(w, shape, batch)
         if f < best_f:
             best, best_f = w.copy(), float(f)
         print(f"iter {it + 1}/{a.iters} batch_fit={f:.3f} best={best_f:.3f} "
@@ -133,7 +166,11 @@ def main() -> None:
 
     out = rp(a.out)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
-    unpack(best, shape).save(out)
+    net = unpack(best, shape)
+    if a.mode == "hold":
+        # Без маркера планировщик прочтёт держки как legacy cycle.
+        net.target = "hold"
+    net.save(out)
     print(f"saved {out} best={best_f:.3f} (init {f0:.3f})", flush=True)
 
 

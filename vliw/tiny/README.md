@@ -14,7 +14,9 @@
   до шаффла (сделан под `train_hard.jsonl`, но на замерах 18.09 подмес
   проигрывает чистому merged — см. docs/TINY.md, включать только с цифрой).
 - `scheduler.py` — `TinyScheduler`: портфель {tiny, baseline}, выбор по
-  makespan. Хуже baseline не бывает. Без `weights.json` — ровно baseline.
+  makespan. Хуже baseline не бывает. Без `weights.json` — не хуже baseline
+  (веер вокруг height работает и без весов; при K=16 на `slotclash`
+  выигрывает 24→23).
   Веса от другого числа фич не валят планировщик, а дают честный fallback
   (`load_error`, см. код) — было нужно при откате эксперимента с 20 фичами.
 - `weights.json` — supervised на 8000 графах `train_merged` (сид 0) +

@@ -8,6 +8,8 @@
   prio_hold   — то же, но держки другой головы (цель hold: длительность
                 держки после asap, а не абсолютный такт). Другое мнение —
                 другой член портфеля: min по супермножеству не бывает хуже.
+  beam_d*     — веер по держкам (джиттер holds): ранним contention-держкам
+                вида «держи три такта», которые сеть даёт как одну.
   beam_h_*/beam_t_* — крошка-3 веер: детерминированный джиттер порядка
                 вокруг двух центров (нормированный height и скоры крошки-1,
                 K=16 каждый), точный выбор по makespan. Не модель, а поиск:
@@ -104,6 +106,28 @@ class TinyScheduler:
         """То же другой головой (цель hold). Отдельный член портфеля."""
         return self._holds_of(self.hold, dag, model, limit)
 
+    def _beam_holds(self, base: dict[int, int], n: int, k: int,
+                    seed_base: int, limit: int) -> list[dict[int, int]]:
+        """Джиттер держек: та же философия, что у веера порядка, но центр —
+        предсказанные держки, а не скоры. Нужен ранним contention-держкам
+        («держи DIV 11 три такта», сеть даёт одну): детерминированные
+        варианты вокруг предсказания, точный выбор по makespan. Пустые
+        (<=0 после округления) и выше потолка отбрасываем — как обычно."""
+        if n == 0 or k <= 0 or not base:
+            return []
+        dense = [float(base.get(i, 0)) for i in range(n)]
+        mean = sum(dense) / n
+        var = sum((v - mean) ** 2 for v in dense) / n
+        amp = (var ** 0.5) / 2.0 or 1.0
+        out = []
+        for j in range(k):
+            rnd = random.Random(seed_base + j)
+            d = {i: c for i, v in enumerate(dense)
+                 for c in (int(round(v + amp * rnd.gauss(0.0, 1.0))),)
+                 if 0 < c <= limit}
+            out.append(d)
+        return out
+
     def _beam_orders(self, base_prio: list[float], k: int,
                      seed_base: int) -> list[list[float]]:
         """Детерминированный веер: гауссов джиттер с фикс. сидами.
@@ -158,6 +182,17 @@ class TinyScheduler:
                 if not schedh.validate() and schedh.complete \
                         and schedh.makespan < best.makespan:
                     best, best_trace, winner = schedh, traceh, "prio_hold"
+
+                for j, hd in enumerate(self._beam_holds(
+                        hold, len(dag), self.beam, 3000,
+                        base.schedule.makespan)):
+                    schedd, _ = list_schedule(
+                        dag, model, priority=prio, defer_until=hd,
+                        height=metrics.height)
+                    if not schedd.validate() and schedd.complete \
+                            and schedd.makespan < best.makespan:
+                        best, best_trace, winner = \
+                            schedd, base.trace, f"beam_d{j}"
 
             for j, bp in enumerate(self._beam_orders(prio, self.beam, 2000)):
                 schedj, _ = list_schedule(dag, model, priority=bp,

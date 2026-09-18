@@ -64,8 +64,9 @@ python -m unittest tests.test_tiny -v
   (джиттер убивает масштаб) — поэтому центры нормализуем; это задокументировано
   в `scheduler.py`. Beam вокруг height без крошек: 76/120 — поиск силен сам
   по себе; крошки добавляют сверху (86→88 на DEV).
-- Портфель: greedy → prio → prio_defer → prio_hold → beam_t* → beam_h*.
-  Ничьи — greedy.
+- Портфель: greedy → prio → prio_defer → prio_hold → beam_t* → beam_h* →
+  beam_d* (веер по держкам). Ничьи — greedy. Текущий финал: 234/300,
+  гэп 0.220 (см. docs/TINY.md).
 
 ## Замер крошек 1+2+3+ES (13.09.2026, конфиг заморожен по DEV, тест — один прогон)
 

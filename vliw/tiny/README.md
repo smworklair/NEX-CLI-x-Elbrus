@@ -6,21 +6,31 @@
 
 ## Крошка-1: priority (готова)
 
-- `features.py` — 17 фич узла (op one-hot + height/asap/latency/occupancy/
+- `features.py` — 18 фич узла (op one-hot + height/asap/latency/occupancy/
   каналы/степени/is_div/is_store). Незнакомые опкоды → нули в one-hot.
-- `model.py` — MLP 17→128→64→1, 10625 параметров, инференс чистый stdlib.
+- `model.py` — MLP 18→128→64→1, 10625 параметров, инференс чистый stdlib.
 - `train.py` — клонирование порядка CP-SAT-оракула, апсемплинг DIV/STORE.
+  Флаг `--train-extra/--extra-repeat` подмешивает второй набор повторами
+  до шаффла (сделан под `train_hard.jsonl`, но на замерах 18.09 подмес
+  проигрывает чистому merged — см. docs/TINY.md, включать только с цифрой).
 - `scheduler.py` — `TinyScheduler`: портфель {tiny, baseline}, выбор по
   makespan. Хуже baseline не бывает. Без `weights.json` — ровно baseline.
-- `weights.json` — обучены на 8000 графах `train_merged`, сид 0.
+  Веса от другого числа фич не валят планировщик, а дают честный fallback
+  (`load_error`, см. код) — было нужно при откате эксперимента с 20 фичами.
+- `weights.json` — supervised на 8000 графах `train_merged` (сид 0) +
+  ES-доводка по `train_hard.jsonl` (см. команды ниже). Без ES — 87/120
+  на DEV, с ES — 91/120.
 
 ## Команды (все — голый Python + numpy только для train)
 
 ```bash
 python -m vliw.tiny.train --train train_merged.jsonl --out vliw/tiny/weights.json --max-graphs 8000 --epochs 25 --seed 0
+python -m vliw.tiny.train --train train_merged.jsonl --out vliw/tiny/weights_defer.json --max-graphs 8000 --epochs 25 --seed 0 --target cycle
+python -m vliw.tiny.es --train train_hard.jsonl --init vliw/tiny/weights.json --out vliw/tiny/weights.json --iters 20 --pop 16 --batch 96 --seed 0
 python -m vliw.tiny.eval --eval eval_hard.jsonl --weights vliw/tiny/weights.json
 python -m vliw.tiny.verify --weights vliw/tiny/weights.json --train-sample 500 --fuzz 200
 python tools/harvest_dev.py --n 120 --jobs 4 --out eval_hard_dev.jsonl
+python tools/tiny_losses.py
 python -m unittest tests.test_tiny -v
 ```
 

@@ -37,13 +37,22 @@ from vliw.tiny.features import (
 from vliw.tiny.model import TinyPriority
 
 
-def load_samples(path: str, max_graphs: int, seed: int, target: str = "rank"):
+def load_samples(path: str, max_graphs: int, seed: int, target: str = "rank",
+                 extra_path: str = "", extra_repeat: int = 0):
     prof = get_profile("e2k-v6-measured")
     Xs, ys, ws = [], [], []
     n_graphs = 0
     n_div_heavy = 0
     with open(path, encoding="utf-8") as f:
         lines = f.readlines()
+    if extra_path and extra_repeat > 0:
+        # Подмес тяжёлого набора (train_hard: DIV 25% против 5% в merged).
+        # Вес ×4 в лоссе не спасает, когда ловушек одна на двадцать:
+        # повторяем строки ДО шаффла, чтобы доля в батче стала честной.
+        # max_graphs режет общий пул — бюджет как у базового рецепта.
+        with open(extra_path, encoding="utf-8") as f:
+            extra = f.readlines()
+        lines += extra * extra_repeat
     rnd = random.Random(seed)
     rnd.shuffle(lines)
     for line in lines:
@@ -152,6 +161,10 @@ def train(X, y, w, hidden=(128, 64), epochs=25, lr=3e-3, seed=0, l2=1e-5):
 def main() -> None:
     ap = argparse.ArgumentParser(description="Обучение крошки-1 (numpy, CPU)")
     ap.add_argument("--train", default="train_merged.jsonl")
+    ap.add_argument("--train-extra", default="",
+                    help="второй файл (напр. train_hard.jsonl), подмешать повторами")
+    ap.add_argument("--extra-repeat", type=int, default=0,
+                    help="сколько раз повторить train-extra в пуле до шаффла")
     ap.add_argument("--out", default="vliw/tiny/weights.json")
     ap.add_argument("--max-graphs", type=int, default=8000)
     ap.add_argument("--epochs", type=int, default=25)
@@ -164,7 +177,13 @@ def main() -> None:
     train_path = a.train if Path(a.train).is_absolute() or Path(a.train).exists() \
         else str(_ROOT / a.train)
     print(f"load {train_path} (max {a.max_graphs}) ...", flush=True)
-    X, y, w, ng, ndiv = load_samples(train_path, a.max_graphs, a.seed, a.target)
+    extra = a.train_extra
+    if extra and not (Path(extra).is_absolute() or Path(extra).exists()):
+        extra = str(_ROOT / extra)
+    if extra:
+        print(f"extra {extra} x{a.extra_repeat} ...", flush=True)
+    X, y, w, ng, ndiv = load_samples(train_path, a.max_graphs, a.seed,
+                                      a.target, extra, a.extra_repeat)
     print(f"graphs={ng} nodes={len(y)} div_heavy={ndiv} feats={X.shape[1]}", flush=True)
     tiny = train(X, y, w, hidden=tuple(a.hidden), epochs=a.epochs, lr=a.lr, seed=a.seed)
     print(f"params={tiny.param_count()}", flush=True)

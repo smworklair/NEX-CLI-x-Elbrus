@@ -38,6 +38,8 @@ class TinyScheduler:
     def __init__(self, weights: str | None = None,
                  defer_weights: str | None = None,
                  beam: int = 8) -> None:
+        from .features import N_FEATURES
+
         p = Path(weights) if weights else _DEFAULT_WEIGHTS
         self.weights_path = str(p)
         self.tiny: TinyPriority | None = None
@@ -45,6 +47,14 @@ class TinyScheduler:
         if p.exists():
             try:
                 self.tiny = TinyPriority.load(str(p))
+                # Веса от другого набора фич (старые, до давления на порт)
+                # дали бы IndexError в прямом проходе — честный fallback
+                # на baseline вместо падения, как с битыми весами.
+                if len(self.tiny.w1) != N_FEATURES:
+                    self.load_error = (
+                        f"веса на {len(self.tiny.w1)} фич, нужно "
+                        f"{N_FEATURES} — переобучи (vliw/tiny/train.py)")
+                    self.tiny = None
             except Exception as e:  # битые веса — не валим планировщик
                 self.load_error = str(e)
                 self.tiny = None
@@ -55,6 +65,11 @@ class TinyScheduler:
         if dp.exists():
             try:
                 self.defer = TinyPriority.load(str(dp))
+                if len(self.defer.w1) != N_FEATURES:
+                    self.defer_error = (
+                        f"веса на {len(self.defer.w1)} фич, нужно "
+                        f"{N_FEATURES} — переобучи (vliw/tiny/train.py)")
+                    self.defer = None
             except Exception as e:  # noqa: BLE001
                 self.defer_error = str(e)
                 self.defer = None

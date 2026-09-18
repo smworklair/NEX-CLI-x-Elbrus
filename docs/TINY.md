@@ -134,6 +134,23 @@ fan-out) закончился двумя измерениями и двумя о
 4. **Fan-out «реален ли выигрыш» — уже есть.** Ответом всегда была нижняя
    граница: разрыв baseline vs `lower_bound` и поле `binding`
    (критический путь или ресурсы). Дублировать нечего.
+5. **Фичи давления на узкий порт — оверфит, откат (18.09.2026).**
+   Разбор 81 проигрыша (`tools/tiny_losses.py`) показал один механизм:
+   в t.0 жадный забивает монопольный порт ,5 готовым, но некритичным DIV,
+   а критичный DIV приходит в t.1 и ждёт — оракул оставляет дырку, которую
+   статический порядок выразить не может в принципе. Добавили три фичи
+   (`chan_pressure_n`, `succ_div_n`, `succ_lat_n`, стало 20): на трейне лосс
+   ниже, на DEV — 82 против 87, на финале — 178/300 против 219/300.
+   Классический оверфит (в трейне DIV 5% узлов, в eval — почти в каждом
+   графе: сеть новое почти не видит, а `chan_pressure` — самый крупный
+   по модулю сигнал — перетягивает). Подмес `train_hard.jsonl` (DIV 25%)
+   не спасает ни при капе 8000 (80/78), ни всем пулом (78). Откачено к 18
+   фичам. Определения — одной строкой каждое: очередь на самый узкий
+   канал (`sum occupancy тех, чьи каналы ⊆ моих / n`), доля DIV среди
+   транзитивных потомков, суммарная латентность транзитивных потомков
+   (`/ n·11`). В git не коммитились (откат до коммита), держать мёртвый
+   код ради «а вдруг» запрещено тем же правилом, что убрало top-k cutoff
+   выше.
 
 Две честные оговорки к числам выше:
 
@@ -157,10 +174,25 @@ fan-out) закончился двумя измерениями и двумя о
 ```bash
 python -m vliw tiny [сценарий]   # крошки против baseline и oracle на участке
 python -m vliw.tiny.train --train train_merged.jsonl --out vliw/tiny/weights.json --max-graphs 8000 --epochs 25 --seed 0
+python -m vliw.tiny.train --train train_merged.jsonl --out vliw/tiny/weights_defer.json --max-graphs 8000 --epochs 25 --seed 0 --target cycle
+python -m vliw.tiny.es --train train_hard.jsonl --init vliw/tiny/weights.json --out vliw/tiny/weights.json --iters 20 --pop 16 --batch 96 --seed 0
 python -m vliw.tiny.eval --eval eval_hard.jsonl --weights vliw/tiny/weights.json
 python -m vliw.tiny.verify --weights vliw/tiny/weights.json --train-sample 500 --fuzz 200
+python tools/tiny_losses.py      # где не дотянули до оптимума и чем похожи
 python -m unittest tests.test_tiny -v
 ```
+
+Текущие веса (18.09.2026) — конвейер из трёх шагов выше: supervised
+(rank + cycle) → ES-доводка по `train_hard.jsonl` прямо поверх
+`weights.json`. ES снял средний makespan 34.17→30.55 на своей цели
+(standalone prio), в портфеле: DEV 87→91, финал 178→219/300 в оптимуме,
+гэп 0.41→0.270 — в цифру как замороженный конфиг 13.09. Осторожно:
+повтор supervised по тому же рецепту даёт 87, а не 91 (шум
+многопоточного BLAS в обучении — детерминированности до графа тут нет,
+поэтому ES-шаг тоже фиксируем сидом и проверяем DEV после каждого
+прогона). `--train-extra/--extra-repeat` в `train.py` оставлены как
+инструмент подмеса, но на замерах 18.09 подмес hard проигрывает чистому
+merged (78–80 против 87 на DEV) — включать только с цифрой в руках.
 
 Наборы и их роль (не путать — правило из tiny/README): `train_merged`
 едят целиком при обучении, отбор сида/эпох — только по DEV

@@ -26,6 +26,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Эвал крошки-1")
     ap.add_argument("--eval", default="eval_hard.jsonl")
     ap.add_argument("--weights", default="vliw/tiny/weights.json")
+    ap.add_argument("--defer-weights", default="vliw/tiny/weights_defer.json")
     ap.add_argument("--limit", type=int, default=0, help="0 = все")
     ap.add_argument("--beam", type=int, default=8,
                     help="ширина веера (по умолчанию как в /tiny)")
@@ -34,15 +35,18 @@ def main() -> None:
                          "height (чистый поиск — для абляции)")
     a = ap.parse_args()
     ev = a.eval if Path(a.eval).exists() else str(_ROOT / a.eval)
-    ws = a.weights if Path(a.weights).is_absolute() or Path(a.weights).exists() \
-        else str(_ROOT / a.weights)
+    def _rp(p: str) -> str:
+        return p if Path(p).is_absolute() or Path(p).exists() \
+            else str(_ROOT / p)
     prof = get_profile("e2k-v6-measured")
     if a.ignore_weights:
         sched = TinyScheduler(weights="/nonexistent/weights.json",
                               defer_weights="/nonexistent/defer.json",
                               beam=a.beam)
     else:
-        sched = TinyScheduler(ws, beam=a.beam)
+        sched = TinyScheduler(_rp(a.weights),
+                              defer_weights=_rp(a.defer_weights),
+                              beam=a.beam)
     base = GreedyListScheduler()
     n = valid = opt = beat = 0
     gap_tiny = gap_base = 0

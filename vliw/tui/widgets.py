@@ -294,6 +294,9 @@ class Panel(Vertical):
         только второй, и то ради вложенных панелей: иначе разворачивались
         бы обе, и внутренняя, и внешняя.
         """
+        if isinstance(event.widget, Input):
+            event.stop()
+            return
         now = getattr(event, "time", 0.0) or time.monotonic()
         double = (now - self._last_click) <= self.DOUBLE_CLICK_S
         self._last_click = now

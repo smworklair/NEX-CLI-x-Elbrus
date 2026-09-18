@@ -487,6 +487,11 @@ vliw/
     repair.py        починка незаконных каналов в сыром ответе модели
     bench.py         замер на любом .jsonl, отвязан от встроенного эвала
     README.md        интерфейс, формат промпта, ссылка на веса на HF
+  tiny/            КРОШКИ: рабочий обученный планировщик (~21К параметров,
+                   инференс чистой стандартной библиотекой, миллисекунды).
+                   Веса лежат в git (килобайты, не гигабайты) — в отличие от
+                   learned/, ничего скачивать не нужно. Подробно и с замерами —
+                   [vliw/tiny/README.md](vliw/tiny/README.md), команда `/tiny`
   cli.py           ЕДИНАЯ точка входа: команда → core → ui → печать
   __main__.py      тонкий: вызывает cli.main()
 docs/
@@ -499,7 +504,9 @@ docs/
 ```python
 GreedyListScheduler   kind = "heuristic"   # baseline
 OracleScheduler       kind = "exact"       # точный поиск (потолок), НЕ «ИИ»
-LearnedScheduler      kind = "learned"     # обученная модель — обучена и работает
+LearnedScheduler      kind = "learned"     # обученная LLM — обучена и работает
+TinyScheduler         kind = "learned"     # крошки: MLP-приоритеты + поиск,
+                                           # законность по построению, см. /tiny
 
     def schedule(self, dag, model) -> SchedulingResult:  # общий контракт
         ...

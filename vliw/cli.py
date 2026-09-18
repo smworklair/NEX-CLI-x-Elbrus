@@ -18,6 +18,7 @@ import argparse
 import difflib
 import itertools
 import json
+import os
 import random as _random
 import re
 import subprocess
@@ -357,6 +358,47 @@ def _compare_learned(session: Session, dag, model, hl):
         for e in st["errors"][:4]:
             print("    " + Style.dim(e))
     return res
+
+
+def cmd_tiny(session: Session, arg: str) -> None:
+    """Крошки против baseline и oracle на текущем участке.
+
+    Веса лежат в vliw/tiny/weights*.json; без них — честный фолбэк на
+    baseline (планировщик сам так умеет, см. TinyScheduler). Считает
+    миллисекунды, поэтому печатается сразу, без отдельного экрана.
+    """
+    toks = arg.split()
+    if toks:
+        session.set_scenario(toks[0])
+    base, orc, _met = session.results()
+    dag, model = session.dag_obj, session.model()
+    from .tiny.scheduler import TinyScheduler
+    import time as _time
+    t0 = _time.perf_counter()
+    tiny = TinyScheduler()
+    res = tiny.schedule(dag, model)
+    dt = (_time.perf_counter() - t0) * 1000.0
+    errs = res.schedule.validate()
+    print(rule("крошки · " + dag.title))
+    print("  " + _header(session))
+    print()
+    print(f"  baseline : {base.schedule.makespan} т.")
+    print(f"  oracle   : {orc.schedule.makespan} т."
+          + (" (доказан)" if orc.optimal else ""))
+    print(f"  tiny     : {res.schedule.makespan} т. "
+          f"({res.search_stats.get('tiny_winner', '?')}, {dt:.1f} мс)")
+    print(f"  законно  : {'да' if not errs and res.schedule.complete else errs}")
+    for note in res.notes:
+        print("  " + Style.dim(note))
+    if res.schedule.makespan < base.schedule.makespan:
+        print("  " + paint("success", f"выигрыш у baseline: "
+                                      f"{base.schedule.makespan} -> {res.schedule.makespan}"))
+    elif res.schedule.makespan == base.schedule.makespan:
+        print("  " + Style.dim("вровень с baseline — хуже не стало"))
+    else:
+        print("  " + paint("warning", "ХУЖЕ baseline — так быть не должно, сообщите"))
+    print()
+    print(Style.dim("  дальше:  compare   doctor   bounds"))
 
 
 def cmd_play(session: Session, arg: str) -> None:
@@ -1118,13 +1160,124 @@ def cmd_ask(session: Session, arg: str) -> None:
     agent_view.stream_turn(session.agent(), q)
 
 
-def cmd_ai(session: Session, arg: str) -> None:
-    """Состояние языковой модели и как её настроить."""
+def _ai_save(updates: dict[str, str | None]) -> None:
+    """Применить настройки API на эту сессию (только память, без диска).
+
+    Ничего никуда не пишется осознанно: закрыл терминал — настроек нет.
+    Чтение ранее записанного вручную `.env` при этом работает как раньше.
+    """
+    for k, v in updates.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def _ai_status() -> None:
+    """Показать состояние модели (единый финал `/ai` и `/key`)."""
     from .agent import status
 
     print(rule("ЯЗЫКОВАЯ МОДЕЛЬ"))
     ok, detail = status()
     _out(agent_view.render_status(ok, detail))
+
+
+def cmd_ai(session: Session, arg: str) -> None:
+    """Состояние языковой модели; с аргументом — настройка за один заход.
+
+    Формы (всё вступает в силу сразу и только на эту сессию, без записи):
+      /ai                                        состояние
+      /ai deepseek                               сменить провайдера
+      /ai deepseek key=sk-...                    + вставить ключ (всё сразу)
+      /ai deepseek key=sk-... model=deepseek-chat + зафиксировать модель
+      /ai grok|anthropic|glm|muse|openrouter key=... model=...
+      /ai local-server url=http://localhost:11434/v1 model=...
+      /ai custom url=... model=... key=...       legacy: чужой сервер
+      /ai gigachat key=<id>:<secret>             Сбер (пара OAuth через двоеточие)
+      /ai yandex folder=... key=...              Yandex Cloud
+    Отдельная вставка ключа без смены провайдера — `/key` (см. `cmd_key`).
+    """
+    from .agent import llm
+    from .agent import envfile
+
+    toks = arg.split()
+    if not toks:
+        _ai_status()
+        return
+
+    prov = llm.normalize_provider(toks[0])
+    if prov is None or prov == "local":
+        print(paint("error", f"неизвестный провайдер {toks[0]!r}; "
+                             f"доступны: {', '.join(p for p in llm.PROVIDERS if p != 'local')}"))
+        return False
+    kv: dict[str, str] = {}
+    # Пробелы вокруг `=` терпим (`key = abc`): иначе ключ молча терялся,
+    # видели живьём. Внутри значений пробелов быть не может (ключи/URL/модели
+    # их не содержат), поэтому \S+ безопасен.
+    for m in re.finditer(r"([A-Za-z_]+)\s*=\s*(\S+)", arg):
+        kv[m.group(1).lower()] = m.group(2)
+
+    try:
+        updates = llm.provider_updates(prov, kv)
+    except llm.LLMError as e:
+        print(paint("error", str(e)))
+        return False
+
+    _ai_save(updates)
+    _ai_status()
+
+
+def _key_guide(prov: str) -> list[str]:
+    """Мини-гайд «что за ключ и где его взять» — вместо голой «форма:»."""
+    from .agent import llm
+
+    lines = ["Что такое ключ: строка с сайта провайдера — пропуск к ИИ.",
+             "Без него агент отвечает по уже посчитанным числам, это нормально."]
+    hint = llm.key_source_hint(prov)
+    if hint:
+        lines.append("  " + hint)
+    if prov == "gigachat":
+        lines.append("  вставить: /key <client_id> <client_secret>")
+        lines.append("  всё сразу: /ai gigachat key=<id>:<secret>")
+    else:
+        lines.append("  вставить: /key <ключ>")
+        lines.append(f"  всё сразу: /ai {prov} key=...")
+    return lines
+
+
+def cmd_key(session: Session, arg: str) -> None:
+    """Сохранить API-ключ текущего провайдера: /key <ключ>.
+
+    Куда ляжет — решает провайдер (`llm.key_updates`): одиночный ключ — в его
+    переменную, GigaChat — парой `/key <id> <secret>`. Действует сразу и
+    только на эту сессию: никуда не сохраняется, в выводе ключ маскируется.
+    Всё сразу одной командой — тоже можно: `/ai <провайдер> key=...`.
+    """
+    from .agent import llm
+    from .agent import envfile
+
+    toks = arg.split()
+    prov = llm.provider()
+    if prov == "local":
+        print(paint("error", "сейчас выбран local (веса на этой машине) — ключ не нужен. "
+                             "Сначала /ai <провайдер>."))
+        return False
+    try:
+        updates = llm.key_updates(prov, toks)
+    except llm.LLMError:
+        _out([Style.dim(l) for l in _key_guide(prov)])
+        return False
+    if prov == "gigachat":
+        shown = f"id {envfile.mask(toks[0])}"
+    else:
+        shown = f"{next(iter(updates))} {envfile.mask(toks[0])}"
+    if prov == "yandex" and not llm.setting("YANDEX_FOLDER_ID", ""):
+        print(paint("warning", "ключ сохранён, но нужен ещё каталог: "
+                               "/ai yandex folder=..."))
+
+    _ai_save(updates)
+    print(paint("success", f"принято на эту сессию: {shown} (нигде не сохраняется)"))
+    _ai_status()
 
 
 def cmd_status(session: Session, arg: str) -> None:
@@ -1607,6 +1760,7 @@ COMMANDS = [
     # --- расписание -------------------------------------------------------
     {"group": "sched", "name": "run", "arg": "<сценарий>", "help": "прогнать сценарий: расписание оракула + вердикт", "fn": cmd_run},
     {"group": "sched", "name": "compare", "arg": "[сценарий] [--model]", "help": "baseline и oracle бок о бок", "fn": cmd_compare},
+    {"group": "sched", "name": "tiny", "arg": "[сценарий]", "help": "крошки (tiny priority+defer+beam) против baseline и oracle", "fn": cmd_tiny},
     {"group": "sched", "name": "play", "arg": "[base|oracle]", "help": "воспроизвести расписание такт за тактом", "fn": cmd_play},
     {"group": "sched", "name": "asm", "arg": "[base|oracle]", "help": "расписание как широкие команды e2k { … }", "fn": cmd_asm},
     {"group": "sched", "name": "explain", "arg": "<такт>", "help": "почему в этом такте выбрали именно это", "fn": cmd_explain},
@@ -1629,7 +1783,8 @@ COMMANDS = [
     {"group": "runs", "name": "hard", "arg": "[--survey N] [--harvest N] [--jobs N]", "help": "есть ли на графе что выигрывать у эвристики; где брать трудные графы", "fn": cmd_hard},
     # --- агент · обучение ---------------------------------------------------
     {"group": "agent", "name": "ask", "arg": "<вопрос>", "help": "спросить агента", "fn": cmd_ask},
-    {"group": "agent", "name": "ai", "arg": "", "help": "состояние языковой модели", "fn": cmd_ai},
+    {"group": "agent", "name": "ai", "arg": "[провайдер] [key=…] [model=…]", "help": "состояние модели; /ai <провайдер> key=… — настроить за раз", "fn": cmd_ai},
+    {"group": "agent", "name": "key", "arg": "<ключ>", "help": "вставить API-ключ на эту сессию (нигде не сохраняется)", "fn": cmd_key},
     {"group": "agent", "name": "learned", "arg": "[--cab] [--constrained] [--bench N] [--data ФАЙЛ] [--pure]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
     {"group": "agent", "name": "agent", "arg": "", "help": "куда встраивается обученная модель", "fn": cmd_agent},
     # --- данные ---------------------------------------------------------------
@@ -1680,6 +1835,7 @@ HISTORY_SIZE = 1000
 _ARG_COMPLETIONS = {
     "run": lambda: list(SCENARIOS),
     "compare": lambda: list(SCENARIOS),
+    "tiny": lambda: list(SCENARIOS),
     "random": lambda: list(SCENARIOS),  # необязательно, но не мешает
     "model": lambda: list(PROFILES) + ["measured", "naive"],
     "play": lambda: ["baseline", "oracle"],

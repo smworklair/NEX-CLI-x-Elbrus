@@ -79,6 +79,32 @@ def stream_turn(agent, question: str) -> None:
     _emit("")
 
 
+def _next_hint(detail: str) -> str:
+    """Следующий шаг из текста ошибки — той же строкой «Дальше:», что у агента.
+
+    Порядок важен: сначала «ключ не от этого провайдера» (там уже есть
+    точная команда), потом общие случаи. Иначе при чужом ключе советовали
+    бы вставить его заново в тот же провайдер — бессмысленно.
+    """
+    if "OpenRouter" in detail:
+        return "Дальше: /ai openrouter key=..."
+    if "похож на Gemini" in detail:
+        return "Дальше: /ai gemini"
+    if "не похож на Gemini" in detail:
+        return "Дальше: /ai mistral"
+    if "GigaChat" in detail and "переключите" in detail:
+        return "Дальше: /ai gigachat key=<id>:<secret>"
+    if "вставьте заново" in detail:
+        return "Дальше: /key <ключ>"
+    if "вставьте:" in detail or "вставьте :" in detail or "вставьте" in detail:
+        return "Дальше: /key <ключ>"
+    if "квота" in detail:
+        return "Дальше: /ai <другой провайдер>"
+    if "модель не найдена" in detail:
+        return "Дальше: /ai — там видно текущую модель"
+    return ""
+
+
 def render_status(ok: bool, detail: str) -> list[str]:
     from ..agent import llm
 
@@ -86,7 +112,7 @@ def render_status(ok: bool, detail: str) -> list[str]:
     if ok:
         out.append("  " + paint("success", "доступна") + Style.dim(f"   {detail}"))
     else:
-        out.append("  " + paint("error", "нет сети") + Style.dim(f"   {detail[:160]}"))
+        out.append("  " + paint("error", "не работает") + Style.dim(f"   {detail[:160]}"))
         out += wrap(Style.dim(
             "агент отвечает по уже посчитанным числам, без свободной формулировки."),
             render.W, "  ")
@@ -96,10 +122,30 @@ def render_status(ok: bool, detail: str) -> list[str]:
         # В локальном режиме строка про ключ была бы враньём: ключ не нужен,
         # в сеть агент не ходит вовсе.
         out.append("  " + Style.dim("где     на этой машине, без сети и без ключа"))
-        out.append("  " + Style.dim("смена   NEX_PROVIDER=mistral|gemini  (нужен ключ)"))
+        out.append("  " + Style.dim(
+            "смена   /ai " + "|".join(p for p in llm.PROVIDERS if p != "local")
+            + "  (нужен ключ)"))
     else:
-        out.append("  " + Style.dim("ключ    NEX_API_KEY  или  ~/.config/nex/key"))
-        out.append("  " + Style.dim("смена   NEX_PROVIDER=local|mistral|gemini   NEX_MODEL=…"))
+        out.append("  " + Style.dim("ключ    /key <ключ>  (только на сессию, нигде не хранится)"))
+        try:
+            # Что реально сохранено (маской): склеенный дважды ключ виден
+            # сразу по длине, не дожидаясь 401 от сервера.
+            from ..agent import envfile
+
+            prov = llm.provider()
+            if prov in llm.KEY_VAR:
+                cur = llm.api_key()
+                if cur:
+                    out.append("  " + Style.dim(f"сейчас  {envfile.mask(cur)}"))
+        except Exception:
+            pass
+        out.append("  " + Style.dim(
+            "смена   /ai " + "|".join(p for p in llm.PROVIDERS if p != "local")))
+        out.append("  " + Style.dim("всё сразу  /ai deepseek key=sk-... model=..."))
+    if not ok:
+        hint = _next_hint(detail)
+        if hint:
+            out.append("  " + paint("work", hint))
     out.append("")
     out += wrap(Style.dim(
         "числа считает ядро. перепроверить: doctor  ·  compare"), render.W, "  ")

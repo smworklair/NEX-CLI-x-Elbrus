@@ -725,9 +725,54 @@ ModeScreen.very-low #p-detail  { min-height: 3; }
     margin-bottom: 1;
 }
 
-#p-seen  { height: 10; }
-#p-trace { height: 1fr; min-height: 6; }
-#p-mind-console { height: 8; }
+/* Правая колонка АГЕНТА: ШТАБ главный (1fr — забирает свободное место),
+   ТРАССА — остатки, ПОДКЛЮЧЕНИЕ и ЧТО ВИДИТ — компактные мини-блоки.
+   Сумма минимумов обязана влезать в 24 строки (см. TestNothingFallsBelowTheFold),
+   поэтому мини-статусы короткие: лишнее — только в развороте. */
+#p-hq    { height: 1fr; min-height: 8; }
+#p-model  { height: auto; max-height: 12; }
+#p-seen   { height: 7; }
+#p-trace  { height: 1fr; min-height: 5; }
+
+/* Сводка агента длиннее панели на низком терминале — обрезать, а не
+   выпирать за край (тот же приём, что у #machine в РАЗБОРЕ). */
+#seen { height: auto; max-height: 100%; overflow-y: hidden; }
+
+/* ПОДКЛЮЧЕНИЕ мини: провайдеры + строка ключа с кнопкой. */
+#model-mini { height: auto; }
+#model-provs-mini { height: auto; }
+#model-mini-row { height: 3; margin-top: 1; }
+#model-key-mini { width: 1fr; height: 3; }
+#model-go { width: auto; height: 3; margin-left: 1; }
+
+/* ПОДКЛЮЧЕНИЕ в развороте: секции, списки с потолком. */
+#model-wide { height: 1fr; }
+#model-wide Input { height: 3; margin-bottom: 1; }
+#model-provs, #model-presets { height: auto; }
+#model-status, #model-note, #model-local-help, #model-filter-help,
+#model-sec-prov, #model-sec-key, #model-sec-local, #model-sec-list,
+#model-sec-manual {
+    height: auto;
+    margin: 1 0;
+}
+#model-list { height: auto; max-height: 16; scrollbar-size-vertical: 1; }
+#model-folder, #model-manual, #model-url { height: 3; }
+#p-model.-maximized #model-list { max-height: 100%; height: 1fr; }
+
+/* ШТАБ: задача всегда видна, детали — только в развороте. */
+#hq-mini { height: auto; }
+#hq-task { height: 3; margin-top: 1; }
+#hq-wide { height: 1fr; }
+#hq-wide Input { height: 3; margin-bottom: 1; }
+#hq-conns, #hq-areas { height: auto; }
+#hq-area-desc, #hq-note, #hq-sec-conn, #hq-sec-area, #hq-sec-script,
+#hq-sec-list {
+    height: auto;
+    margin: 1 0;
+}
+#hq-actions { height: auto; }
+#hq-list { height: auto; max-height: 24; scrollbar-size-vertical: 1; }
+#p-hq.-maximized #hq-list { max-height: 100%; height: 1fr; }
 
 /* --- узкое окно --------------------------------------------------------- */
 
@@ -736,7 +781,6 @@ ModeScreen.narrow #lab-right { width: 40; }
 ModeScreen.narrow #mind-right { width: 38; }
 
 ModeScreen.narrow #p-console { height: 11; }
-ModeScreen.narrow #p-mind-console { height: 6; }
 ModeScreen.narrow #p-seen { height: 9; }
 
 ModeScreen.tight #core-right,
@@ -748,6 +792,23 @@ ModeScreen.tight #p-scen,
 ModeScreen.tight #p-questions { display: none; }
 
 ModeScreen.tight #p-console { height: 8; }
+
+/* --- АГЕНТ на низком терминале (после правил ширины: при равной
+   специфичности побеждает то, что ниже) --------------------------------- */
+
+/* Низкий: штаб жмётся к содержимому (без fr-запаса), сначала худеет
+   ЧТО ВИДИТ, потом ТРАССА. */
+ModeScreen.low #p-hq    { height: auto; }
+ModeScreen.low #p-seen  { height: 5; }
+ModeScreen.low #p-trace { min-height: 3; }
+
+/* Очень низкий: ЧТО ВИДИТ и кнопки API прячутся целиком — те же факты
+   отдаёт TAB у развёрнутого ШТАБА, ключ вводится в поле ниже, а панели
+   вернутся на терминале повыше. */
+ModeScreen.very-low #p-seen         { display: none; }
+ModeScreen.very-low #p-trace        { min-height: 3; }
+ModeScreen.very-low #p-hq           { min-height: 7; }
+ModeScreen.very-low #model-provs-mini { display: none; }
 
 /* --- КОД: редактор, нижний док, строка состояния ----------------------- */
 /*

@@ -142,12 +142,12 @@ def status(name: str | None = None) -> tuple[bool, list[str]]:
         lines.append(f"ОЗУ на машине: {mem:.1f} ГБ")
         if mem < 12:
             lines.append(
-                "  ВНИМАНИЕ: Qwen2.5-3B даже в bfloat16 занимает ~6.2 ГБ плюс "
-                "активации. На этой машине запуск будет уходить в своп и "
-                "считаться минутами на граф, а то и не поднимется вовсе.")
+                "  ВНИМАНИЕ: Phi-4-mini даже в 4 битах занимает ~2.4 ГБ плюс "
+                "активации и KV-кэш. На этой машине запуск будет уходить в своп и "
+                "считаться минутами, а то и не поднимется вовсе.")
             lines.append(
                 "  Разумный путь для CPU — 4-битный GGUF через llama.cpp "
-                "(~2 ГБ): см. docs/LEARNED.md.")
+                "(~2.4 ГБ): см. docs/LEARNED.md.")
 
     # llama.cpp — основной путь на CPU, проверяем его первым.
     lines.append("")
@@ -413,9 +413,9 @@ def make_backend(adapter: Adapter, device: str | None = None,
        до строки — это те же веса и `temperature=0`.
     2. `llama-completion` — процесс на каждый запрос. Остаётся запасным: он
        не требует сокета и проверен дольше.
-    3. `transformers` — эталонный путь, им гонялись замеры на Kaggle, и на
-       машине с GPU он предпочтительнее. База в bfloat16 занимает 6.2 ГБ
-       против 2.1 ГБ у 4-битного GGUF, поэтому на CPU он последний.
+     3. `transformers` — эталонный путь, им гонялись замеры на Kaggle, и на
+        машине с GPU он предпочтительнее. База в bfloat16 занимает ~7 ГБ
+        против 2.4 ГБ у 4-битного GGUF, поэтому на CPU он последний.
     """
     if prefer in ("auto", "llama-server"):
         ok, problems = llama_server_ready(adapter)
@@ -704,8 +704,15 @@ def shared_server():
         # Пустой список адаптеров — не ошибка: разговор идёт на голой базе,
         # и агенту обученные веса не нужны вовсе. Наличие адаптера для
         # ПЛАНИРОВЩИКА проверяет `llama_server_ready()`, до этого места.
-        adapters = [(a.name, gguf_adapter_for(a)) for a in find_adapters()]
-        adapters = [(n, p) for n, p in adapters if p is not None]
+        #
+        # LoRA-адаптеры проекта обучены ПОД QWEN и на чужой базе сервер
+        # упадёт при старте — поэтому цепляем их только к qwen-базе.
+        # Планировщик на LoRA при этом недоступен (крошки в vliw/tiny/ его
+        # уже заменили быстрее и точнее), разговор идёт на голой базе.
+        adapters: list[tuple[str, Path]] = []
+        if base_family(base) == "qwen":
+            adapters = [(a.name, gguf_adapter_for(a)) for a in find_adapters()]
+            adapters = [(n, p) for n, p in adapters if p is not None]
         # Контекст фиксируется при старте, поэтому его хватать должно ОБОИМ
         # режимам, а не только планировщику. Замерено: системный промпт
         # агента — 1451 токен (факты об участке, матрица портов, находки
@@ -781,12 +788,41 @@ def find_llama_binary() -> Path | None:
     return None
 
 
+def base_family(base: Path | None = None) -> str:
+    """Семейство базы: 'qwen' или имя файла без суффикса ('gemma-4-E4B-it', ...).
+
+    Нужно, потому что обученные LoRA-адаптеры проекта (qwen-vliw-lora и др.)
+    привязаны к весам Qwen2.5-3B и на чужой базе сервер не стартует вовсе.
+    """
+    name = (base or find_gguf_base() or Path("")).name.lower()
+    if "qwen" in name:
+        return "qwen"
+    return (base or find_gguf_base() or Path("unknown")).stem or "unknown"
+
+
 def find_gguf_base() -> Path | None:
-    """Квантованная база в vendor/models. Адаптеры (…-f16.gguf) исключаем."""
-    for p in sorted((VENDOR / "models").glob("*.gguf")):
-        if not p.name.endswith("-f16.gguf"):
-            return p
-    return None
+    """Квантованная база в vendor/models. Адаптеры (…-f16.gguf) исключаем.
+
+    Если баз несколько — порядок предпочтения: phi, затем gemma, затем
+    любая не-qwen, в конце qwen (retired, см. vendor/models/_retired/).
+    Актуальная база агента — Phi-4-mini.
+    """
+    cands = sorted(p for p in (VENDOR / "models").glob("*.gguf")
+                   if not p.name.endswith("-f16.gguf"))
+    if not cands:
+        return None
+
+    def rank(p: Path) -> int:
+        n = p.name.lower()
+        if "phi" in n:
+            return 0
+        if "gemma" in n:
+            return 1
+        if "qwen" not in n:
+            return 2
+        return 3
+
+    return sorted(cands, key=lambda p: (rank(p), p.name))[0]
 
 
 def gguf_adapter_for(adapter: Adapter) -> Path | None:

@@ -147,5 +147,36 @@ class TestMachineFacts(unittest.TestCase):
         self.assertIn("ТОЛЬКО из блока ФАКТЫ", context.SYSTEM)
 
 
+class TestTinyFactsInGrounding(unittest.TestCase):
+    """Агент в курсе крошек: третья цифра планирования — в фактах и в офлайне.
+
+    Синергия односторонняя и честная: крошки считаются детерминированно,
+    агент только пересказывает готовое число. Проверяется та половина, что
+    контролируем мы: число в фактах совпадает с прямым прогоном TinyScheduler.
+    """
+
+    def test_facts_match_direct_tiny_run(self):
+        from vliw.tiny.scheduler import TinyScheduler
+
+        s = session()
+        lines = context.tiny_facts(s)
+        self.assertEqual(len(lines), 1)
+        res = TinyScheduler().schedule(s.dag_obj, s.model())
+        self.assertIn(str(res.schedule.makespan), lines[0])
+        self.assertIn(res.search_stats.get("tiny_winner", "?"), lines[0])
+
+    def test_no_schedule_no_facts(self):
+        s = Session(args=SimpleNamespace(budget=5.0, portfolio=1.0),
+                    scenario="slotclash")
+        self.assertEqual(context.tiny_facts(s), [])
+
+    def test_build_contains_tiny(self):
+        self.assertIn("крошки", context.build(session(), include_layout=True))
+
+    def test_offline_answer_mentions_tiny(self):
+        a = Agent(session=session())
+        self.assertIn("крошки", a.offline_answer("почему этот участок медленный?"))
+
+
 if __name__ == "__main__":
     unittest.main()

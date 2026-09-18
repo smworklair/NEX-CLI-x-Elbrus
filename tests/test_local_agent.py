@@ -1,6 +1,6 @@
 """Агент на локальной модели: выбор провайдера и маршрутизация.
 
-Настоящая модель здесь не поднимается — 2.1 ГБ весов не место в тесте.
+Настоящая модель здесь не поднимается — ~5 ГБ весов не место в тесте.
 Проверяется выбор пути и то, что публичные функции `llm` действительно
 уезжают в локальный клиент, а не в сеть. Ошибка здесь выглядела бы как
 молчаливый поход в интернет с ключом, которого нет, — то есть как «агент не
@@ -19,13 +19,17 @@ class TestProviderChoice(unittest.TestCase):
     """Кто отвечает: локальная модель, Le Chat или Gemini."""
 
     def _with(self, env: dict, local_ready: bool = True, key: str = ""):
+        # Настоящий `.env` проекта глушим: иначе выбор провайдера зависит от
+        # того, что пользователь сохранил себе через `/ai` (см. `setting()`),
+        # и тест становится недетерминированным от машины к машине.
         return (mock.patch.dict(llm.os.environ, env, clear=False),
                 mock.patch.object(local, "ready", lambda: local_ready),
-                mock.patch.object(llm, "_raw_key", lambda: key))
+                mock.patch.object(llm, "_raw_key", lambda: key),
+                mock.patch.object(llm, "_dotenv_values", lambda: {}))
 
     def _provider(self, env, local_ready=True, key=""):
-        a, b, c = self._with(env, local_ready, key)
-        with a, b, c:
+        a, b, c, d = self._with(env, local_ready, key)
+        with a, b, c, d:
             return llm.provider()
 
     def test_explicit_local_wins(self) -> None:
@@ -64,7 +68,7 @@ class TestRouting(unittest.TestCase):
         self.addCleanup(patcher.stop)
         # Если маршрутизация сломается, тест упадёт здесь, а не втихую уйдёт
         # в интернет.
-        net = mock.patch.object(llm, "_call",
+        net = mock.patch.object(llm, "_make_backend",
                                 mock.Mock(side_effect=AssertionError(
                                     "локальный режим не должен ходить в сеть")))
         net.start()
@@ -87,7 +91,7 @@ class TestRouting(unittest.TestCase):
             self.assertEqual(llm.check(), (True, "готово"))
 
     def test_describe_says_where_it_runs(self) -> None:
-        with mock.patch.object(local, "model_label", lambda: "qwen.gguf"):
+        with mock.patch.object(local, "model_label", lambda: "Phi-4-mini-instruct-Q4_K_M.gguf"):
             self.assertIn("локально", llm.describe())
             self.assertTrue(llm.is_local())
 

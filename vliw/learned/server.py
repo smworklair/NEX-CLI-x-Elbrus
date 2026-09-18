@@ -244,12 +244,12 @@ class LlamaServer:
         self._active = name
 
     def select_base(self) -> None:
-        """Погасить все адаптеры: остаётся голая база Qwen2.5-3B-Instruct.
+        """Погасить все адаптеры: остаётся голая база (сейчас Phi-4-mini).
 
         Обученный адаптер учит модель ровно одному — писать строки расписания.
         Для разговора он не нужен и вреден: спросишь «почему медленно» —
         получишь `0: такт=0 канал=1`. Разговор идёт на базе, планирование —
-        на адаптере, процесс при этом один и тот же.
+        на крошках из `vliw/tiny/`, процесс при этом один и тот же.
         """
         if not self._ids:
             return
@@ -273,17 +273,19 @@ class LlamaServer:
              max_tokens: int = 700, timeout: float = 900.0):
         """Разговор с базовой моделью. Поток кусков текста.
 
-        `/v1/chat/completions`, а не `/completion`: шаблон диалога у Qwen свой
-        (ChatML), и собирать его руками значило бы завести вторую копию
-        формата — ту самую ошибку, из-за которой случился EOS-баг. Сервер
-        знает шаблон из самого GGUF и применяет его сам.
+        `/v1/chat/completions`, а не `/completion`: шаблон диалога у базы свой
+        (у Gemma 4 — gemma-шаблон с особыми EOS), и собирать его руками значило
+        бы завести вторую копию формата — ту самую ошибку, из-за которой
+        случился EOS-баг. Сервер знает шаблон из самого GGUF и применяет его
+        сам.
         """
         with self.using(None):
             conn = self._connect(timeout)
             try:
                 body = json.dumps({"messages": messages,
                                    "temperature": temperature,
-                                   "max_tokens": max_tokens, "stream": True})
+                                   "max_tokens": max_tokens, "stream": True,
+                                   **self._chat_kwargs()})
                 conn.request("POST", "/v1/chat/completions", body=body,
                              headers={"Content-Type": "application/json"})
                 resp = conn.getresponse()
@@ -308,6 +310,19 @@ class LlamaServer:
                         yield piece
             finally:
                 conn.close()
+
+    def _chat_kwargs(self) -> dict:
+        """Доп. поля тела /v1/chat/completions под семейство базы.
+
+        Gemma 4 — hybrid-thinking: по умолчанию уходит думать и съедает весь
+        бюджет токенов мыслью вслух, а в `content` приезжает пустота
+        (замерено: 300 токенов в никуда, finish=length). Нам рассуждения
+        не нужны — числа уже посчитаны ядром, модель только формулирует.
+        Qwen-базе этот флаг не шлём: её шаблон такого параметра не знает.
+        """
+        if "gemma" in self.base_gguf.name.lower():
+            return {"chat_template_kwargs": {"enable_thinking": False}}
+        return {}
 
     def complete(self, prompt: str, n_predict: int, adapter: str | None = None,
                  timeout: float = 900.0, temperature: float = 0.0,

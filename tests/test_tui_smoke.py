@@ -3946,5 +3946,588 @@ class TestNoDuplicateIds(unittest.TestCase):
         asyncio.run(go())
 
 
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestAgentKeyPaste(unittest.TestCase):
+    """Вставка API-ключа прямо в АГЕНТЕ: просьба при входе, приём, маскировка.
+
+    Только экран АГЕНТА: панельные чаты и построчный режим отвечают офлайн
+    молча, как раньше. Ключ нигде не светится: ни в ленте, ни в истории
+    строки (↑), только маска в подтверждении.
+    """
+
+    @staticmethod
+    def _isolated():
+        """Временный `.env` + пустое окружение + check без сети."""
+        import tempfile
+        import unittest.mock as mock
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from vliw.agent import llm
+
+        tmp = tempfile.mkdtemp(prefix="nex-key-")
+        return (tmp,
+                patch.object(llm, "_PROJECT_ROOT", Path(tmp)),
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(llm, "check", lambda: (True, "mock")))
+
+    def test_entry_asks_for_key_when_none(self):
+        async def go():
+            from vliw.tui.widgets import PromptBar
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        bar = sc.query_one("#prompt", PromptBar)
+                        return sc._awaiting_key, bar.input.placeholder
+
+        awaiting, placeholder = asyncio.run(go())
+        self.assertTrue(awaiting, "без ключа АГЕНТ должен просить ключ")
+        self.assertIn("API-ключ", placeholder)
+
+    def test_pasted_key_saved_masked_and_not_in_history(self):
+        key = "k" * 32
+
+        # Печатаем через настоящую строку ввода — тем же путём, что человек:
+        # строка падает в history ДО обработки, вычищать её — работа экрана.
+        # Ключ — только в память сессии: файла быть не должно вообще.
+        async def go():
+            import os as _os
+            from pathlib import Path
+
+            from vliw.tui.widgets import PromptBar
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        self.assertTrue(sc._awaiting_key)
+                        await pilot.press(*key, "enter")
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        bar = sc.query_one("#prompt", PromptBar)
+                        return {
+                            "awaiting": sc._awaiting_key,
+                            "env_key": _os.environ.get("MISTRAL_API_KEY", ""),
+                            "left_file": Path(tmp, ".env").exists(),
+                            "history": list(bar.history),
+                            "dialog": [m["text"] for m in session.dialog],
+                        }
+
+        got = asyncio.run(go())
+        self.assertFalse(got["awaiting"], "после вставки ждущий режим снят")
+        self.assertEqual(got["env_key"], key)
+        self.assertFalse(got["left_file"], "вставка не должна писать на диск")
+        self.assertNotIn(key, got["history"], "ключ остался в истории ↑")
+        self.assertFalse(any(key in t for t in got["dialog"]),
+                         "ключ попал в переписку")
+
+    def test_command_output_lands_in_dialog(self):
+        """Команда в АГЕНТЕ отвечает пузырём в диалог: консоли здесь нет.
+
+        GIT-панель убрана осознанно, и прятать отчёт команды некуда —
+        `/scenarios` (чистый список, без счёта) обязан оказаться в ленте.
+        """
+        async def go():
+            from rich.text import Text as _Text
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        await pilot.press(*"/scenarios", "enter")
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        sc = app.screen
+                        out = []
+                        for w in sc.query("Static"):
+                            try:
+                                r = w.render()
+                                out.append(r.plain if isinstance(r, _Text)
+                                           else str(r))
+                            except Exception:
+                                pass
+                        return "\n".join(out)
+
+        text = asyncio.run(go())
+        self.assertIn("slotclash", text)
+
+    def test_plain_question_goes_offline_not_into_key(self):
+        async def go():
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        self.assertTrue(sc._awaiting_key)
+                        await pilot.press(*"почему медленно?", "enter")
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        return sc._awaiting_key, len(session.dialog)
+
+        awaiting, n = asyncio.run(go())
+        self.assertFalse(awaiting, "вопрос вместо ключа снимает ожидание")
+        self.assertGreater(n, 0, "вопрос ушёл в диалог, а не потерялся")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestModelCatalogPanel(unittest.TestCase):
+    """Окно каталога моделей в АГЕНТЕ: мини-панель, разворот, клик применяет.
+
+    Всё только на сессию: ни один тест не пишет на диск, сеть глушится
+    (каталог — curated или мок).
+    """
+
+    @staticmethod
+    def _isolated():
+        import tempfile
+        import unittest.mock as mock
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from vliw.agent import llm
+
+        tmp = tempfile.mkdtemp(prefix="nex-model-")
+        return (tmp,
+                patch.object(llm, "_PROJECT_ROOT", Path(tmp)),
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(llm, "check", lambda: (True, "mock")))
+
+    @staticmethod
+    async def _click_center(pilot, widget, times: int = 1):
+        # Строка может быть ниже видимой области (каталог длинный):
+        # подматываем к ней. Клик — относительно виджета (так считает сам
+        # Pilot), а не экрана: координаты родителя здесь врут.
+        try:
+            from textual.containers import VerticalScroll as _VS
+
+            parent = widget.parent
+            while parent is not None and not isinstance(parent, _VS):
+                parent = parent.parent
+            if parent is not None:
+                parent.scroll_to_widget(widget, animate=False)
+                await pilot.pause()
+        except Exception:
+            pass
+        await pilot.click(widget, offset=(2, 0), times=times)
+
+    def test_mini_panel_shows_provider(self):
+        async def go():
+            from vliw.tui.widgets import Panel
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-model", Panel)
+                        texts = [str(w.render()) for w in panel.query("Static")]
+                        return "\n".join(texts)
+
+        text = asyncio.run(go())
+        self.assertIn("mistral", text)
+
+    def test_expand_shows_catalog(self):
+        async def go():
+            import unittest.mock as mock
+
+            from vliw.agent import models as catalog
+            from vliw.tui.widgets import Panel, Tool
+
+            rows = [catalog.ModelRow("deepseek-chat", "DeepSeek Chat", False)]
+            tmp, a, b, c = self._isolated()
+            with a, b, c, \
+                    mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "test-placeholder",
+                                                 "DEEPSEEK_API_KEY": "test-placeholder"}), \
+                    mock.patch.object(catalog, "catalog",
+                                      lambda prov, key="", base_url="":
+                                      (rows, "live")):
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-model", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        sc._connect_catalog()
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        tools = [t.tool for t in sc.query(Tool)]
+                        return sc._wide, tools
+
+        wide, tools = asyncio.run(go())
+        self.assertEqual(wide, "model")
+        self.assertIn("mprov:deepseek", tools)
+        self.assertTrue(any(t.startswith("model:") for t in tools),
+                        "в каталоге нет строк моделей")
+
+    def test_click_model_applies_and_closes(self):
+        async def go():
+            import os as _os
+            import unittest.mock as mock
+
+            from textual.widgets import Input
+
+            from vliw.agent import models as catalog
+            from vliw.tui.widgets import Panel, Tool
+
+            rows = [catalog.ModelRow("deepseek-chat", "DeepSeek Chat", False)]
+            tmp, a, b, c = self._isolated()
+            with a, b, c, \
+                    mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "test-placeholder",
+                                                 "DEEPSEEK_API_KEY": "test-placeholder"}), \
+                    mock.patch.object(catalog, "catalog",
+                                      lambda prov, key="", base_url="":
+                                      (rows, "live")):
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-model", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        sc._model_prov = "deepseek"
+                        await pilot.pause()
+                        sc._connect_catalog()
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        field = sc.query_one("#model-filter", Input)
+                        await self._click_center(pilot, field)
+                        await pilot.pause()
+                        await pilot.press(*"deepseek-chat")
+                        await pilot.pause()
+                        row = next(t for t in sc.query(Tool)
+                                   if t.tool == "model:deepseek-chat")
+                        await self._click_center(pilot, row)
+                        await pilot.pause()
+                        return (dict(_os.environ), sc._wide,
+                                sc.screen.maximized)
+
+        environ, wide, maximized = asyncio.run(go())
+        self.assertEqual(environ.get("NEX_PROVIDER"), "deepseek")
+        self.assertEqual(environ.get("NEX_MODEL"), "deepseek-chat")
+        self.assertIsNone(maximized, "после клика окно закрывается")
+
+    def test_key_field_adopts_without_disk(self):
+        async def go():
+            import os as _os
+            from pathlib import Path
+
+            from textual.widgets import Input
+
+            from vliw.tui.widgets import Panel
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-model", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        sc._model_prov = "deepseek"
+                        sc._draw_model_full()
+                        await pilot.pause()
+                        field = sc.query_one("#model-key", Input)
+                        await pilot.click(field, offset=(2, 0))
+                        await pilot.pause()
+                        await pilot.press(*"sk-test-0123456789abcdef", "enter")
+                        await pilot.pause()
+                        return (dict(_os.environ),
+                                field.value,
+                                Path(tmp, ".env").exists())
+
+        environ, cleared, left_file = asyncio.run(go())
+        self.assertEqual(environ.get("DEEPSEEK_API_KEY"), "sk-test-0123456789abcdef")
+        self.assertEqual(cleared, "", "ключ не остаётся в поле ввода")
+        self.assertFalse(left_file, "каталог не пишет на диск")
+
+    def test_free_first_with_mocked_catalog(self):
+        async def go():
+            import unittest.mock as mock
+
+            from vliw.agent import models as catalog
+            from vliw.tui.widgets import Panel, Tool
+
+            rows = [catalog.ModelRow("b-paid", "B", False),
+                    catalog.ModelRow("a-free:free", "A", True)]
+            tmp, a, b, c = self._isolated()
+            with a, b, c, \
+                    mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}), \
+                    mock.patch.object(catalog, "catalog",
+                                      return_value=(list(reversed(rows)), "live")) as fetch:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        sc._model_prov = "openrouter"
+                        panel = sc.query_one("#p-model", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        sc._connect_catalog()
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        got = [t.tool for t in sc.query(Tool)
+                               if t.tool.startswith("model:")]
+                        return got, fetch.call_args
+
+        got, call = asyncio.run(go())
+        self.assertEqual(got[:2], ["model:a-free:free", "model:b-paid"])
+        self.assertEqual(call.args[0], "openrouter")
+        self.assertEqual(call.args[1], "test-key")
+
+    def test_plain_question_goes_offline_not_into_key(self):
+        async def go():
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        self.assertTrue(sc._awaiting_key)
+                        await pilot.press(*"почему медленно?", "enter")
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        return sc._awaiting_key, len(session.dialog)
+
+        awaiting, n = asyncio.run(go())
+        self.assertFalse(awaiting, "вопрос вместо ключа снимает ожидание")
+        self.assertGreater(n, 0, "вопрос ушёл в диалог, а не потерялся")
+
+
+@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+class TestHeadquartersPanel(unittest.TestCase):
+    """ШТАБ — отдельный главный блок, ПОДКЛЮЧЕНИЕ — компактный мини-блок.
+
+    Штаб раньше жил внутри разворота МОДЕЛИ: без подключённой модели его
+    было не найти, а мини-панель не умела ни выбрать API, ни принять ключ.
+    Теперь штаб виден всегда (сводка + поле задачи), подключение чинится
+    в мини (кнопки API + ключ), а каталог с поиском-фильтром — только
+    в развороте. Всё только на сессию, сеть глушится моком.
+    """
+
+    @staticmethod
+    def _isolated():
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from vliw.agent import llm
+
+        tmp = tempfile.mkdtemp(prefix="nex-hq-")
+        return (tmp,
+                patch.object(llm, "_PROJECT_ROOT", Path(tmp)),
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(llm, "check", lambda: (True, "mock")))
+
+    @staticmethod
+    async def _click_center(pilot, widget, times: int = 1):
+        try:
+            from textual.containers import VerticalScroll as _VS
+
+            parent = widget.parent
+            while parent is not None and not isinstance(parent, _VS):
+                parent = parent.parent
+            if parent is not None:
+                parent.scroll_to_widget(widget, animate=False)
+                await pilot.pause()
+        except Exception:
+            pass
+        await pilot.click(widget, offset=(2, 0), times=times)
+
+    def test_hq_is_its_own_panel_with_mini_summary(self):
+        async def go():
+            from vliw.tui.widgets import Panel
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-hq", Panel)
+                        texts = [str(w.render())
+                                 for w in panel.query("Static")]
+                        task = sc.query_one("#hq-task")
+                        return panel.topic, "\n".join(texts), task is not None
+
+        topic, text, has_task = asyncio.run(go())
+        self.assertEqual(topic, "hq")
+        self.assertIn("нет подключений", text)
+        self.assertTrue(has_task, "поле задачи штаба видно без разворота")
+
+    def test_hq_expands_with_missions(self):
+        async def go():
+            from vliw.tui.widgets import Panel, Tool
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-hq", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        tools = [t.tool for t in sc.query(Tool)]
+                        return sc._wide, tools
+
+        wide, tools = asyncio.run(go())
+        self.assertEqual(wide, "hq")
+        self.assertIn("hqarea:doctor", tools)
+        self.assertIn("hqrun", tools)
+        self.assertIn("hqclear", tools)
+
+    def test_hq_run_without_connections_explains(self):
+        async def go():
+            from rich.text import Text as _Text
+
+            from vliw.tui.widgets import Panel
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-hq", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        sc._hq_run()
+                        await pilot.pause()
+                        note = sc.query_one("#hq-note")
+                        r = note.render()
+                        return r.plain if isinstance(r, _Text) else str(r)
+
+        self.assertIn("подключи", asyncio.run(go()))
+
+    def test_hqclear_keeps_working(self):
+        async def go():
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        sc._hq_tasks = [
+                            {"id": 1, "conn": "c", "area": "doctor",
+                             "question": "q1", "status": "done",
+                             "answer": "a"},
+                            {"id": 2, "conn": "c", "area": "doctor",
+                             "question": "q2", "status": "working",
+                             "answer": ""},
+                        ]
+                        sc.panel_tool("hqclear")
+                        await pilot.pause()
+                        return [t["id"] for t in sc._hq_tasks]
+
+        self.assertEqual(asyncio.run(go()), [2])
+
+    def test_mini_provider_switch_without_expanding(self):
+        async def go():
+            from vliw.tui.widgets import Panel, Tool
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        mini = sc.query_one("#model-provs-mini")
+                        row = next(t for t in mini.query(Tool)
+                                   if t.tool == "mprov:gemini")
+                        await self._click_center(pilot, row)
+                        await pilot.pause()
+                        marks = {t.tool: str(t.render())
+                                 for t in mini.query(Tool)}
+                        return sc._wide, sc._model_prov, marks
+
+        wide, prov, marks = asyncio.run(go())
+        self.assertEqual(wide, "", "выбор API не разворачивает панель")
+        self.assertEqual(prov, "gemini")
+        self.assertIn("●", marks["mprov:gemini"])
+
+    def test_mini_key_connects_without_disk(self):
+        async def go():
+            import os as _os
+            import unittest.mock as mock
+            from pathlib import Path
+
+            from textual.widgets import Input
+
+            from vliw.agent import models as catalog
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c, \
+                    mock.patch.object(catalog, "catalog",
+                                      lambda prov, key="", base_url="":
+                                      ([], "live")):
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        field = sc.query_one("#model-key-mini", Input)
+                        await self._click_center(pilot, field)
+                        await pilot.pause()
+                        await pilot.press(*"sk-test-0123456789abcdef",
+                                          "enter")
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        return (dict(_os.environ), field.value,
+                                Path(tmp, ".env").exists())
+
+        environ, cleared, left_file = asyncio.run(go())
+        self.assertEqual(environ.get("MISTRAL_API_KEY"),
+                         "sk-test-0123456789abcdef")
+        self.assertEqual(cleared, "", "ключ не остаётся в поле ввода")
+        self.assertFalse(left_file, "мини-подключение не пишет на диск")
+
+    def test_filter_help_says_it_filters(self):
+        async def go():
+            from textual.widgets import Static
+
+            from vliw.tui.widgets import Panel
+
+            tmp, a, b, c = self._isolated()
+            with a, b, c:
+                app, session = _make_app("mind")
+                with redirect_stdout(io.StringIO()):
+                    async with app.run_test(size=(120, 40)) as pilot:
+                        await pilot.pause()
+                        sc = app.screen
+                        panel = sc.query_one("#p-model", Panel)
+                        await self._click_center(pilot, panel, times=2)
+                        await pilot.pause()
+                        return str(sc.query_one("#model-filter-help",
+                                                Static).render())
+
+        self.assertIn("фильтр", asyncio.run(go()))
+
+
 if __name__ == "__main__":
     unittest.main()

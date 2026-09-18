@@ -18,12 +18,15 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 PY="${PY:-$ROOT/.venv/bin/python}"
 VENDOR="$ROOT/vendor"
-BUILD="b10488"
-BASE_REPO="Qwen/Qwen2.5-3B-Instruct-GGUF"
-BASE_FILE="qwen2.5-3b-instruct-q4_k_m.gguf"
-# Адаптеры, обученные в этом проекте. Лежат там же, где база, — на Hugging
-# Face: 115 МБ на файл, а git блокирует всё крупнее 100 МБ.
-# lora-merged — финальный; два других сохранены как этапы пути (см. карточку).
+BUILD="b10944"
+# Актуальная база агента: Phi-4-mini (MIT, без thinking, ~2.4 ГБ).
+# Переопределяется окружением, если понадобится другая
+# (но LoRA-адаптеры проекта — только под Qwen).
+BASE_REPO="${BASE_REPO:-unsloth/Phi-4-mini-instruct-GGUF}"
+BASE_FILE="${BASE_FILE:-Phi-4-mini-instruct-Q4_K_M.gguf}"
+# Адаптеры, обученные в этом проекте — ТОЛЬКО под Qwen2.5-3B (лежат в
+# vendor/models/_qwen_retired/). На чужой базе сервер с ними не стартует,
+# поэтому качаем только когда база — qwen.
 ADAPTER_REPO="Shmonika/nex-vliw-lora"
 ADAPTERS="lora-merged qwen-vliw-lora lora-eos"
 
@@ -50,19 +53,16 @@ if ! have "$VENDOR/llama-$BUILD/llama-completion"; then
   rm -f "$VENDOR/llama.tar.gz"
 fi
 
-# 2. Квантованная база. Единственная тяжёлая загрузка (2.1 ГБ).
+# 2. Квантованная база. Единственная тяжёлая загрузка (~2.4 ГБ).
 if ! have "$VENDOR/models/$BASE_FILE"; then
-  echo "== качаю базу $BASE_FILE (~2.1 ГБ) =="
+  echo "== качаю базу $BASE_FILE (~4.6 ГБ) =="
   curl -fL --progress-bar -o "$VENDOR/models/$BASE_FILE" \
     "https://huggingface.co/$BASE_REPO/resolve/main/$BASE_FILE"
 fi
 
-# 3. Адаптеры. Скачиваем ГОТОВЫЕ GGUF — те самые, что обучены в этом проекте.
-#    Раньше этого шага не было, и скрипт искал адаптеры в
-#    training/checkpoints/, куда они попадают только после собственного
-#    обучения. У скачавшего репозиторий эта папка пустая (веса в git не
-#    идут — 115 МБ на файл, потолок GitHub 100 МБ), поэтому конвертировать
-#    было нечего и модель молча не поднималась вовсе.
+# 3. Адаптеры — только под Qwen-базу (см. шапку). На Gemma/Phi сервер с ними
+#    не стартует, а планировщик на LoRA заменён крошками (vliw/tiny/).
+if [[ "$BASE_FILE" == *[Qq]wen* ]]; then
 for n in $ADAPTERS; do
   out="$VENDOR/models/$n-f16.gguf"
   have "$out" && { echo "== адаптер $n уже на месте =="; continue; }
@@ -71,6 +71,9 @@ for n in $ADAPTERS; do
     "https://huggingface.co/$ADAPTER_REPO/resolve/main/gguf/$n-f16.gguf" \
     || { echo "не скачался: $n"; rm -f "$out"; }
 done
+else
+  echo "== база не Qwen — адаптеры пропускаю (они только под Qwen) =="
+fi
 
 # 4. Конвертация СВОИХ адаптеров — путь автора, не скачавшего. Нужен только
 #    если в training/checkpoints/ лежит адаптер, которого нет в готовых GGUF:

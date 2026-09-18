@@ -332,6 +332,12 @@ class Agent:
         lines.append(f"Участок {s.scenario}: baseline {b} т., точный поиск {o} т., "
                      f"предел {met.lower_bound} т.")
         try:
+            from .context import tiny_facts
+
+            lines.extend(tiny_facts(s))
+        except Exception:
+            pass
+        try:
             d = diagnose(s.dag_obj, s.model(), base.schedule, met)
             losses = [f for f in d.findings if f.recoverable]
             if losses:

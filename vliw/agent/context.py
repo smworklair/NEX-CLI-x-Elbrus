@@ -35,7 +35,7 @@ SYSTEM = """\
    неудачном порядке, такты можно отыграть) и «предел машины» (ждать было
    правильно, быстрее нельзя).
 5. Если уместно, заканчивай одной строкой «Дальше:» с конкретной командой
-   (/doctor, /compare, /asm, /explain N, /load файл.s).
+   (/doctor, /compare, /tiny, /asm, /explain N, /load файл.s).
 6. Не используй Markdown-заголовки и таблицы — вывод идёт в терминал.
    Допустимы короткие списки через «—».
 """
@@ -163,12 +163,46 @@ def schedule_layout(session, which: str = "baseline", max_rows: int = 40) -> lis
     return out
 
 
+def tiny_facts(session) -> list[str]:
+    """Крошки против baseline: третья цифра в сравнении планировщиков.
+
+    Синергия в честную сторону: крошки считаются детерминированно (десятки
+    миллисекунд, без LLM), а агент получает готовое число и объясняет его —
+    наоборот (модель подсказывает планировщику) было бы выдумкой вместо
+    поиска. Без весов — молча пропускаем: портфель тогда равен baseline,
+    и строка была бы шумом, а не фактом.
+    """
+    cached = session.peek()
+    if cached is None:
+        return []
+    try:
+        from ..tiny.scheduler import TinyScheduler
+
+        res = TinyScheduler().schedule(session.dag_obj, session.model())
+    except Exception:
+        return []
+    errs = res.schedule.validate()
+    if errs or not res.schedule.complete:
+        return []
+    base, orc, _met = cached
+    b, o, t = base.schedule.makespan, orc.schedule.makespan, res.schedule.makespan
+    winner = res.search_stats.get("tiny_winner", "?")
+    if t >= b:
+        return [f"крошки (tiny, {winner}): {t} тактов — вровень с baseline, "
+                f"хуже не стало (оракул: {o})."]
+    return [f"крошки (tiny, {winner}): {t} тактов — лучше baseline ({b}), "
+            f"оракул: {o}."]
+
+
 def build(session, include_layout: bool = False) -> str:
     """Собрать блок ФАКТЫ для системной подсказки."""
     parts: list[str] = ["ФАКТЫ (единственный источник чисел):", ""]
     parts += machine_facts(session.model())
     parts.append("")
     parts += schedule_facts(session)
+    tiny = tiny_facts(session)
+    if tiny:
+        parts += tiny
     doc = doctor_facts(session)
     if doc:
         parts.append("")

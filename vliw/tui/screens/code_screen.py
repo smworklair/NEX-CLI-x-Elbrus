@@ -97,6 +97,46 @@ def example_title(name: str) -> str:
     return name
 
 
+_FILE_LINE_RE = re.compile(
+    r"(?:строк[аеиу]*\s*(\d+)|(\d+)\s*строк[аеиу]*|line\s*(\d+))", re.I)
+"""Номер строки в вопросе: «строка 12», «на 536 строке», «line 12»."""
+
+
+def excerpt_center(question: str, cursor: int, n_lines: int) -> int:
+    """Центр окна файла: номер из вопроса, иначе курсор. Всегда в [1, n]."""
+    m = _FILE_LINE_RE.search(question or "")
+    if m:
+        try:
+            num = next(int(g) for g in m.groups() if g is not None)
+            return min(max(num, 1), max(n_lines, 1))
+        except (ValueError, StopIteration):
+            pass
+    return min(max(cursor, 1), max(n_lines, 1))
+
+
+def file_excerpt(name: str, text: str, center: int, window: int = 15) -> list[str]:
+    """Окно открытого не-asm файла для агента: пронумерованные строки.
+
+    Чистая функция (тестируется без UI). Строки режем до 160 символов —
+    иначе один широкий README съест весь префилл. Центр помечаем `>>>`,
+    чтобы модель различала «где стою/спросили» и «что рядом».
+    """
+    lines = text.splitlines()
+    n = len(lines)
+    if not n or not any(s.strip() for s in lines):
+        return [f"открыт файл {name}: пуст"]
+    center = min(max(center, 1), n)
+    lo = max(1, center - window)
+    hi = min(n, center + window)
+    out = [f"открыт файл {name} (не e2k, разбора нет), всего строк: {n}, "
+           f"показываю {lo}–{hi}"]
+    width = len(str(hi))
+    for i in range(lo, hi + 1):
+        mark = ">>>" if i == center else "   "
+        out.append(f"{mark} {str(i).rjust(width)}: {lines[i - 1][:160]}")
+    return out
+
+
 CONT = "═"        # клетка занята продолжением длинной операции
                   # (тянется вправо: решётка развёрнута, см. _fill_grid)
 EMPTY = "·"
@@ -2714,7 +2754,7 @@ class CodeScreen(ModeScreen):
         состояние прогрева пишется сразу, ДО первого токена, и с честной
         оценкой, сколько ждать.
         """
-        facts = self.panel_facts(self._ai_topic())
+        facts = self.panel_facts(self._ai_topic(), question)
         dialog = self.app.session.dialog
         dialog.append({"role": "you", "text": question, "facts": facts})
         dialog.append({"role": "nex", "text": "", "facts": [],
@@ -5769,9 +5809,9 @@ class CodeScreen(ModeScreen):
 
     # --- факты для ИИ ------------------------------------------------------
 
-    def panel_facts(self, topic: str) -> list[str]:
+    def panel_facts(self, topic: str, question: str = "") -> list[str]:
         if topic == "code":
-            return self._code_facts()
+            return self._code_facts(question)
         if topic == "sched":
             return self._sched_facts()
         if topic == "lint":
@@ -5792,9 +5832,30 @@ class CodeScreen(ModeScreen):
         out += [f"{n} = {v}" for n, v in list(ws.regs.items())[:8]]
         return out
 
-    def _code_facts(self) -> list[str]:
-        if self.parsed is None or not self.parsed.ops:
+    def _code_facts(self, question: str = "") -> list[str]:
+        if self.parsed is not None and self.parsed.ops:
+            return self._asm_facts()
+        # Не-asm буфер (README.md и т.п.): разбора нет, но текст у нас есть —
+        # раньше агент получал «буфер пуст» и честно отказывался отвечать про
+        # строки файла. Теперь отдаём окно вокруг запрошенной строки (номер
+        # ищем в вопросе) или курсора.
+        try:
+            rec = self.files[self.file_i]
+            text = rec.get("text", "") or ""
+            name = rec.get("name", "?")
+        except Exception:
             return ["буфер пуст"]
+        if not text.strip():
+            return ["буфер пуст"]
+        try:
+            cursor = self.query_one("#code-edit", AsmArea).cursor_location[0] + 1
+        except Exception:
+            cursor = 1
+        center = excerpt_center(question, cursor, len(text.splitlines()))
+        return file_excerpt(name, text, center)
+
+    def _asm_facts(self) -> list[str]:
+        """Факты по разобранному .s-буферу (старое тело _code_facts)."""
         model = self.app.session.model()
         line = self.query_one("#code-edit", AsmArea).cursor_location[0] + 1
         out = [f"в буфере {len(self.parsed.ops)} операций, "

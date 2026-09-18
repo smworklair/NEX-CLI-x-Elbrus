@@ -57,6 +57,31 @@ def parse_graph_entries(prompt: str) -> list[tuple[int, str, tuple[int, ...]]]:
     return out
 
 
+def transitive_succs(succs: list[tuple[int, ...]], n: int) -> list[frozenset]:
+    """Транзитивные потомки каждого узла (мемоизированный DFS, DAG без циклов).
+
+    Вынесено отдельно от featurize: нужно и правилу монопольного порта
+    (`scheduler.rule_holds`), и разборам проигрышей.
+    """
+    memo: dict[int, frozenset] = {}
+
+    def reach(i: int) -> frozenset:
+        if i in memo:
+            return memo[i]
+        out: set[int] = set()
+        stack = list(succs[i])
+        while stack:
+            j = stack.pop()
+            if j in out or j == i:
+                continue
+            out.add(j)
+            stack.extend(succs[j])
+        memo[i] = frozenset(out)
+        return memo[i]
+
+    return [reach(i) for i in range(n)]
+
+
 def build_dag(entries: list[tuple[int, str, tuple[int, ...]]], key: str = "tmp") -> DAG:
     """Собрать DAG из распарсенных строк (id обязаны идти подряд)."""
     b = DagBuilder(key, "", "")

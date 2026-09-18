@@ -71,6 +71,40 @@ class TestTiny(unittest.TestCase):
         self.assertEqual(res.schedule.validate(), [])
 
 
+class TestRuleHolds(unittest.TestCase):
+    """Ручные держки монопольного порта: формат и законность варианта.
+
+    Правило чинит класс «дырка под DIV» (граф 7 eval_hard: жадный забивает
+    порт ,5 некритичным DIV, критичный ждёт). Портфель берёт вариант,
+    только если он строго лучше, — здесь проверяем, что вариант всегда
+    считается и законен, когда держки есть. Выигрыш меряют eval/verify,
+    а не юниты.
+    """
+
+    def test_holds_shape_and_variant_legal(self):
+        from vliw.core.baseline import list_schedule
+        from vliw.core.dag import compute_metrics
+
+        m = get_profile("e2k-v6-measured")
+        s = TinyScheduler(weights="/nonexistent/weights.json")
+        for key in ("simple4", "slotclash", "memstream", "loadchain",
+                    "mixed18"):
+            dag = get_scenario(key)
+            base = GreedyListScheduler().schedule(dag, m).schedule.makespan
+            height = compute_metrics(dag, m).height
+            prio = [float(h) for h in height]
+            for holds in (s.rule_holds(dag, m, base),
+                          s.rule_holds_far(dag, m, base)):
+                for i, c in holds.items():
+                    self.assertIn(i, range(len(dag)))
+                    self.assertTrue(0 < c <= base)
+                if holds:
+                    r, _ = list_schedule(dag, m, priority=prio,
+                                         defer_until=holds, height=height)
+                    self.assertEqual(r.validate(), [])
+                    self.assertTrue(r.complete)
+
+
 class TestEvalFlags(unittest.TestCase):
     """Флаги эвала для абляции: --beam и --ignore-weights."""
 

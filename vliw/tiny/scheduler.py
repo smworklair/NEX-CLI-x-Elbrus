@@ -10,6 +10,13 @@
                 другой член портфеля: min по супермножеству не бывает хуже.
   beam_d*     — веер по держкам (джиттер holds): ранним contention-держкам
                 вида «держи три такта», которые сеть даёт как одну.
+  rule_hold   — ручное правило монопольного порта (без ML): не занимать
+                узкий канал некритичной операцией, если скоро придёт более
+                критичный конкурент за тот же канал. Дырки, которые prio
+                выразить не может, а defer-сеть не выучила. Ближний вариант
+                (окно от asap).
+  rule_hold_far — то же, дальний вариант (окно от выдачи жадного): дальние
+                разрывы до конкурента, хвост вместо первой держки.
   beam_h_*/beam_t_* — крошка-3 веер: детерминированный джиттер порядка
                 вокруг двух центров (нормированный height и скоры крошки-1,
                 K=16 каждый), точный выбор по makespan. Не модель, а поиск:
@@ -106,6 +113,86 @@ class TinyScheduler:
         """То же другой головой (цель hold). Отдельный член портфеля."""
         return self._holds_of(self.hold, dag, model, limit)
 
+    def _rule_common(self, dag: DAG, model: MachineModel):
+        """Общее для ручных правил: метрики, каналы, достижимость, выдача жадного."""
+        from .features import transitive_succs
+
+        n = len(dag)
+        metrics = compute_metrics(dag, model)
+        chans = [frozenset(model.channels_for(ins.op)) for ins in dag]
+        occs = [model.occupancy(ins.op) for ins in dag]
+        reach = transitive_succs(dag.succs, n)
+        gt = {p.instr: p.cycle
+              for p in GreedyListScheduler().schedule(dag, model)
+              .schedule.placements.values()}
+        return n, metrics.height, metrics.asap, chans, occs, reach, gt
+
+    @staticmethod
+    def _contenders(i: int, chans, reach, n: int) -> list[int]:
+        """Конкуренты за тот же монопольный канал, не связанные с X."""
+        return [j for j in range(n)
+                if j != i and chans[j] == chans[i]
+                and i not in reach[j] and j not in reach[i]]
+
+    def rule_holds(self, dag: DAG, model: MachineModel, limit: int) -> dict[int, int]:
+        """Ручное правило монопольного порта, ближний вариант: держка без ML.
+
+        Случай из разбора (граф 7 eval_hard): в t.0 готовы ADD и DIV 11,
+        порт ,5 свободен — жадный забивает его некритичным DIV 11, а
+        критичный DIV 1 приходит в t.1 и ждёт лишний такт (occupancy 2).
+        Оракул оставляет дырку. Статический порядок дырку выразить не
+        может, defer-сеть её не выучила, поэтому правило явное: X держим
+        до asap[Y]+1 первого более критичного конкурента в окне occupancy.
+        Малые точные держки; дальних разрывов не видит (для них —
+        rule_holds_far ниже).
+        """
+        n, height, asap, chans, occs, reach, _gt = self._rule_common(dag, model)
+        if n == 0:
+            return {}
+        out: dict[int, int] = {}
+        for i in range(n):
+            if len(chans[i]) != 1:
+                continue
+            for j in self._contenders(i, chans, reach, n):
+                if not asap[i] < asap[j] <= asap[i] + occs[i]:
+                    continue
+                if not height[j] > height[i]:
+                    continue
+                c = asap[j] + 1
+                if c < out.get(i, limit + 1):
+                    out[i] = c
+        return {i: c for i, c in out.items() if 0 < c <= limit}
+
+    def rule_holds_far(self, dag: DAG, model: MachineModel, limit: int) -> dict[int, int]:
+        """То же, дальний вариант (граф 23): разрыв до конкурента бывает не
+        1–2 такта, а 11 — окно от asap слепо (у всех лёгких DIV нули).
+        Окно считаем от времени выдачи жадным gt[X]: держим X, только если
+        жадный ставит его за occ(X) тактов до прихода первого более
+        критичного конкурента (12/15/21 уходят в ранние дырки — их не
+        трогаем; 22 встанет за такт до тяжёлых — его держим). Значение —
+        хвост конкурентов: max(asap[Y] + occ(Y)) + 1. Агрессивно само по
+        себе, но живёт отдельным членом портфеля: min забирает лучшее
+        с обеих сторон, пере-держки гасит слак или min-защита.
+        """
+        n, height, asap, chans, occs, reach, gt = self._rule_common(dag, model)
+        if n == 0:
+            return {}
+        out: dict[int, int] = {}
+        for i in range(n):
+            if len(chans[i]) != 1 or i not in gt:
+                continue
+            first, tail = 0, 0
+            for j in self._contenders(i, chans, reach, n):
+                if not asap[j] > gt[i]:
+                    continue
+                if not height[j] > height[i]:
+                    continue
+                first = asap[j] if not first else min(first, asap[j])
+                tail = max(tail, asap[j] + occs[j])
+            if tail and 0 <= first - gt[i] <= occs[i]:
+                out[i] = tail + 1
+        return {i: c for i, c in out.items() if 0 < c <= limit}
+
     def _beam_holds(self, base: dict[int, int], n: int, k: int,
                     seed_base: int, limit: int) -> list[dict[int, int]]:
         """Джиттер держек: та же философия, что у веера порядка, но центр —
@@ -193,6 +280,20 @@ class TinyScheduler:
                             and schedd.makespan < best.makespan:
                         best, best_trace, winner = \
                             schedd, base.trace, f"beam_d{j}"
+
+            for tag, holds in (
+                    ("rule_hold",
+                     self.rule_holds(dag, model, base.schedule.makespan)),
+                    ("rule_hold_far",
+                     self.rule_holds_far(dag, model, base.schedule.makespan))):
+                if not holds:
+                    continue
+                schedr, tracer = list_schedule(
+                    dag, model, priority=prio, defer_until=holds,
+                    height=metrics.height, collect_trace=True)
+                if not schedr.validate() and schedr.complete \
+                        and schedr.makespan < best.makespan:
+                    best, best_trace, winner = schedr, tracer, tag
 
             for j, bp in enumerate(self._beam_orders(prio, self.beam, 2000)):
                 schedj, _ = list_schedule(dag, model, priority=bp,

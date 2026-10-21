@@ -37,7 +37,7 @@ nnl_vliw/
   результаты/   оценка по трём сидам и база sklearn
 tools/portfolio_labels.py   метки: лучший makespan каждой группы портфеля
 tools/gen_graphs.py         сырые графы генератором проекта, без отбора оракулом
-tests/test_nnl_vliw.py      26 тестов
+tests/test_nnl_vliw.py      28 тестов
 ```
 
 ## Данные и метки

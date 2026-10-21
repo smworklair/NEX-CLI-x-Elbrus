@@ -9,6 +9,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install with TUI extras
-        run: pip install -e ".[tui]"
+        run: pip install -e ".[tui]" numpy
       - name: Run test suite
         run: python -m unittest discover -s tests

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/cover.svg" alt="NEX CLI × NNL AI — планировщик широких команд для Эльбруса e2k" width="100%">
+  <img src="docs/cover.png" alt="NEX CLI × NNL AI — планировщик широких команд для Эльбруса e2k" width="100%">
 </p>
 
 <p align="center">

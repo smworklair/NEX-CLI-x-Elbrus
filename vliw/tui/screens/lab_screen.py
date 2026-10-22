@@ -2979,6 +2979,8 @@ class LabScreen(ModeScreen):
                     None: "не знаю — ищем как обычно"}[nn.verdict]
             t.append(f"  оценка ядер: {word}", style=title)
             t.append(f"  ({nn.ms:.0f} мс)\n", style=faint)
+        if h.form:
+            t.append(h.form + "\n", style=dim)
         if h.blocks:
             t.append("\nБЛОКИ ФАЙЛА", style=accent)
             t.append(f"  {len(h.blocks)} из {h.blocks_total}\n", style=dim)

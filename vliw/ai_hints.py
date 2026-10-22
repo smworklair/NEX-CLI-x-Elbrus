@@ -60,6 +60,7 @@ class Hints:
     nnl: NnlAI | None = None
     blocks: list[BlockRow] = field(default_factory=list)
     blocks_total: int = 0
+    form: str = ""
 
 
 def tiny_ai(dag, model, baseline: int, oracle: int | None = None) -> TinyAI | None:
@@ -131,6 +132,12 @@ def collect(session, base=None, orc=None, with_blocks: bool = True) -> Hints:
     text = (getattr(session, "code_text", "") or "").strip()
     if with_blocks and text:
         h.blocks, h.blocks_total = block_rows(text, model)
+    try:
+        from nnl_rewrite.приёмы import строка
+
+        h.form = строка(dag, model)
+    except Exception:
+        h.form = ""
     return h
 
 
@@ -142,13 +149,20 @@ def nnl_facts(session) -> list[str]:
     nn = nnl_ai(session.dag_obj, session.model(), cached[0].schedule.makespan)
     if nn is None:
         return []
+    try:
+        from nnl_rewrite.приёмы import строка
+
+        form = строка(session.dag_obj, session.model())
+    except Exception:
+        form = ""
+    tail = [form] if form else []
     if nn.rule:
         return ["NNL AI: baseline уже на нижней границе — искать нечего, это доказано "
-                "(правило, не оценка нейросети)."]
+                "(правило, не оценка нейросети).", *tail]
     base = (f"NNL AI: baseline длиннее нижней границы на {nn.gap} т.; оценка ядер (на настоящем коде она слабая, "
             f"проверяется поиском): ")
     if nn.verdict == "есть":
-        return [base + f"оба ядра за, p(выигрыш)≈{nn.p_есть:.2f} — поиск стоит запустить."]
+        return [base + f"оба ядра за, p(выигрыш)≈{nn.p_есть:.2f} — поиск стоит запустить.", *tail]
     if nn.verdict == "нет":
-        return [base + f"оба ядра против, p(выигрыш)≈{nn.p_есть:.2f}."]
-    return [base + f"ядра не согласны — «не знаю», поиск идёт как обычно (p≈{nn.p_есть:.2f})."]
+        return [base + f"оба ядра против, p(выигрыш)≈{nn.p_есть:.2f}.", *tail]
+    return [base + f"ядра не согласны — «не знаю», поиск идёт как обычно (p≈{nn.p_есть:.2f}).", *tail]

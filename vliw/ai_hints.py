@@ -27,6 +27,7 @@ class TinyAI:
     winner: str
     ms: float
     legal: bool
+    через_ядро: bool = False   # True: посчитал блок «планировщик» ядра NEX (nex_core), а не прямой вызов
 
 
 @dataclass
@@ -63,6 +64,16 @@ class Hints:
 
 
 def tiny_ai(dag, model, baseline: int, oracle: int | None = None) -> TinyAI | None:
+    # Основной путь: блок «планировщик» ядра NEX (крошки внутри ядра NNL). Нет ядра — прямой вызов крошек.
+    try:
+        from nex_core import ядро as _ядро
+
+        r = _ядро.выполнить(dag, model)
+        p = (r or {}).get("payload", {}).get("планировщик")
+        if p and "tiny" in p:
+            return TinyAI(p["baseline"], oracle, p["tiny"], p["победитель"], p["мс"], p["законно"], True)
+    except Exception:
+        pass
     try:
         from .tiny.scheduler import TinyScheduler
 
@@ -132,6 +143,19 @@ def collect(session, base=None, orc=None, with_blocks: bool = True) -> Hints:
     if with_blocks and text:
         h.blocks, h.blocks_total = block_rows(text, model)
     return h
+
+
+def core_facts(session) -> list[str]:
+    """Строки рассказчику от ядра NEX (фразы из техкарты). Пусто — ядра нет, агент берёт прежний путь."""
+    cached = session.peek()
+    if cached is None:
+        return []
+    try:
+        from nex_core import ядро as _ядро
+
+        return _ядро.факты(session.dag_obj, session.model(), cached[1].schedule.makespan)
+    except Exception:
+        return []
 
 
 def nnl_facts(session) -> list[str]:

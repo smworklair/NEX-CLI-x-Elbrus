@@ -200,10 +200,12 @@ def build(session, include_layout: bool = False) -> str:
     parts += machine_facts(session.model())
     parts.append("")
     parts += schedule_facts(session)
-    tiny = tiny_facts(session)
+    from ..ai_hints import core_facts, nnl_facts
+    # Крошки теперь внутри ядра NEX (блок «планировщик»): рассказчик берёт строку от ядра;
+    # нет ядра — прежний прямой путь.
+    tiny = core_facts(session) or tiny_facts(session)
     if tiny:
         parts += tiny
-    from ..ai_hints import nnl_facts
     nnl = nnl_facts(session)
     if nnl:
         parts += nnl

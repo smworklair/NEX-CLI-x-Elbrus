@@ -2948,7 +2948,10 @@ class LabScreen(ModeScreen):
             return
         tn = h.tiny
         t.append("TINY AI", style=accent)
-        t.append("  строит расписание\n", style=dim)
+        t.append("  строит расписание", style=dim)
+        if h.tiny is not None and h.tiny.через_ядро:
+            t.append("  · блок «планировщик», ядро NEX", style=faint)
+        t.append("\n")
         if tn is None:
             t.append("  нет ответа\n", style=faint)
         else:

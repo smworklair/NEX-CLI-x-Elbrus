@@ -351,6 +351,10 @@ class LabScreen(ModeScreen):
                     title="ЧИСЛА",
                     id="p-numbers", topic="numbers")
                 yield Panel(
+                    VerticalScroll(Static(id="ai-body"), id="ai-scroll"),
+                    title="НЕЙРОСЕТИ",
+                    id="p-ai", topic="ai")
+                yield Panel(
                     PanelToolbar(
                         ("◀ операция", "op-prev",
                          "курсор на предыдущую операцию расписания"),
@@ -1187,14 +1191,20 @@ class LabScreen(ModeScreen):
         except Exception as e:
             self.app.call_from_thread(self._compute_failed, str(e))
             return
-        self.app.call_from_thread(self._compute_done, base, orc, met)
+        try:
+            from ... import ai_hints
+            hints = ai_hints.collect(self.app.session, base, orc)
+        except Exception:
+            hints = None
+        self.app.call_from_thread(self._compute_done, base, orc, met, hints)
 
     def _compute_failed(self, msg: str) -> None:
         self.set_busy(False)
         self._blank_grid(f"не посчиталось: {msg}")
 
-    def _compute_done(self, base, orc, met) -> None:
+    def _compute_done(self, base, orc, met, hints=None) -> None:
         self.base, self.orc, self.met = base, orc, met
+        self.hints = hints
         self.diverged = {
             i for i in base.schedule.placements
             if i in orc.schedule.placements
@@ -1205,6 +1215,7 @@ class LabScreen(ModeScreen):
         self._mark_view()
         self._draw_grid()
         self._draw_numbers()
+        self._draw_ai()
         self._draw_diag()
         self._draw_machine()
         self._draw_detail()
@@ -2920,6 +2931,71 @@ class LabScreen(ModeScreen):
         r.append("\n    строка пути — ссылка: ведёт к этой операции "
                  "в решётке", style=faint)
         res.update(r)
+
+    def _draw_ai(self) -> None:
+        """НЕЙРОСЕТИ: что сделал TINY AI и что оценил NNL AI. Считается само, без команд."""
+        body = self.query_one("#ai-body", Static)
+        h = getattr(self, "hints", None)
+        dim = palette.role_hex("dim")
+        faint = palette.role_hex("faint")
+        title = palette.role_hex("title")
+        accent = palette.role_hex("accent")
+        t = Text()
+        if h is None or (h.tiny is None and h.nnl is None):
+            t.append("нейросети не ответили (нет весов?) — инструмент работает и без них",
+                     style=faint)
+            body.update(t)
+            return
+        tn = h.tiny
+        t.append("TINY AI", style=accent)
+        t.append("  строит расписание\n", style=dim)
+        if tn is None:
+            t.append("  нет ответа\n", style=faint)
+        else:
+            gain = tn.baseline - tn.tiny
+            t.append(f"  baseline {tn.baseline} → крошки {tn.tiny} т.", style=title)
+            if gain > 0:
+                t.append(f"  (−{gain})", style=palette.role_hex("success"))
+            elif gain == 0:
+                t.append("  (вровень)", style=dim)
+            t.append(f"\n  {tn.winner} · {tn.ms:.0f} мс", style=faint)
+            if tn.oracle is not None:
+                t.append(f" · oracle {tn.oracle}", style=faint)
+            t.append("\n")
+        nn = h.nnl
+        t.append("NNL AI", style=accent)
+        t.append("  оценивает: есть ли что улучшать\n", style=dim)
+        if nn is None:
+            t.append("  нет весов\n", style=faint)
+        elif nn.rule:
+            t.append("  baseline на нижней границе\n", style=title)
+            t.append("  искать нечего — доказано (правило)\n", style=palette.role_hex("success"))
+        else:
+            def one(r):
+                return "не знаю" if r[0] is None else f"{r[0]} p={r[1]:.2f}"
+            t.append(f"  зазор до границы: {nn.gap} т.\n", style=dim)
+            t.append(f"  ядро А: {one(nn.a)}\n  ядро Б: {one(nn.b)}\n", style=dim)
+            word = {"есть": "стоит искать", "нет": "скорее всего нет выигрыша",
+                    None: "не знаю — ищем как обычно"}[nn.verdict]
+            t.append(f"  оценка ядер: {word}", style=title)
+            t.append(f"  ({nn.ms:.0f} мс)\n", style=faint)
+        if h.blocks:
+            t.append("\nБЛОКИ ФАЙЛА", style=accent)
+            t.append(f"  {len(h.blocks)} из {h.blocks_total}\n", style=dim)
+            t.append("  NNL AI: оценка   →   TINY AI: такты\n", style=faint)
+            for r in h.blocks:
+                if r.nnl is not None and r.nnl.rule:
+                    est = "граница ✓"
+                elif r.nnl is None:
+                    est = "  —  "
+                else:
+                    est = f"{ {'есть': '▲', 'нет': '▽', None: '?'}[r.nnl.verdict] } p={r.nnl.p_есть:.2f}"
+                t.append(f"  #{r.index:<3} n={r.n:<4} {est:<10} ", style=dim)
+                t.append(f"{r.baseline}→{r.tiny}", style=title)
+                if r.baseline > r.tiny:
+                    t.append(f" −{r.baseline - r.tiny}", style=palette.role_hex("success"))
+                t.append("\n")
+        body.update(t)
 
     def _draw_numbers(self) -> None:
         # Развёрнутая панель — другой инструмент, а не тот же текст крупнее.

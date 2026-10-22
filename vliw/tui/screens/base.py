@@ -134,6 +134,7 @@ class ModeScreen(Screen):
     # затевалось.
     LOW = 34
     VERY_LOW = 28
+    ROOMY = 50
 
     def on_resize(self, event) -> None:
         self._apply_width(event.size.width)
@@ -146,6 +147,7 @@ class ModeScreen(Screen):
     def _apply_height(self, height: int) -> None:
         self.set_class(height < self.LOW, "low")
         self.set_class(height < self.VERY_LOW, "very-low")
+        self.set_class(height >= self.ROOMY, "roomy")
 
     # --- шапка и подсказки ------------------------------------------------
 

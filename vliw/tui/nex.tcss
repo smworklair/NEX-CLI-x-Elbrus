@@ -624,17 +624,23 @@ Panel.-maximized #grid-side { display: block; }
    забирает он (внутри у него свой VerticalScroll, так что содержимое не
    теряется), а нижние панели держат свои размеры. */
 #p-numbers  { height: auto; max-height: 12; }
+/* НЕЙРОСЕТИ: прокручиваются внутри, потолок растёт только на высоком терминале (класс roomy) */
+#p-ai       { height: auto; min-height: 4; max-height: 7; }
+#ai-scroll  { height: auto; max-height: 100%; scrollbar-size-vertical: 1; }
+ModeScreen.roomy #p-ai { max-height: 17; }
 #p-detail   { height: 1fr; min-height: 6; }
 #p-diag     { height: auto; min-height: 4; max-height: 8; }
 #p-machine  { height: auto; min-height: 6; max-height: 9; }
 
 /* Невысокий терминал: ужимаем нижние панели, разбор ужимается сам как 1fr. */
 ModeScreen.low #p-numbers { max-height: 8; }
+ModeScreen.low #p-ai      { min-height: 3; max-height: 5; }
 ModeScreen.low #p-diag    { min-height: 3; max-height: 5; }
 ModeScreen.low #p-machine { min-height: 4; max-height: 6; }
 ModeScreen.low #p-detail  { min-height: 4; }
 
 ModeScreen.very-low #p-numbers { max-height: 6; }
+ModeScreen.very-low #p-ai      { min-height: 3; max-height: 4; }
 ModeScreen.very-low #p-diag    { min-height: 3; max-height: 4; }
 ModeScreen.very-low #p-machine { min-height: 3; max-height: 4; }
 

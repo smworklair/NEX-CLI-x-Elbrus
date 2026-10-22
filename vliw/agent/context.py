@@ -203,6 +203,10 @@ def build(session, include_layout: bool = False) -> str:
     tiny = tiny_facts(session)
     if tiny:
         parts += tiny
+    from ..ai_hints import nnl_facts
+    nnl = nnl_facts(session)
+    if nnl:
+        parts += nnl
     doc = doctor_facts(session)
     if doc:
         parts.append("")

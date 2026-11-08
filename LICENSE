@@ -18,6 +18,10 @@ You may NOT:
 4. Include the Software (or any part of it) in any product, service, SaaS, application, or offering offered to third parties for a fee or other commercial consideration.
 5. Use the Software as part of any business process, internal company tool, or commercial project.
 6. Redistribute the Software or derivatives for any non-educational purpose.
+7. Rewrite, reimplement, or recreate the core (ядро / nex_core) of the Software.
+8. Use, modify, improve, or retrain TINY AI (or any of its components) for any commercial or corporate purpose.
+9. Create a fork of the core for any commercial or corporate purpose.
+10. Copy, reimplement, or substantially reproduce the architecture, scheduling approach, or core design of the Software for commercial or corporate use.
 
 Any use that is not explicitly permitted as educational/personal learning is strictly prohibited.
 

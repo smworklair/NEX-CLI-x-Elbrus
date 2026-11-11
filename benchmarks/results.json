@@ -1,0 +1,417 @@
+{
+  "profile": "e2k-v6-measured",
+  "budget_s": 1.5,
+  "results": [
+    {
+      "file": "01_mul_latency.s",
+      "path": "benchmarks/snippets/01_mul_latency.s",
+      "ops": 15,
+      "bundles": 8,
+      "nop_cycles": 4,
+      "skipped_lines": 0,
+      "unknown_mnemonics": {},
+      "unknown": 0,
+      "unknown_share": 0.0,
+      "compiler_cycles": 12,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не восстановлено",
+        "раскладка по каналам не сходится с моделью"
+      ],
+      "lower_bound": 8,
+      "critical_path": 7,
+      "resource_bound": 8,
+      "binding": "ресурсы",
+      "baseline": 8,
+      "tiny": 8,
+      "oracle": 8,
+      "oracle_optimal": true,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 0.429,
+        "tiny": 0.812,
+        "oracle": 0.8
+      },
+      "problems": [
+        {
+          "line": 5,
+          "kind": "channel",
+          "severity": "error",
+          "text": "muls в канале ,2 — этого канала у операции нет",
+          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+        },
+        {
+          "line": 6,
+          "kind": "busy",
+          "severity": "error",
+          "text": "канал ,3 в такте 0 уже занят: muls из строки 5",
+          "hint": "порт освободится в такте 1"
+        },
+        {
+          "line": 11,
+          "kind": "channel",
+          "severity": "error",
+          "text": "muls в канале ,2 — этого канала у операции нет",
+          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+        },
+        {
+          "line": 12,
+          "kind": "busy",
+          "severity": "error",
+          "text": "канал ,3 в такте 1 уже занят: muls из строки 11",
+          "hint": "порт освободится в такте 2"
+        }
+      ],
+      "errors": 4,
+      "warns": 0
+    },
+    {
+      "file": "02_software_pipeline.s",
+      "path": "benchmarks/snippets/02_software_pipeline.s",
+      "ops": 19,
+      "bundles": 7,
+      "nop_cycles": 0,
+      "skipped_lines": 0,
+      "unknown_mnemonics": {},
+      "unknown": 0,
+      "unknown_share": 0.0,
+      "compiler_cycles": 7,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не восстановлено",
+        "раскладка по каналам не сходится с моделью"
+      ],
+      "lower_bound": 9,
+      "critical_path": 8,
+      "resource_bound": 9,
+      "binding": "ресурсы",
+      "baseline": 9,
+      "tiny": 9,
+      "oracle": 9,
+      "oracle_optimal": true,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 0.452,
+        "tiny": 0.576,
+        "oracle": 0.9
+      },
+      "problems": [
+        {
+          "line": 6,
+          "kind": "channel",
+          "severity": "error",
+          "text": "muls в канале ,2 — этого канала у операции нет",
+          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+        },
+        {
+          "line": 7,
+          "kind": "busy",
+          "severity": "error",
+          "text": "канал ,3 в такте 0 уже занят: muls из строки 6",
+          "hint": "порт освободится в такте 1"
+        },
+        {
+          "line": 13,
+          "kind": "channel",
+          "severity": "error",
+          "text": "muls в канале ,2 — этого канала у операции нет",
+          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+        },
+        {
+          "line": 14,
+          "kind": "busy",
+          "severity": "error",
+          "text": "канал ,3 в такте 1 уже занят: muls из строки 13",
+          "hint": "порт освободится в такте 2"
+        },
+        {
+          "line": 20,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r20 читается в такте 2, а muls из строки 4 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 20,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r21 читается в такте 2, а muls из строки 5 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 21,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r22 читается в такте 2, а muls из строки 6 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 21,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r23 читается в такте 2, а muls из строки 7 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 25,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r24 читается в такте 3, а muls из строки 11 отдаст его только в такте 5",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 25,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r25 читается в такте 3, а muls из строки 12 отдаст его только в такте 5",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 26,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r26 читается в такте 3, а muls из строки 13 отдаст его только в такте 5",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 26,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r27 читается в такте 3, а muls из строки 14 отдаст его только в такте 5",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 31,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r28 читается в такте 4, а muls из строки 18 отдаст его только в такте 6",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 31,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r29 читается в такте 4, а muls из строки 19 отдаст его только в такте 6",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        }
+      ],
+      "errors": 14,
+      "warns": 0
+    },
+    {
+      "file": "03_predication.s",
+      "path": "benchmarks/snippets/03_predication.s",
+      "ops": 9,
+      "bundles": 3,
+      "nop_cycles": 0,
+      "skipped_lines": 0,
+      "unknown_mnemonics": {
+        "cmples": 1,
+        "cmpgts": 1
+      },
+      "unknown": 2,
+      "unknown_share": 0.2222,
+      "compiler_cycles": 3,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не восстановлено",
+        "раскладка по каналам не сходится с моделью"
+      ],
+      "lower_bound": 8,
+      "critical_path": 8,
+      "resource_bound": 8,
+      "binding": "и то, и другое",
+      "baseline": 8,
+      "tiny": 8,
+      "oracle": 8,
+      "oracle_optimal": true,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 0.278,
+        "tiny": 0.353,
+        "oracle": 0.6
+      },
+      "problems": [
+        {
+          "line": 6,
+          "kind": "channel",
+          "severity": "error",
+          "text": "muls в канале ,2 — этого канала у операции нет",
+          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+        },
+        {
+          "line": 7,
+          "kind": "busy",
+          "severity": "error",
+          "text": "канал ,3 в такте 0 уже занят: muls из строки 6",
+          "hint": "порт освободится в такте 1"
+        },
+        {
+          "line": 11,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 11,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 12,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 12,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 13,
+          "kind": "channel",
+          "severity": "error",
+          "text": "muls в канале ,2 — этого канала у операции нет",
+          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+        },
+        {
+          "line": 13,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 14,
+          "kind": "busy",
+          "severity": "error",
+          "text": "канал ,3 в такте 1 уже занят: muls из строки 13",
+          "hint": "порт освободится в такте 2"
+        },
+        {
+          "line": 14,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        }
+      ],
+      "errors": 10,
+      "warns": 0
+    },
+    {
+      "file": "04_horner_load.s",
+      "path": "benchmarks/snippets/04_horner_load.s",
+      "ops": 12,
+      "bundles": 6,
+      "nop_cycles": 0,
+      "skipped_lines": 0,
+      "unknown_mnemonics": {},
+      "unknown": 0,
+      "unknown_share": 0.0,
+      "compiler_cycles": 6,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не принято проверкой",
+        "8 замечаний, первое: r40 выдана в такте 1, но операнд r20 готов только к такту 5. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно"
+      ],
+      "lower_bound": 15,
+      "critical_path": 15,
+      "resource_bound": 15,
+      "binding": "и то, и другое",
+      "baseline": 15,
+      "tiny": 15,
+      "oracle": 15,
+      "oracle_optimal": true,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 1.056,
+        "tiny": 0.537,
+        "oracle": 1.0
+      },
+      "problems": [
+        {
+          "line": 10,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r20 читается в такте 1, а ldw из строки 3 отдаст его только в такте 5",
+          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+        },
+        {
+          "line": 13,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r40 читается в такте 2, а muls из строки 10 отдаст его только в такте 5",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 13,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r21 читается в такте 2, а ldw из строки 4 отдаст его только в такте 5",
+          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+        },
+        {
+          "line": 17,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r31 читается в такте 3, а muls из строки 14 отдаст его только в такте 6",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 18,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r22 читается в такте 3, а ldw из строки 8 отдаст его только в такте 6",
+          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+        },
+        {
+          "line": 21,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r43 читается в такте 4, а muls из строки 18 отдаст его только в такте 7",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        },
+        {
+          "line": 21,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r23 читается в такте 4, а ldw из строки 9 отдаст его только в такте 6",
+          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+        },
+        {
+          "line": 24,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r42 читается в такте 5, а muls из строки 17 отдаст его только в такте 7",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        }
+      ],
+      "errors": 8,
+      "warns": 0
+    }
+  ]
+}

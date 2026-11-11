@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/cover.png" alt="NEX × Эльбрус: планировщик широких команд" width="100%">
+  <img src="NEX-Elbrus-banner-v1_4.jpg" alt="NEX × Эльбрус: планировщик широких команд" width="100%">
 </p>
 
 <p align="center">

@@ -1,0 +1,196 @@
+{
+  "profile": "e2k-v6-measured",
+  "budget_s": 2.0,
+  "results": [
+    {
+      "file": "cm_mul.s",
+      "path": "real_candidates_100_400/asm/cm_mul.s",
+      "ops": 112,
+      "bundles": 53,
+      "nop_cycles": 15,
+      "skipped_lines": 1,
+      "unknown_mnemonics": {},
+      "unknown": 0,
+      "unknown_share": 0.0,
+      "compiler_cycles": 67,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не принято проверкой",
+        "b[12] выдана в такте 28, но операнд b[38] готов только к такту 29. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно"
+      ],
+      "lower_bound": 19,
+      "critical_path": 19,
+      "resource_bound": 19,
+      "binding": "и то, и другое",
+      "baseline": 19,
+      "tiny": 19,
+      "oracle": 19,
+      "oracle_optimal": true,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 3.411,
+        "tiny": 5.024,
+        "oracle": 6.1
+      },
+      "problems": [
+        {
+          "line": 162,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%b[38] читается в такте 28, а muls из строки 136 отдаст его только в такте 29",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        }
+      ],
+      "errors": 1,
+      "warns": 0
+    },
+    {
+      "file": "cm_vect.s",
+      "path": "real_candidates_100_400/asm/cm_vect.s",
+      "ops": 113,
+      "bundles": 47,
+      "nop_cycles": 10,
+      "skipped_lines": 1,
+      "unknown_mnemonics": {
+        "pass": 12,
+        "landp": 6
+      },
+      "unknown": 0,
+      "unknown_share": 0.0,
+      "compiler_cycles": 56,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не принято проверкой",
+        "b[10] выдана в такте 22, но операнд b[26] готов только к такту 23. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно"
+      ],
+      "lower_bound": 19,
+      "critical_path": 15,
+      "resource_bound": 19,
+      "binding": "ресурсы",
+      "baseline": 19,
+      "tiny": 19,
+      "oracle": 19,
+      "oracle_optimal": true,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 5.045,
+        "tiny": 4.104,
+        "oracle": 6.3
+      },
+      "problems": [
+        {
+          "line": 148,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%b[26] читается в такте 22, а muls из строки 123 отдаст его только в такте 23",
+          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+        }
+      ],
+      "errors": 1,
+      "warns": 0
+    },
+    {
+      "file": "emb_iir.s",
+      "path": "real_candidates_100_400/asm/emb_iir.s",
+      "ops": 256,
+      "bundles": 93,
+      "nop_cycles": 32,
+      "skipped_lines": 1,
+      "unknown_mnemonics": {
+        "pass": 25,
+        "landp": 11,
+        "sar_addd": 4
+      },
+      "unknown": 4,
+      "unknown_share": 0.0156,
+      "compiler_cycles": 124,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не восстановлено",
+        "раскладка по каналам не сходится с моделью"
+      ],
+      "lower_bound": 43,
+      "critical_path": 24,
+      "resource_bound": 43,
+      "binding": "ресурсы",
+      "baseline": 44,
+      "tiny": 43,
+      "oracle": 43,
+      "oracle_optimal": false,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 16.679,
+        "tiny": 28.215,
+        "oracle": 2458.0
+      },
+      "problems": [],
+      "errors": 0,
+      "warns": 0
+    },
+    {
+      "file": "emb_fir.s",
+      "path": "real_candidates_100_400/asm/emb_fir.s",
+      "ops": 347,
+      "bundles": 76,
+      "nop_cycles": 7,
+      "skipped_lines": 1,
+      "unknown_mnemonics": {},
+      "unknown": 0,
+      "unknown_share": 0.0,
+      "compiler_cycles": 82,
+      "compiler_schedule": false,
+      "compiler_problem": [
+        "расписание компилятора не восстановлено",
+        "раскладка по каналам не сходится с моделью"
+      ],
+      "lower_bound": 58,
+      "critical_path": 24,
+      "resource_bound": 58,
+      "binding": "ресурсы",
+      "baseline": 61,
+      "tiny": 60,
+      "oracle": 60,
+      "oracle_optimal": false,
+      "legal": {
+        "baseline": true,
+        "tiny": true,
+        "oracle": true
+      },
+      "ms": {
+        "baseline": 20.714,
+        "tiny": 84.338,
+        "oracle": 2470.1
+      },
+      "problems": [
+        {
+          "line": 37,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r0 читается в такте 5, а ldb из строки 30 отдаст его только в такте 8",
+          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+        },
+        {
+          "line": 44,
+          "kind": "ready",
+          "severity": "error",
+          "text": "%r0 читается в такте 6, а ldb из строки 30 отдаст его только в такте 8",
+          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+        }
+      ],
+      "errors": 2,
+      "warns": 0
+    }
+  ]
+}

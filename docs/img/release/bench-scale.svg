@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940" role="img" aria-labelledby="t d">
+<title id="t">Время планирования: TINY Flash и oracle</title>
+<desc id="d">Логарифмическая шкала времени: TINY Flash растёт до 84 мс на 347 операциях, oracle упирается в бюджет 2 секунды.</desc>
+<rect width="1600" height="940" fill="#F7F5F0"/>
+<text x="70" y="66" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="5" fill="#2C5C99">NEX CLI · 1.4 · СКОРОСТЬ</text>
+<text x="70" y="124" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="44" font-weight="700" fill="#1F1E1B">TINY Flash масштабируется, oracle упирается в бюджет</text>
+<text x="70" y="162" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="20" fill="#6F6A60">время на один блок, миллисекунды · логарифмическая шкала</text>
+<line x1="120" y1="700.0" x2="1480" y2="700.0" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="705.0" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">0,3</text>
+<line x1="120" y1="637.3" x2="1480" y2="637.3" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="642.3" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">1</text>
+<line x1="120" y1="580.0" x2="1480" y2="580.0" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="585.0" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">3</text>
+<line x1="120" y1="517.3" x2="1480" y2="517.3" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="522.3" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">10</text>
+<line x1="120" y1="460.0" x2="1480" y2="460.0" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="465.0" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">30</text>
+<line x1="120" y1="397.3" x2="1480" y2="397.3" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="402.3" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">100</text>
+<line x1="120" y1="340.0" x2="1480" y2="340.0" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="345.0" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">300</text>
+<line x1="120" y1="277.3" x2="1480" y2="277.3" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="282.3" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">1000</text>
+<line x1="120" y1="220.0" x2="1480" y2="220.0" stroke="#DCD6C9" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="102" y="225.0" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">3000</text>
+<line x1="120.0" y1="700" x2="120.0" y2="707" stroke="#DCD6C9" stroke-width="1.5"/>
+<text x="120.0" y="730" text-anchor="middle" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">0</text>
+<line x1="460.0" y1="700" x2="460.0" y2="707" stroke="#DCD6C9" stroke-width="1.5"/>
+<text x="460.0" y="730" text-anchor="middle" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">100</text>
+<line x1="800.0" y1="700" x2="800.0" y2="707" stroke="#DCD6C9" stroke-width="1.5"/>
+<text x="800.0" y="730" text-anchor="middle" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">200</text>
+<line x1="1140.0" y1="700" x2="1140.0" y2="707" stroke="#DCD6C9" stroke-width="1.5"/>
+<text x="1140.0" y="730" text-anchor="middle" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">300</text>
+<line x1="1480.0" y1="700" x2="1480.0" y2="707" stroke="#DCD6C9" stroke-width="1.5"/>
+<text x="1480.0" y="730" text-anchor="middle" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#6F6A60">400 оп.</text>
+<text x="102" y="204" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="14" fill="#6F6A60">мс</text>
+<polyline points="500.8,543.0 504.2,541.3 990.4,230.4 1299.8,230.1" fill="none" stroke="#C0504D" stroke-width="2.5" stroke-dasharray="7 6"/>
+<polyline points="150.6,690.9 160.8,677.8 171.0,645.3 184.6,665.6 500.8,553.1 504.2,563.7 990.4,463.2 1299.8,406.1" fill="none" stroke="#2C5C99" stroke-width="2.5"/>
+<circle cx="150.6" cy="690.9" r="6.5" fill="#2C5C99"/>
+<circle cx="160.8" cy="677.8" r="6.5" fill="#2C5C99"/>
+<circle cx="171.0" cy="645.3" r="6.5" fill="#2C5C99"/>
+<circle cx="184.6" cy="665.6" r="6.5" fill="#2C5C99"/>
+<circle cx="500.8" cy="553.1" r="6.5" fill="#2C5C99"/>
+<circle cx="504.2" cy="563.7" r="6.5" fill="#2C5C99"/>
+<circle cx="990.4" cy="463.2" r="6.5" fill="#2C5C99"/>
+<circle cx="1299.8" cy="406.1" r="6.5" fill="#2C5C99"/>
+<circle cx="500.8" cy="543.0" r="6" fill="#FFFDF8" stroke="#C0504D" stroke-width="2.5"/>
+<circle cx="504.2" cy="541.3" r="6" fill="#FFFDF8" stroke="#C0504D" stroke-width="2.5"/>
+<circle cx="990.4" cy="230.4" r="6" fill="#FFFDF8" stroke="#C0504D" stroke-width="2.5"/>
+<circle cx="1299.8" cy="230.1" r="6" fill="#FFFDF8" stroke="#C0504D" stroke-width="2.5"/>
+<text x="1315.8" y="411.1" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="17" font-weight="700" fill="#2C5C99">84 мс</text>
+<text x="1315.8" y="222.1" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="17" font-weight="700" fill="#C0504D">~2,5 с · бюджет</text>
+<text x="964.4" y="270.4" text-anchor="end" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="15" fill="#C0504D">оптимум не доказан</text>
+<circle cx="120" cy="760" r="7" fill="#2C5C99"/>
+<text x="138" y="766" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="17" fill="#6F6A60">TINY Flash (exact) · до 84 мс</text>
+<circle cx="470" cy="760" r="6" fill="#FFFDF8" stroke="#C0504D" stroke-width="2.5"/>
+<text x="488" y="766" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="17" fill="#6F6A60">oracle, бюджет 2 с на файл</text>
+<rect x="880" y="760" width="650" height="118" rx="16" fill="#FFFDF8" stroke="#DCD6C9" stroke-width="1"/>
+<text x="910" y="799" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="17" font-weight="700" fill="#1F1E1B">Где предел</text>
+<text x="910" y="827" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="16" fill="#6F6A60">до ~150 операций oracle доказывает оптимум за миллисекунды.</text>
+<text x="910" y="853" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="16" fill="#6F6A60">на 256–347 операциях 2 секунды не хватает — TINY Flash даёт то же</text>
+<text x="910" y="877" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="16" fill="#6F6A60">решение за 28–84 мс, но без сертификата оптимальности.</text>
+<text x="70" y="918" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="14" fill="#6F6A60">NEX CLI × Эльбрус · цифры: benchmarks/RESULTS.md, прогон на 8 файлах</text>
+</svg>

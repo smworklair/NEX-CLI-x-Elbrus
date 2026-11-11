@@ -61,12 +61,12 @@ def render_scenarios(current: str | None = None) -> list[str]:
             continue
         if out:
             out.append("")
-        out.append("  " + paint("lab", "● ") + paint("title", family)
+        out.append("  " + paint("lab", "* ") + paint("title", family)
                    + ("   " + Style.dim(hint) if hint else ""))
         for key in keys:
             dag = SCENARIOS[key]
             seen.add(key)
-            mark = paint("work", "●") if key == current else " "
+            mark = paint("work", "*") if key == current else " "
             head = (f"  {mark} " + paint("accent", pad(key, 13))
                     + Style.dim(pad(str(len(dag)), 4, ">") + "  ") + dag.title)
             out.append(head)
@@ -78,7 +78,7 @@ def render_scenarios(current: str | None = None) -> list[str]:
         out.append("")
         for key in rest:
             dag = SCENARIOS[key]
-            mark = paint("work", "●") if key == current else " "
+            mark = paint("work", "*") if key == current else " "
             out.append(f"  {mark} " + paint("accent", pad(key, 13))
                        + Style.dim(pad(str(len(dag)), 4, ">") + "  ") + dag.title)
 
@@ -106,12 +106,12 @@ def render_matrix(model: MachineModel) -> list[str]:
     for port in model.ports:
         cells = []
         for j, o in enumerate(op_names):
-            mark = paint_op(o, "●") if grid[port.index][j] else Style.dim("·")
+            mark = paint_op(o, "*") if grid[port.index][j] else Style.dim("·")
             cells.append(pad(mark, cw, "^"))
         tag = ""
         if port.index in sole:
             names = "/".join(sole[port.index])
-            tag = "  " + paint_op(sole[port.index][0], f"◄ только {names}")
+            tag = "  " + paint_op(sole[port.index][0], f"< только {names}")
         out.append(Style.dim(f"{model.port_label(port.index):>4} ") + " ".join(cells) + tag)
     return out
 
@@ -231,13 +231,13 @@ def render_selfcheck(res: SelfcheckResult) -> list[str]:
     out = [
         Style.dim(
             f"Сверяем оракул (точный поиск) с независимым полным перебором: "
-            f"{res.seeds} графов × {len(res.sizes)} размеров × {res.models} моделей."
+            f"{res.seeds} графов x {len(res.sizes)} размеров x {res.models} моделей."
         ),
         Style.dim("Полный перебор считается только на маленьких графах — это нормально."),
         "",
     ]
     for tag, problems in res.problems:
-        out.append(Style.red(f"  ✗ {tag}"))
+        out.append(Style.red(f"  - {tag}"))
         out += [f"      {p}" for p in problems]
     if res.failed:
         out.append(Style.red(

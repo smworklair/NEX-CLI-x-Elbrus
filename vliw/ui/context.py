@@ -17,11 +17,11 @@ from .render import Style, paint, wrap
 
 
 def _head(text: str) -> str:
-    return paint("sidebar_head", "▼ " + text)
+    return paint("sidebar_head", "v " + text)
 
 
 def _pair(key: str, val: str, width: int) -> str:
-    """«ключ ⋯ значение» в одну строку — только если реально помещается."""
+    """«ключ ... значение» в одну строку — только если реально помещается."""
     gap = width - len(key) - len(val)
     if gap >= 2:
         return paint("sidebar_key", key) + " " * gap + paint("sidebar_val", val)
@@ -77,7 +77,7 @@ def context_rows(session, width: int = 30) -> list[str]:
     gap = b - o
     out.append(Style.dim("  " + "─" * (width - 2)))
     if gap > 0:
-        out += _row("выигрыш", f"−{gap} ({100 * gap // b}%)", width)
+        out += _row("выигрыш", f"-{gap} ({100 * gap // b}%)", width)
     else:
         out += _row("выигрыш", "нет", width)
     out.append(paint("success", "  оптимум доказан") if orc.optimal

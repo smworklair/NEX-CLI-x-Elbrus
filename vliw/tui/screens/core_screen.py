@@ -13,7 +13,7 @@
     внизу   чем считать (ядра и служебные слова) + строка ввода с превью
 
 Связки, ради которых экран существует:
-    — строка листа ↔ операции графа: клик по операции подсвечивает строку,
+    — строка листа <> операции графа: клик по операции подсвечивает строку,
       которая её породила, клик по строке — её операции в ПРОГРАММЕ;
     — каждая строка, изменившая машину, — коммит в общем git-журнале с
       ПОЛНЫМ снимком машины: «вернуть» из журнала восстанавливает имена,
@@ -467,7 +467,7 @@ class CoreScreen(ModeScreen):
 
     def _verdict_text(self, b: int, o: int, bound: int) -> Text:
         t = Text()
-        t.append("  ●  граф передан в разбор",
+        t.append("  *  граф передан в разбор",
                  style=f"{palette.role_hex('work')} bold")
         t.append("\n")
         t.append("     baseline ", style=palette.role_hex("dim"))
@@ -477,7 +477,7 @@ class CoreScreen(ModeScreen):
         t.append("   предел ", style=palette.role_hex("dim"))
         t.append(str(bound), style=palette.role_hex("title"))
         if b > o:
-            t.append(f"   −{b - o} т.", style=palette.role_hex("success"))
+            t.append(f"   -{b - o} т.", style=palette.role_hex("success"))
         return t
 
     # --- превью -----------------------------------------------------------
@@ -712,11 +712,11 @@ class CoreScreen(ModeScreen):
             if tail:
                 t.append(tail[:32], style=dim)
         elif kind == "error":
-            t.append("  ✗  ", style=palette.role_hex("error"))
+            t.append("  -  ", style=palette.role_hex("error"))
             t.append(r["line"][:26], style=palette.role_hex("error"))
             t.append("   " + r["msg"], style=dim)
         elif kind == "warn":
-            t.append("  ⚠  ", style=palette.role_hex("warning"))
+            t.append("  !  ", style=palette.role_hex("warning"))
             t.append(r["text"], style=dim)
         elif kind == "note":
             t.append("  ·  ", style=palette.role_hex("accent2"))
@@ -728,7 +728,7 @@ class CoreScreen(ModeScreen):
             return Text.from_ansi("\n".join(r["ansi"]))
         return t
 
-    # --- связка строк ↔ операций -------------------------------------------
+    # --- связка строк <> операций -------------------------------------------
 
     def on_tape_row_picked(self, event: TapeRow.Picked) -> None:
         event.stop()
@@ -893,7 +893,7 @@ class CoreScreen(ModeScreen):
         f = Text()
         written = ", ".join(f"{a}←{n}" if n else str(a)
                             for a, n in sorted(stores.items())[:8])
-        f.append("\n    ▸ ", style=palette.role_hex("work"))
+        f.append("\n    > ", style=palette.role_hex("work"))
         f.append(f"сюда писал store: {written}" if written
                  else "пока без записей store", faint)
         f.append("        ярким — изменено последней строкой", faint)
@@ -1008,7 +1008,7 @@ class CoreScreen(ModeScreen):
         value = ws.mem[addr] if addr < len(ws.mem) else 0
         faint = palette.role_hex("faint")
         cell = Text()
-        cell.append("▸" if addr in stores else "·",
+        cell.append(">" if addr in stores else "·",
                     style=palette.role_hex("work") if addr in stores else faint)
         cell.append(f"{addr:>2}", style=faint)
         cell.append("│", style=palette.role_hex("line"))
@@ -1046,7 +1046,7 @@ class CoreScreen(ModeScreen):
         f = Text()
         written = ", ".join(f"{a}←{n}" if n else str(a)
                             for a, n in sorted(stores.items())[:6])
-        f.append("▸ ", style=palette.role_hex("work"))
+        f.append("> ", style=palette.role_hex("work"))
         if written:
             f.append(f"store: {written}", style=palette.role_hex("dim"))
             f.append("  ·  ", style=palette.role_hex("faint"))
@@ -1058,7 +1058,7 @@ class CoreScreen(ModeScreen):
 
     def _draw_program(self, ws) -> None:
         """ПРОГРАММА — по операции на строку: операции кликабельны, это
-        половина связки «строка ↔ операция» (вторая половина в листе)."""
+        половина связки «строка <> операция» (вторая половина в листе)."""
         box = self.query_one("#program", VerticalScroll)
         panel = self.query_one("#p-prog", Panel)
         dag = ws.snapshot()

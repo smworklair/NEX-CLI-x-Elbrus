@@ -1,39 +1,46 @@
-# CONTRIBUTING
+# Участие в проекте
 
-Small, focused PRs are welcome.
+Небольшие сфокусированные PR приветствуются.
 
-## Setup
+## Подготовка
 
 ```bash
-git clone <your-fork-url> vliw-ai-scheduler
-cd vliw-ai-scheduler
+git clone <your-fork-url>
+cd NEX-CLI-x-Elbrus
 pip install -e ".[tui]"
 python -m unittest discover -s tests
 ```
 
-## What to know before editing
+## Что важно знать
 
-- Core scheduler lives in `vliw/core/` (`baseline.py`, `oracle.py`,
-  `schedule.py`, `model.py`). It has no third-party dependencies —
-  please keep it that way.
-- `vliw/tui/` is optional (works without `textual`, tests skip then).
-- `vliw/learned/` + `training/` is the model track, optional
-  (works without `torch`, tests skip then).
-- Many code comments are in Russian; English PRs and comments are fine.
-- `real_candidates_100_400/asm/*.s` are small fixtures used by
-  `tests/test_ux_walk.py`. The rest of `real_candidates_100_400/`
-  is local-only data (gigabytes) and stays out of git.
+- Ядро планировщика — `vliw/core/` (`baseline.py`, `oracle.py`, `schedule.py`, `model.py`).
+  У него нет сторонних зависимостей; пожалуйста, не добавляйте их.
+- `vliw/tui/` — необязательный полноэкранный интерфейс. Без `textual` тесты пропускаются.
+- `vliw/learned/` и `training/` — исторический трек обученной LLM. Без `torch` тесты пропускаются.
+- `vliw/tiny/` — рабочий обученный планировщик, лёгкий и основной.
+- Комментарии в коде в основном русские; английские PR и комментарии допустимы.
+- `real_candidates_100_400/asm/*.s` — небольшие фикстуры для тестов. Остальное в этой папке —
+  локальные данные на гигабайты, в git не идут.
 
-## Checks
+## Проверки
 
-- `python -m unittest discover -s tests` must stay green.
-  Skips without `torch`/`textual` are expected, not failures.
-- New behavior needs a regression test under `tests/`.
-- Do not commit secrets (`.env` is git-ignored for a reason),
-  weights (`*.safetensors`), or local PDFs under `docs/`.
+```bash
+python -m unittest discover -s tests
+```
 
-## License
+Набор должен оставаться зелёным. Пропуски без `torch`/`textual` — ожидаемы, а не ошибки.
+Новое поведение требует регрессионного теста в `tests/`.
 
-By contributing you agree your changes are MIT-licensed like the rest.
-Donat
-https://pay.cloudtips.ru/p/7809ff65
+Не коммитьте секреты (`.env` в `.gitignore` не просто так), веса (`*.safetensors`) и локальные PDF.
+
+## Документация
+
+- Пользовательские гайды — `docs/`.
+- Исторические заметки — `docs/archive/`; их не нужно обновлять при изменении кода.
+- Оглавление — [`docs/README.md`](docs/README.md).
+
+## Лицензия
+
+Отправляя PR, вы соглашаетесь, что изменения распространяются на тех же условиях, что и проект
+(см. [LICENSE](LICENSE)): бесплатно для обучения и личного использования, коммерческое применение —
+только по отдельному соглашению с правообладателем.

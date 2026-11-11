@@ -247,12 +247,12 @@ def cmd_run(session: Session, arg: str) -> None:
         _out(wrap(dag.note, render.W, "  "))
         print()
     if getattr(dag, "lesson", ""):
-        _out(wrap(paint("lab", "◆ ") + Style.dim(dag.lesson), render.W, "  "))
+        _out(wrap(paint("lab", "* ") + Style.dim(dag.lesson), render.W, "  "))
         print()
     hl = {i: render.CRIT_CODE for i in schedule_view.critical_set(dag, met)}
     _out(schedule_view.render_schedule(
         orc.schedule, dag, model, hl,
-        paint("success", "  расписание oracle (точный поиск), ★ — критический путь:")))
+        paint("success", "  расписание oracle (точный поиск), * — критический путь:")))
     print()
     print(schedule_view.render_stats_line(base, orc))
     print()
@@ -364,7 +364,7 @@ def cmd_tiny(session: Session, arg: str) -> None:
     """Крошки против baseline и oracle на текущем участке.
 
     Веса лежат в vliw/tiny/weights*.json; без них — честный фолбэк на
-    baseline (планировщик сам так умеет, см. TinyScheduler). Считает
+    baseline (планировщик сам так умеет, см. TinyFlashScheduler). Считает
     миллисекунды, поэтому печатается сразу, без отдельного экрана.
     """
     toks = arg.split()
@@ -372,10 +372,10 @@ def cmd_tiny(session: Session, arg: str) -> None:
         session.set_scenario(toks[0])
     base, orc, _met = session.results()
     dag, model = session.dag_obj, session.model()
-    from .tiny.scheduler import TinyScheduler
+    from .tiny.fast import TinyFlashScheduler
     import time as _time
     t0 = _time.perf_counter()
-    tiny = TinyScheduler()
+    tiny = TinyFlashScheduler()
     res = tiny.schedule(dag, model)
     dt = (_time.perf_counter() - t0) * 1000.0
     errs = res.schedule.validate()
@@ -583,7 +583,7 @@ def cmd_sweep(session: Session, arg: str) -> None:
 
     print(rule("sweep"))
     _out(wrap(
-        f"{seeds} случайных графов × размеры {sizes} × конфигурации машины. Для "
+        f"{seeds} случайных графов x размеры {sizes} x конфигурации машины. Для "
         f"каждой считаем, в скольких графах точный поиск обогнал эвристику "
         f"(только где оптимальность доказана).", render.W, "  "))
     print()
@@ -630,7 +630,7 @@ def cmd_selfcheck(session: Session, arg: str) -> None:
     result = run_selfcheck(
         seeds=int(opts["seeds"]), sizes=(5, 6, 7, 8),
         time_limit=float(opts["time-limit"]),
-        on_failure=lambda tag, probs: print(Style.red(f"  ✗ {tag}")),
+        on_failure=lambda tag, probs: print(Style.red(f"  - {tag}")),
     )
     _out(tables.render_selfcheck(result))
 
@@ -680,7 +680,7 @@ def cmd_agent(session: Session, arg: str) -> None:
 def cmd_hard(session: Session, arg: str) -> None:
     """Есть ли на графе что выигрывать у эвристики — и где такие графы брать.
 
-    Появилась после замера `docs/CAB.md`: на обеих выборках проекта жадный
+    Появилась после замера `docs/archive/CAB.md`: на обеих выборках проекта жадный
     планировщик стоит в доказанном оптимуме почти везде (298/300 и 300/300),
     то есть все прежние сравнения обученной модели шли на данных, где
     выигрывать нечего. Эта команда меряет тот самый бюджет, о котором
@@ -1144,7 +1144,7 @@ def cmd_mode(session: Session, arg: str) -> None:
     current = getattr(session, "focus", "lab")
     for name in panes.PANES:
         meta = panes.META[name]
-        mark = paint(meta["role"], "●") if current == name else " "
+        mark = paint(meta["role"], "*") if current == name else " "
         print(f"  {mark} {paint(meta['role'], meta['title']):<10} "
               + Style.dim(meta["sub"]))
     print()
@@ -1301,7 +1301,7 @@ def cmd_theme(session: Session, arg: str) -> None:
     print(rule("темы"))
     for t in available:
         th = theme.load_theme(t)
-        mark = paint("work", "●") if th.name == render.THEME.name else " "
+        mark = paint("work", "*") if th.name == render.THEME.name else " "
         print(f"  {mark} {paint('title', t)}")
         _out(wrap(Style.dim(th.description), render.W, "      "))
     print()
@@ -1498,7 +1498,7 @@ class _LearnedArgs:
     data: str = "eval_wide.jsonl"
     """Файл эвала для --bench. Появился, когда выяснилось, что на
     `eval_wide.jsonl` жадная эвристика оптимальна на 298 графах из 300 — то
-    есть замер шёл на данных без задачи (docs/CAB.md)."""
+    есть замер шёл на данных без задачи (docs/archive/CAB.md)."""
     bad_value: tuple[str, str] | None = None
     """Числовой флаг с нечисловым значением: (флаг, что написали)."""
     raw: bool = False
@@ -2059,7 +2059,7 @@ def dispatch(session: Session, name: str, arg: str) -> bool:
 
 def _prompt(session: Session) -> str:
     _ = session
-    return paint("prompt", "nex ") + Style.dim("▸ ")
+    return paint("prompt", "nex ") + Style.dim("> ")
 
 # Маркеры «bracketed paste»: некоторые терминалы оборачивают вставленный текст
 # в ESC[200~ … ESC[201~. input() вернёт их как обычные символы — вырезаем.
@@ -2077,11 +2077,13 @@ def _fullscreen_ok() -> bool:
 
 
 def run_tui(session: Session, pick_app: bool | None = None) -> int:
-    """Полноэкранный интерфейс. При любой проблеме — обычный цикл.
+    """Полноэкранный интерфейс. При проблеме — экран установки, не «урезанный» цикл.
 
-    Порядок отката: Textual (три полноценных экрана) → построчный режим.
-    Прежний однооконный экран на curses удалён: Textual покрывает всё, что он
-    умел, а держать третий интерфейс означало трижды править каждую правку.
+    Textual (три полноценных экрана) → `ui/setup_screen`: причина сбоя и
+    команды установки/починки. Построчный режим остаётся только явным
+    выбором пользователя — `--plain`. Прежний однооконный экран на curses
+    удалён: Textual покрывает всё, что он умел, а держать третий интерфейс
+    означало трижды править каждую правку.
     """
     global IN_TUI
 
@@ -2099,13 +2101,22 @@ def run_tui(session: Session, pick_app: bool | None = None) -> int:
         if nextui.available():
             return nextui.run(session, execute, COMMANDS, start_mode=start_mode)
     except Exception as e:
-        print(paint("warning", f"полноэкранный режим недоступен ({e}); "
-                               "продолжаю в обычном режиме"))
+        # Полноэкранный режим упал уже после проверки available(). Молча
+        # уходить в построчный цикл нельзя: пользователь решит, что «так и
+        # задумано». Показываем причину и команды установки/починки, а
+        # построчный режим остаётся доступен явно — `--plain`.
+        print(paint("warning", f"полноэкранный режим недоступен ({e})"))
+        from .ui import setup_screen
+
+        return setup_screen.explain(extra=f"сбой запуска Textual: {e}")
     finally:
         IN_TUI = False
 
-    print_logo()
-    return repl(session)
+    # available() успел стать False между проверкой и вызовом (гонка с
+    # терминалом) — показываем тот же экран установки.
+    from .ui import setup_screen
+
+    return setup_screen.explain()
 
 
 def repl(session: Session) -> int:
@@ -2228,6 +2239,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    # Раньше здесь перекодировался только Python-поток, а консоль оставалась
+    # на cp1251/cp866 — и `--help` всё равно шёл «?». Теперь и консоль.
+    render.utf8_console()
 
     parser = _build_parser()
     args, extras = parser.parse_known_args(argv)
@@ -2253,8 +2267,18 @@ def main(argv: list[str] | None = None) -> int:
     # Ctrl+C где угодно — аккуратный выход без трейсбека.
     try:
         if not extras:
-            if not args.plain and args.color is not False and _fullscreen_ok():
-                return run_tui(session)
+            # Построчный режим — только по явному запросу: `--plain` или
+            # `--no-color` (он документирован как построчный). Если же
+            # полноэкранный режим недоступен по объективной причине, молча
+            # отдавать «урезанный» интерфейс нельзя: на новой машине это
+            # выглядит как сломанная программа. Показываем причину и точные
+            # команды установки (vliw/ui/setup_screen.py).
+            if not args.plain and args.color is not False:
+                if _fullscreen_ok():
+                    return run_tui(session)
+                from .ui import setup_screen
+
+                return setup_screen.explain()
 
             print_logo()
             # `--mode` пропускает экран выбора и здесь. Полноэкранный режим так
@@ -2292,8 +2316,12 @@ def main(argv: list[str] | None = None) -> int:
                                  "code") \
                 and len(extras) == 1:
             _apply_mode(session, extras[0])
-            if not args.plain and args.color is not False and _fullscreen_ok():
-                return run_tui(session, pick_app=False)
+            if not args.plain and args.color is not False:
+                if _fullscreen_ok():
+                    return run_tui(session, pick_app=False)
+                from .ui import setup_screen
+
+                return setup_screen.explain()
             print_logo()
             return repl(session)
 

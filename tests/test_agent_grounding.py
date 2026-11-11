@@ -148,20 +148,20 @@ class TestMachineFacts(unittest.TestCase):
 
 
 class TestTinyFactsInGrounding(unittest.TestCase):
-    """Агент в курсе крошек: третья цифра планирования — в фактах и в офлайне.
+    """Агент в курсе TINY Flash: третья цифра планирования — в фактах и в офлайне.
 
-    Синергия односторонняя и честная: крошки считаются детерминированно,
+    Синергия односторонняя и честная: TINY Flash считается детерминированно,
     агент только пересказывает готовое число. Проверяется та половина, что
-    контролируем мы: число в фактах совпадает с прямым прогоном TinyScheduler.
+    контролируем мы: число в фактах совпадает с прямым прогоном TinyFlashScheduler.
     """
 
     def test_facts_match_direct_tiny_run(self):
-        from vliw.tiny.scheduler import TinyScheduler
+        from vliw.tiny.fast import TinyFlashScheduler
 
         s = session()
         lines = context.tiny_facts(s)
         self.assertEqual(len(lines), 1)
-        res = TinyScheduler().schedule(s.dag_obj, s.model())
+        res = TinyFlashScheduler().schedule(s.dag_obj, s.model())
         self.assertIn(str(res.schedule.makespan), lines[0])
         self.assertIn(res.search_stats.get("tiny_winner", "?"), lines[0])
 
@@ -175,7 +175,7 @@ class TestTinyFactsInGrounding(unittest.TestCase):
 
     def test_offline_answer_mentions_tiny(self):
         a = Agent(session=session())
-        self.assertIn("крошки", a.offline_answer("почему этот участок медленный?"))
+        self.assertIn("TINY Flash", a.offline_answer("почему этот участок медленный?"))
 
 
 if __name__ == "__main__":

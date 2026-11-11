@@ -15,7 +15,7 @@ from .render import Style, paint, wrap
 
 def render_status(ready: bool, lines: list[str]) -> list[str]:
     """Готовность к локальному запуску: веса, зависимости, память."""
-    out = [paint("lab", "◆ ") + paint("title", "обученный планировщик")]
+    out = [paint("lab", "* ") + paint("title", "обученный планировщик")]
     out.append("  " + (paint("success", "готов к запуску") if ready
                        else paint("warning", "запустить пока нельзя")))
     out.append("")
@@ -117,7 +117,7 @@ def render_bench(res, adapter_name: str) -> list[str]:
 
     Разрез именно по STORE, а не только по размеру графа, — потому что в
     обучающих данных прогона 1 не было ни одной такой операции, и по корзинам
-    размера эта причина размазывается (docs/ROADMAP.md).
+    размера эта причина размазывается (docs/archive/ROADMAP.md).
     """
     n = len(res.rows)
     out = [paint("title", f"  замер · {adapter_name} · {n} примеров "

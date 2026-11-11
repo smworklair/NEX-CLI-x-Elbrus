@@ -28,6 +28,18 @@ TextArea, VerticalScroll, OptionList, DataTable, RichLog, ItemGrid {
     scrollbar-size-horizontal: 1;
 }
 
+/* --- поля ввода и рамки без «тонких блоков» ---------------------------- */
+/* По умолчанию Input рисует рамку `tall` из ▊ ▔ ▎ ▁, а скроллбары Textual —
+   из ▁▂▃…; в шрифтах без этих символов каждая клетка становится «квадратиком
+   с ?». `solid` — обычные одинарные линии (┌─┐│└┘), они есть в консольных
+   шрифтах. Начертание то же, просто без редких глифов. */
+Input {
+    border: solid $nex-line;
+}
+Input:focus {
+    border: solid $primary;
+}
+
 /* --- шапка режима ------------------------------------------------------ */
 /* height auto, а не 1: под основной строкой может стоять вторая — факты
     спящих режимов. Без фактов второй строки нет (display ставит код), и
@@ -106,7 +118,7 @@ PromptBar {
     border-top: solid $primary 55%;
 }
 
-/* Дети — по одной строке. Марка — шеврон «❯» в одну клетку с пробелом:
+/* Дети — по одной строке. Марка — шеврон «>» в одну клетку с пробелом:
     плашка «nex» на общем поле была лишней табличкой. */
 
 #prompt-mark {
@@ -196,7 +208,7 @@ Panel > * { padding-left: 1; }
 /* Волосок между колонками — там, где два окна встречаются. Обводить окно со
    всех сторон незачем: у края экрана граница не нужна, а окна друг под
    другом уже разделены полосой шапки. */
-#mind-right, #lab-right, #core-right { border-left: vkey $nex-line; }
+#mind-right, #lab-right, #core-right { border-left: solid $nex-line; }
 
 /* Шапка окна — полоса в одну строку. Фон рисуется и под padding, поэтому
    подложка идёт во всю ширину окна, а текст отступает на клетку. */
@@ -231,7 +243,7 @@ PanelToolbar {
 }
 
 /* Марджин чипа — ВНЕ трека не живёт: грид считает его внутрь колонки,
-   и каждый чип ужимался ровно на клетку («решётка ▶» читалась как
+   и каждый чип ужимался ровно на клетку («решётка >» читалась как
    «решётка»). Зазор между чипами при этом никуда не девается: у чипа
    паддинг 0 1 с обеих сторон, соседние дают две пустые клетки. Правило
    только для тулбара — у вкладок дока (DockTabs, обычный Horizontal)
@@ -301,7 +313,7 @@ PanelChat {
     width: 34%;
     height: 100%;
     background: $nex-panel;
-    border: round $primary;
+    border: solid $primary;
     border-title-align: left;
     padding: 0 1;
 }
@@ -451,7 +463,7 @@ Console {
     display: none;
     width: 44;
     height: 100%;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
     padding: 0 0 0 1;
     background: $nex-panel;
 }
@@ -612,7 +624,7 @@ Panel.-maximized #grid-side { display: block; }
 /* ДИАГНОЗ свёрнут до строки-сводки: подробности дублируют решётку
     (простой виден строкой, находка под курсором — в инспекторе разворота),
     панель держит только «сколько проблем и какая хуже». Полный список —
-    по 2×клику или клавише d из решётки. */
+    по 2xклику или клавише d из решётки. */
 /* Правая колонка обязана помещаться ЦЕЛИКОМ: ЧИСЛА и «ПОЧЕМУ ЗДЕСЬ» —
     по содержимому, но с потолком; длинный разбор и ответ ИИ прокручиваются
     внутри панели, а не распирают её и не уносят МАШИНУ за нижний край.
@@ -858,7 +870,7 @@ ModeScreen.very-low #model-provs-mini { display: none; }
     display: none;
     width: 22;
     height: 100%;
-    border-right: vkey $nex-line;
+    border-right: solid $nex-line;
 }
 
 /* Список файлов под шапкой: прокручивается он, шапка стоит. */
@@ -883,7 +895,7 @@ ModeScreen.very-low #model-provs-mini { display: none; }
     display: none;
     width: 30;
     height: 100%;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
 }
 
 #explorer-search { height: 1; width: 100%; }
@@ -1017,7 +1029,7 @@ ModeScreen.very-low #model-provs-mini { display: none; }
     display: none;
     width: 46;
     height: 100%;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
     padding: 0 1;
     scrollbar-size-vertical: 1;
 }
@@ -1040,7 +1052,7 @@ ModeScreen.very-low #model-provs-mini { display: none; }
     width: 38;
     height: 100%;
     padding: 0 1;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
     scrollbar-size-vertical: 1;
 }
 #line-side-body { width: 100%; height: auto; }
@@ -1059,7 +1071,7 @@ ModeScreen.tight #line-side { display: none; }
 #dock-bundles {
     width: 46;
     height: 100%;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
     scrollbar-size-vertical: 1;
 }
 
@@ -1142,7 +1154,7 @@ ModeScreen.zoom-dock #agent-asks { max-height: 4; }
     width: 40;
     height: 100%;
     padding: 0 1;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
     scrollbar-size-vertical: 1;
 }
 #agent-seen, #agent-trace { width: 100%; height: auto; }
@@ -1188,7 +1200,7 @@ ModeScreen.tight #agent-side { display: none; }
     width: 30;
     height: 100%;
     padding: 0 1;
-    border-left: vkey $nex-line;
+    border-left: solid $nex-line;
     scrollbar-size-vertical: 1;
 }
 
@@ -1287,7 +1299,7 @@ Suggest {
     height: auto;
     max-height: 9;
     background: $nex-raised;
-    border: round $primary;
+    border: solid $primary;
     padding: 0;
 }
 
@@ -1328,7 +1340,7 @@ Suggest {
     padding: 0 2;
     margin-bottom: 1;
     background: $nex-panel;
-    border: round $nex-line;
+    border: solid $nex-line;
 }
 
 .mode-card.selected {
@@ -1414,7 +1426,7 @@ PickerScreen.micro .mode-card { height: 3; padding: 0 2; }
 ConsoleJournal { display: none; height: 1fr; width: 100%; }
 
 /* Левая колонка: история сессии. 32 — по строке коммита
-    «▸ #12 14:02 к /code run», а не «на глаз побольше». */
+    «> #12 14:02 к /code run», а не «на глаз побольше». */
 #journal-side {
     width: 32;
     height: 100%;
@@ -1582,7 +1594,7 @@ PanelPrompt {
     height: auto;
     max-height: 60%;
     background: $nex-panel;
-    border: round $primary;
+    border: solid $primary;
     padding: 0 1;
     margin: 0 1 0 1;
 }
@@ -1591,7 +1603,7 @@ PanelPrompt {
 #pp-title { width: 1fr; height: 1; }
 
 /* Крестик — не кнопка с рамкой (это спорило бы с полями ввода вокруг), а
-   строка «✕ Esc», которая выделяется только под курсором: так же ведут себя
+   строка «x Esc», которая выделяется только под курсором: так же ведут себя
    чипы. Ширина под подпись, а не только символ: клавишу закрытия должно
    быть видно текстом, а не только всплывающей подсказкой по наведению. */
 #pp-close {

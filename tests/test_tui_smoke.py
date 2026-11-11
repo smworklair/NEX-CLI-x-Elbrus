@@ -1838,7 +1838,7 @@ class TestJournalIsSessionBridge(unittest.TestCase):
             text = journal._row(0, session.journal_runs[0]).plain
             return ("#1" in text, "14:02" in text,
                     "slotclash" in text, "3 оп." in text,
-                    "●" in text, "│" in text)
+                    "*" in text, "│" in text)
 
         has_num, has_time, has_scen, has_ops, dot, line = self._journal(body)
         self.assertTrue(has_num, "в истории нет номера записи")
@@ -2415,6 +2415,10 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                         if grid.max_scroll_x > 0:
                             break
                         await pilot.pause()
+                    # Ещё один кадр: max_scroll_x становится положительным
+                    # раньше, чем решётка достраивается окончательно, и
+                    # поздний пересчёт сбрасывает уже сделанную прокрутку.
+                    await pilot.pause()
                     # Прокрутка ДО упора вправо: проверяем самый плохой
                     # случай, а не «немножко сдвинули».
                     grid.scroll_to(x=grid.max_scroll_x, animate=False)
@@ -2448,6 +2452,9 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         async def body(screen, pilot, session):
             op = screen.parsed.ops[3]
             grid = screen.query_one("#code-grid", DataTable)
+            # Дать решётке достроиться: первый пересчёт после раскладки
+            # сбрасывает курсор, выставленный до него.
+            await pilot.pause()
             screen._sync_grid_cursor(op.line)
             await pilot.pause()
             cell = (grid.cursor_row, grid.cursor_column)
@@ -2815,7 +2822,7 @@ class TestNonAsmFilesDoNotPretend(unittest.TestCase):
     def _open(self, kind):
         """Открыть файл такого типа и вернуть, что о нём думает экран.
 
-        Заводить `.py` из панели больше нельзя (см. docs/REDESIGN.md), но
+        Заводить `.py` из панели больше нельзя (см. docs/archive/REDESIGN.md), но
         ОТКРЫТЬ лежащий рядом скрипт человек может в любой момент — через
         проводник. Проверяется именно этот путь.
         """
@@ -3339,7 +3346,7 @@ class TestExplorerSearchStaysCheap(unittest.TestCase):
                 await pilot.pause()
                 await pilot.pause()
                 rows = sc._explorer_rows()
-                back = [r for r in rows if r[1].startswith("↩")]
+                back = [r for r in rows if r[1].startswith("←")]
                 if not back:
                     return start, None, None
                 sc.post_message(SideItem.Picked(back[0][0]))
@@ -4469,7 +4476,7 @@ class TestHeadquartersPanel(unittest.TestCase):
         wide, prov, marks = asyncio.run(go())
         self.assertEqual(wide, "", "выбор API не разворачивает панель")
         self.assertEqual(prov, "gemini")
-        self.assertIn("●", marks["mprov:gemini"])
+        self.assertIn("*", marks["mprov:gemini"])
 
     def test_mini_key_connects_without_disk(self):
         async def go():

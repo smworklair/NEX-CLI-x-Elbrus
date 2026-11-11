@@ -14,8 +14,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from textual.app import App
+from textual.scrollbar import ScrollBarRender
 
 from . import palette
+
+#: Скроллбары Textual рисуют концы тонкими блоками (▁▂▃…): в шрифтах, где их
+#: нет, каждая клетка полосы становится «квадратиком с ?». Полный блок █ есть
+#: в любом консольном шрифте — плавность концов теряем, читаемость нет.
+ScrollBarRender.VERTICAL_BARS = ["█"]
+ScrollBarRender.HORIZONTAL_BARS = ["█"]
 
 CSS_FILE = Path(__file__).parent / "nex.tcss"
 

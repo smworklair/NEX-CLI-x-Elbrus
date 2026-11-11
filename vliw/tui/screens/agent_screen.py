@@ -184,7 +184,7 @@ class AgentScreen(ModeScreen):
     def on_ready(self) -> None:
         grid = self.query_one("#question-chips", ItemGrid)
         for q in QUESTIONS:
-            grid.mount(Chip("› " + q, q, classes="chip chip-question"))
+            grid.mount(Chip("> " + q, q, classes="chip chip-question"))
         self._draw_seen()
         self._draw_trace()
         self._draw_model()
@@ -619,7 +619,7 @@ class AgentScreen(ModeScreen):
             row.append("\n     ")
             row.append(f"{it['seconds']:.0f} с", style=faint)
             if it["acts"]:
-                row.append(f"   ·   ⚙ {it['acts']} "
+                row.append(f"   ·   * {it['acts']} "
                            + plural(it["acts"], "действие", "действия",
                                     "действий"), style=accent)
             row.append("\n")
@@ -693,8 +693,8 @@ class AgentScreen(ModeScreen):
             lines = [f"Подключений: {len(self.headquarters_connections())}, "
                      f"миссий: {len(self._hq_tasks)}."]
             for task in self._hq_tasks[-5:]:
-                mark = {"working": "…", "done": "✓",
-                        "error": "✗"}.get(task["status"], "·")
+                mark = {"working": "…", "done": "+",
+                        "error": "-"}.get(task["status"], "·")
                 lines.append(
                     f"{mark} {task['conn']} · "
                     f"{hq_mod.AREA_LABEL.get(task['area'], task['area'])}: "
@@ -994,7 +994,7 @@ class AgentScreen(ModeScreen):
         cur = self._model_provider()
         for tool in bar.query(Tool):
             name = tool.tool[6:] if tool.tool.startswith("mprov:") else ""
-            mark = "● " if name == cur else ""
+            mark = "* " if name == cur else ""
             label = llm._label(name) if name else ""
             tool.update(f"{mark}{label or name}")
 
@@ -1157,7 +1157,7 @@ class AgentScreen(ModeScreen):
         cur = self._model_provider()
         for tool in bar.query(Tool):
             name = tool.tool[6:] if tool.tool.startswith("mprov:") else ""
-            mark = "● " if name == cur else ""
+            mark = "* " if name == cur else ""
             label = llm._label(name) if name else ""
             tool.update(f"{mark}{label or name}")
 
@@ -1353,7 +1353,7 @@ class AgentScreen(ModeScreen):
                          style=palette.role_hex("mind"))
         if self._hq_tasks:
             last = self._hq_tasks[-1]
-            mark = {"working": "… ", "done": "✓ ", "error": "✗ "}.get(
+            mark = {"working": "… ", "done": "+ ", "error": "- "}.get(
                 last["status"], "· ")
             # Мини — в одну строку: колонка узкая, перенос здесь крадёт
             # целую строку у соседних блоков.
@@ -1390,11 +1390,11 @@ class AgentScreen(ModeScreen):
                                     "в ПОДКЛЮЧЕНИИ",
                                     style=palette.role_hex("faint"))))
         for i, (label, _be) in enumerate(labels):
-            mark = "● " if i == self._hq_conn else ""
+            mark = "* " if i == self._hq_conn else ""
             conns.mount(Tool(f"{mark}{label}", f"hqconn:{i}"))
         areas.remove_children()
         for aid, alabel, _q in hq_mod.AREAS:
-            mark = "● " if aid == self._hq_area else ""
+            mark = "* " if aid == self._hq_area else ""
             areas.mount(Tool(f"{mark}{alabel}", f"hqarea:{aid}"))
         try:
             desc = next(q for aid, _, q in hq_mod.AREAS
@@ -1416,7 +1416,7 @@ class AgentScreen(ModeScreen):
         from ...agent import hq as hq_mod
 
         t = Text()
-        mark = {"working": "… ", "done": "✓ ", "error": "✗ "}.get(
+        mark = {"working": "… ", "done": "+ ", "error": "- "}.get(
             task["status"], "· ")
         t.append(f"{mark}{task['conn']} · "
                  f"{hq_mod.AREA_LABEL.get(task['area'], task['area'])}",

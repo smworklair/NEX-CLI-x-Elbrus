@@ -108,7 +108,7 @@ def _next_hint(detail: str) -> str:
 def render_status(ok: bool, detail: str) -> list[str]:
     from ..agent import llm
 
-    out = [paint("mind", "◆ ") + paint("title", "языковая модель")]
+    out = [paint("mind", "* ") + paint("title", "языковая модель")]
     if ok:
         out.append("  " + paint("success", "доступна") + Style.dim(f"   {detail}"))
     else:
@@ -161,7 +161,7 @@ def render_intro(width: int | None = None) -> list[str]:
               "загрузи examples/probe.s и разбери",
               "сравни baseline с точным поиском",
               "что за монопольный порт ,5?"):
-        out += wrap(paint("mind_soft", "› ") + Style.dim(q), w, "")
+        out += wrap(paint("mind_soft", "> ") + Style.dim(q), w, "")
     out.append("")
     out.append(Style.dim("/ai  ·  /ask  ·  /exit"))
     return out

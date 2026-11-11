@@ -24,7 +24,7 @@ baseline и oracle по построению выдают ЗАКОННОЕ ра�
 Формат промпта берётся из `training/encode.py` — того самого модуля, которым
 собирался обучающий датасет. Это намеренно: продублировать формат здесь
 значило бы завести вторую копию, которая однажды молча разъедется с обучением.
-Ровно так и получился EOS-баг (docs/EOS_INCIDENT.md).
+Ровно так и получился EOS-баг (docs/archive/EOS_INCIDENT.md).
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ class LearnedScheduler:
         self.constrained = constrained
         """Ограничить ответ грамматикой: формат и законность канала.
 
-        Замер docs/DIAG3.md: 84% законных против 15% на том же адаптере, из
+        Замер docs/archive/DIAG3.md: 84% законных против 15% на том же адаптере, из
         них 74% в точном оптимуме CP-SAT. Модель при этом та же — грамматика
         не планирует, она лишь убирает два способа провалиться, к
         планированию отношения не имеющих.
@@ -314,7 +314,7 @@ class LearnedScheduler:
             notes.append(
                 f"НЕ ОСТАНОВИЛАСЬ: {len(extra)} строк для несуществующих "
                 f"инструкций (id {extra[:6]}{'…' if len(extra) > 6 else ''}). "
-                "Префикс при этом может быть законным — см. docs/EOS_INCIDENT.md.")
+                "Префикс при этом может быть законным — см. docs/archive/EOS_INCIDENT.md.")
         if missing:
             notes.append(f"НЕ РАЗМЕЩЕНЫ инструкции: {missing}")
         if report is not None and report.touched:

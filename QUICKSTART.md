@@ -1,61 +1,74 @@
-# QUICKSTART (English)
+# Быстрый старт
 
-Get the calculator running in ~2 minutes.
+> Этап 1 из 13 · [Маршрут](docs/README.md) · [CLI →](docs/CLI.md)
 
-## 1. Clone + Python
+Запуск за пару минут. Нужен только **Python 3.10+**; компилятор `lcc`, QEMU и железо не требуются.
 
-Requires Python 3.10+. No compiler toolchain needed (`lcc`, QEMU, LLVM
-are NOT used anywhere).
+## 1. Получить код
 
 ```bash
-git clone <your-fork-url> vliw-ai-scheduler
-cd vliw-ai-scheduler
-python3 --version  # must be 3.10+
+git clone https://github.com/smworklair/NEX-CLI-x-Elbrus
+cd NEX-CLI-x-Elbrus
+python3 --version        # на Windows: python --version или py --version
 ```
 
-## 2. Install
+## 2. Установить
 
-Core (scheduler + plain CLI) needs no dependencies:
+Для ядра и построчного режима зависимостей нет:
 
 ```bash
 pip install -e .
 ```
 
-With the fullscreen TUI (recommended):
+Для полноэкранного рабочего места (рекомендуется):
 
 ```bash
-pip install -e ".[tui]"
+pip install -e ".[tui]"  # rich + textual
 ```
 
-For the learned-model track (heavy: torch/transformers):
+После установки доступна команда `vliw`; без установки работает `python -m vliw` из папки проекта.
+
+## 3. Запустить
 
 ```bash
-pip install -e ".[learned]"
+python -m vliw                 # экран выбора: КОД / РАЗБОР / АГЕНТ / ЯДРО
+python -m vliw run slotclash   # один сценарий и выход
+python -m vliw compare         # жадный и точный поиск рядом
+python -m vliw all             # сводка по всем 17 сценариям
+python -m vliw --plain         # построчный режим без полноэкранных панелей
 ```
 
-This installs the `vliw` command. Without install, `python -m vliw`
-from the repo root works too.
+Внутри рабочего места команды пишутся со слэшем: `/run slotclash`, `/compare`, `/doctor`, `/tiny`.
+Список всех команд — `/help` или `python -m vliw --help`.
 
-## 3. Run
+## 4. Свой `.s`-файл
 
-```bash
-vliw run slotclash     # one command and exit
-vliw compare           # baseline vs oracle side by side
-vliw all               # summary over all scenarios
-python -m vliw         # interactive loop (/help, /compare, /play, /exit)
+Откройте режим **КОД** (`1` на экране выбора или `--mode code`), загрузите файл:
+
+```text
+/load examples/probe.s
 ```
 
-Real `.s` through the TUI code editor: open the CODE mode, then
-`/code load real_candidates_100_400/asm/poly_gemm.s`, then `F5`.
-Expect a legal schedule in ~13 s (core search portfolio fallback, NOT the learned model) with an empty
-`validate()`.
+и нажмите `F5`. Будет разобран настоящий вывод `lcc`: расписание, замечания и сравнение с точным поиском.
+Подробно — [`docs/CODE_MODE.md`](docs/CODE_MODE.md).
 
-## 4. Test
+## 5. Проверить
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-Skips without `torch` are normal (learned track not installed).
-Skips without `textual` are normal too (fullscreen TUI not installed) —
-install `.[tui]` to run those.
+Пропуски без `torch` (обученная LLM) и без `textual` (полноэкранный интерфейс) — норма, а не ошибка.
+Полный набор зависимостей: `pip install -e ".[tui,learned]"`.
+
+## Если что-то не так
+
+| симптом | что делать |
+|---|---|
+| `No module named vliw` | запускать из папки проекта или выполнить `pip install -e .` |
+| `python3` не найден | на Windows используйте `python` или `py` |
+| вместо интерфейса — экран-помощник | не установлен `textual`; помощник поставит его после согласия |
+| квадраты вместо кириллицы | обновите репозиторий: UTF-8 включается автоматически |
+| агент отвечает без модели | это норма: без ключа он отвечает по посчитанным числам |
+
+Остальное — [`docs/CLI.md`](docs/CLI.md) и [`docs/WINDOWS.md`](docs/WINDOWS.md).

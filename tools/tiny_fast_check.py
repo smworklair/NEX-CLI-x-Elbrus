@@ -3,7 +3,7 @@
 Для каждого графа запускаются:
   greedy         — жадный baseline (для масштаба времени);
   TinyScheduler  — эталон (полный портфель, как в проекте);
-  fast exact     — TinyFastScheduler, режим точности: makespan ОБЯЗАН совпасть с эталоном;
+  fast exact     — TinyFlashScheduler, режим точности: makespan ОБЯЗАН совпасть с эталоном;
   fast exact*    — то же без трассы / без numpy / без остановки по границе (варианты);
   fast asm       — режим без hold/defer: НЕ гарантия, показываем потерю.
 
@@ -88,12 +88,12 @@ def main() -> int:
     model = get_profile("e2k-v6-measured")
     ref = None if a.no_reference else TinyScheduler()
     variants = {
-        "fast exact": fast.TinyFastScheduler(mode="exact"),
-        "fast exact, без трассы": fast.TinyFastScheduler(mode="exact", with_trace=False),
-        "fast exact, без numpy": fast.TinyFastScheduler(mode="exact", use_numpy=False, with_trace=False),
-        "fast exact, без остановки": fast.TinyFastScheduler(mode="exact", stop_at_bound=False,
+        "fast exact": fast.TinyFlashScheduler(mode="exact"),
+        "fast exact, без трассы": fast.TinyFlashScheduler(mode="exact", with_trace=False),
+        "fast exact, без numpy": fast.TinyFlashScheduler(mode="exact", use_numpy=False, with_trace=False),
+        "fast exact, без остановки": fast.TinyFlashScheduler(mode="exact", stop_at_bound=False,
                                                             with_trace=False),
-        "fast asm (не гарантия)": fast.TinyFastScheduler(mode="asm", with_trace=False),
+        "fast asm (не гарантия)": fast.TinyFlashScheduler(mode="asm", with_trace=False),
     }
     guaranteed = [k for k in variants if "asm" not in k]
     greedy = GreedyListScheduler()

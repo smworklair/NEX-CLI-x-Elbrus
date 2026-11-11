@@ -1,0 +1,90 @@
+{
+  "name": "nnl-purple",
+  "description": "Экран запуска: глубокий фиолетовый, сиреневые акценты; успех, ошибка и предупреждение сохраняют смысл (зелёный/красный/амбра).",
+  "roles": {
+    "text": {
+      "color": 253
+    },
+    "dim": {
+      "color": 246
+    },
+    "faint": {
+      "color": 240
+    },
+    "accent": {
+      "color": 183,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "accent_soft": {
+      "color": 147
+    },
+    "accent2": {
+      "color": 141,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "accent2_soft": {
+      "color": 141
+    },
+    "success": {
+      "color": 114
+    },
+    "warning": {
+      "color": 215
+    },
+    "error": {
+      "color": 203,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "banner": {
+      "color": 135,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "banner_alt": {
+      "color": 183,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "mountain": {
+      "color": 140
+    },
+    "snow": {
+      "color": 255,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "border": {
+      "color": 61
+    },
+    "border_hi": {
+      "color": 141
+    },
+    "title": {
+      "color": 183,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "prompt": {
+      "color": 141,
+      "attrs": [
+        "bold"
+      ]
+    },
+    "selection": {
+      "color": 7,
+      "attrs": [
+        "reverse"
+      ]
+    }
+  }
+}

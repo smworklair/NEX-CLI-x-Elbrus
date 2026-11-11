@@ -39,7 +39,7 @@ class TestPromptIsTrainingFormat(unittest.TestCase):
         """Промпт обязан собираться тем же кодом, что и обучающий датасет.
 
         Вторая копия формата однажды молча разъедется с обучением — ровно так
-        и получился EOS-баг (docs/EOS_INCIDENT.md).
+        и получился EOS-баг (docs/archive/EOS_INCIDENT.md).
         """
         dag, machine, _ = _fixture()
         seen = {}
@@ -431,7 +431,7 @@ def _answer_line(dag, machine, instr: int, cycle: int, channel: int) -> str:
 
     Писать `"0: такт=0 канал=4"` от руки нельзя: это вторая копия формата, а
     вторая копия однажды молча разъезжается с обучением — так и получился
-    EOS-баг (docs/EOS_INCIDENT.md). Формат живёт в одном месте, тесты берут
+    EOS-баг (docs/archive/EOS_INCIDENT.md). Формат живёт в одном месте, тесты берут
     его оттуда же, откуда берёт планировщик.
     """
     sched = Schedule(dag, machine)

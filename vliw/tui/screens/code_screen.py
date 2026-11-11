@@ -7,7 +7,7 @@
 вопроса прямо в тексте:
 
   * **в каком такте пойдёт эта строка** — гуттер слева от кода, `т7 ,0`;
-  * **что тут не по машине** — метка `▲` на строке и разбор в ЧТО НЕ ТАК:
+  * **что тут не по машине** — метка `^` на строке и разбор в ЧТО НЕ ТАК:
     канал, которого у операции нет; порт, занятый предыдущей операцией;
     чтение результата раньше латентности (ассемблер это пропустит — код
     соберётся и будет считать не то);
@@ -137,7 +137,7 @@ def file_excerpt(name: str, text: str, center: int, window: int = 15) -> list[st
     return out
 
 
-CONT = "═"        # клетка занята продолжением длинной операции
+CONT = "─"        # клетка занята продолжением длинной операции
                   # (тянется вправо: решётка развёрнута, см. _fill_grid)
 EMPTY = "·"
 
@@ -270,14 +270,14 @@ class AsmArea(TextArea):
     #: экрана. Свой гуттер ставит их рядом: `  5  т0 │ muls,0 …`.
     #:
     #: Ширина гуттера СЧИТАЕТСЯ по содержимому, а не задана числом. Пока
-    #: она была постоянной (13 колонок под самую длинную метку `▲ т12→13`),
+    #: она была постоянной (13 колонок под самую длинную метку `^ т12→13`),
     #: буфер без прогона отдавал те же 13 колонок под метки вида `т7` — и на
     #: окне в 124 знака у кода оставалось 59, комментарии обрезались на
     #: середине. Считаем по факту: 3 колонки на номер + самая длинная метка.
     MIN_MARK_W = 3
     MAX_MARK_W = 10
 
-    #: Колонка действия в самом начале гуттера: `▷` на строке под курсором.
+    #: Колонка действия в самом начале гуттера: `>` на строке под курсором.
     #: Гуттер несёт действие — так запуск живёт в IDE, стрелкой у строки, а
     #: не рядом текстовых кнопок над кодом. Ряд кнопок отбирал целую строку
     #: экрана всегда и повторял то, что уже написано в подсказках клавиш;
@@ -400,7 +400,7 @@ class AsmArea(TextArea):
         head = Strip([
             # Стрелка — только на строке под курсором: шестьдесят стрелок
             # подряд были бы обоями, а не кнопкой.
-            Segment("▷ " if (cursor and self.runnable) else "  ",
+            Segment("> " if (cursor and self.runnable) else "  ",
                     RichStyle(color=palette.role_hex("success"), bold=True)
                     if cursor else num_style),
             Segment(f"{row + 1:>{self.NUM_W - 1}} ", num_style),
@@ -556,7 +556,7 @@ class DrawerChip(Static):
 
 
 class FileStrip(Static):
-    """Полоса вкладок открытых буферов. Клик — переключить, ✕ — закрыть.
+    """Полоса вкладок открытых буферов. Клик — переключить, x — закрыть.
 
     Вкладки файлов нужны не ради «как в редакторе». Сравнение двух участков
     — основная работа в этом инструменте: открыл `probe.s` от lcc, рядом
@@ -599,7 +599,7 @@ class FileStrip(Static):
 
     def __init__(self, *args, **kw) -> None:
         super().__init__(*args, **kw)
-        #: [(начало, конец, номер вкладки, есть ли ✕)] в клетках строки.
+        #: [(начало, конец, номер вкладки, есть ли x)] в клетках строки.
         self.spans: list[tuple[int, int, int, bool]] = []
         #: [(начало, конец, что переключает)] — кнопки панелей справа.
         self.toggles: list[tuple[int, int, str]] = []
@@ -619,7 +619,7 @@ class FileStrip(Static):
             if not (start <= event.x < end):
                 continue
             event.stop()
-            # ✕ занимает две последние клетки вкладки.
+            # x занимает две последние клетки вкладки.
             if closable and event.x >= end - 2:
                 self.post_message(self.Closed(index))
             elif double:
@@ -630,10 +630,10 @@ class FileStrip(Static):
 
 
 class SideItem(Static):
-    """Строка каталога слева. Клик открывает файл, ✕ справа — удаляет.
+    """Строка каталога слева. Клик открывает файл, x справа — удаляет.
 
     В сообщении едет и КОЛОНКА клика: строка каталога делает два разных
-    дела, и какое именно — решает то, куда попали. Отдельным виджетом ✕
+    дела, и какое именно — решает то, куда попали. Отдельным виджетом x
     сделать нельзя: строк в каталоге десятки, и каждая стала бы двумя
     виджетами вместо одного, с перемонтажом на каждую перерисовку.
     """
@@ -699,7 +699,7 @@ class DockSplitter(Static):
         left = (w - 3) // 2
         t = Text()
         t.append("─" * left, style=palette.role_hex("border"))
-        t.append("╍╍╍", style=palette.role_hex("dim"))
+        t.append("───", style=palette.role_hex("dim"))
         t.append("─" * (w - left - 3), style=palette.role_hex("border"))
         return t
 
@@ -985,7 +985,7 @@ class CodeScreen(ModeScreen):
     #: Скрипт `.py` отсюда УБРАН. Завести его инструмент умел, а запустить —
     #: нет, и «зачем он тут» не отвечал ни интерфейс, ни этот комментарий.
     #: Кнопка, которая делает файл и на этом кончается, — не функция, а
-    #: обещание. Запуск скриптов вынесен в docs/REDESIGN.md, к следующему
+    #: обещание. Запуск скриптов вынесен в docs/archive/REDESIGN.md, к следующему
     #: заходу: там у него есть смысл (скрипт порождает .s и сразу открывает
     #: его вкладкой), но это отдельная работа, а не строчка в списке типов.
     #:
@@ -1027,7 +1027,7 @@ class CodeScreen(ModeScreen):
         "term": "сюда приходит результат: прогоны, история сессии, команды",
         "core": "консоль интерпретатора: собрать граф, не умея писать "
                 "ассемблер",
-        "agent": "переписка с агентом целиком: 2×клик — на весь экран",
+        "agent": "переписка с агентом целиком: 2xклик — на весь экран",
     }
 
     #: Что остаётся видимым при встроенном развороте (его здесь не бывает,
@@ -1111,7 +1111,7 @@ class CodeScreen(ModeScreen):
         #: Просили показать расписание точного поиска, пока его не было:
         #: переключимся на него, когда прогон закончится (см. _sched_view).
         self._want_orc = False
-        #: Файл каталога, у которого нажали ✕ и который ждёт подтверждения.
+        #: Файл каталога, у которого нажали x и который ждёт подтверждения.
         #: Удаление необратимо, поэтому спрашиваем — но не модальным окном
         #: поверх работы, а двумя строками в самом каталоге, там же, где
         #: нажали.
@@ -1180,7 +1180,7 @@ class CodeScreen(ModeScreen):
             # ПРОВОДНИК справа. ЗАКРЫТ по умолчанию (^E открывает, ▐ в
             # верхней полосе переключает).
             #
-            # АЛЬФА, к следующему заходу — см. docs/REDESIGN.md. Здесь он
+            # АЛЬФА, к следующему заходу — см. docs/archive/REDESIGN.md. Здесь он
             # решает ровно одну задачу, зато главную: инструмент про то, что
             # человек приносит СВОЙ `.s` от lcc, а принести его до сих пор
             # можно было двумя способами — положить в рабочий каталог или
@@ -1192,7 +1192,7 @@ class CodeScreen(ModeScreen):
             # ради которого экран и открывают.
             with Vertical(id="code-explorer"):
                 yield Static(id="explorer-head", classes="panel-head")
-                yield Horizontal(Static(" ⌕ ", id="explorer-mark"),
+                yield Horizontal(Static(" / ", id="explorer-mark"),
                                  Input(placeholder="имя файла или папки",
                                        id="explorer-find"),
                                  id="explorer-search")
@@ -1207,7 +1207,7 @@ class CodeScreen(ModeScreen):
             # (`session.dialog`), те же факты буфера. Два окна в одно и то же
             # — это не два способа работать, а лишний вопрос «в котором из них
             # я сейчас спрашиваю». Осталась вкладка: у неё вся ширина дока,
-            # разворот на весь экран по 2×клику и своя строка вопроса.
+            # разворот на весь экран по 2xклику и своя строка вопроса.
             #
             # ^G и кнопка ▐ в верхней полосе открывают её же.
 
@@ -1309,7 +1309,7 @@ class CodeScreen(ModeScreen):
             # с которого начинали, рвал ответ на каждом слове (34 клетки) и
             # показывал ту же переписку — держать оба смысла не было.
             #
-            # В РАЗВОРОТЕ (2×клик по вкладке) у него появляется то, чему в
+            # В РАЗВОРОТЕ (2xклик по вкладке) у него появляется то, чему в
             # восьми строках места нет: колонка «что видит агент» с фактами
             # буфера, трасса его действий, готовые вопросы про этот участок и
             # кнопки очистки с повтором. Полный экран — это не «то же самое
@@ -1318,7 +1318,7 @@ class CodeScreen(ModeScreen):
             yield Horizontal(
                 Vertical(
                     Horizontal(
-                        Tool("↻ повторить", "agent-repeat",
+                        Tool("~ повторить", "agent-repeat",
                              "задать последний вопрос ещё раз"),
                         Tool("очистить", "agent-clear",
                              "стереть переписку — во всех трёх окнах сразу"),
@@ -1327,7 +1327,7 @@ class CodeScreen(ModeScreen):
                         id="agent-tools"),
                     VerticalScroll(Static(id="agent-log"), id="agent-log-box"),
                     ItemGrid(id="agent-asks", min_column_width=36),
-                    Horizontal(Static(" ❯ ", id="agent-mark"),
+                    Horizontal(Static(" > ", id="agent-mark"),
                                Input(placeholder="спросите обычным языком — "
                                      "агент отвечает по посчитанным числам",
                                      id="agent-input"),
@@ -1352,7 +1352,7 @@ class CodeScreen(ModeScreen):
                     # стоят там же, где рука: рядом с полем, куда это и
                     # попадёт по клику.
                     ItemGrid(id="core-chips", min_column_width=9),
-                    Horizontal(Static(" ❯ ", id="core-mark"),
+                    Horizontal(Static(" > ", id="core-mark"),
                                Input(placeholder="a = 10   ·   t = a*2   "
                                      "·   sum 8   ·   go", id="core-input"),
                                id="core-prompt"),
@@ -1375,7 +1375,7 @@ class CodeScreen(ModeScreen):
                 yield Static(id="code-keys")
                 yield Static(id="code-status")
                 yield DrawerChip(
-                    "lint", "▲ 0",
+                    "lint", "^ 0",
                     "замечания машины: клик — вкладка ЗАМЕЧАНИЯ",
                     id="status-lint")
                 yield DrawerChip(
@@ -1416,7 +1416,7 @@ class CodeScreen(ModeScreen):
         self.query_one("#code-line-chip", LineChip).tooltip = (
             "строка под курсором: такт, каналы, замечания\n"
             "клик — полный разбор (вкладка РАЗБОР снизу)")
-        edit.tooltip = ("▷ у строки под курсором — прогнать буфер (F5)\n"
+        edit.tooltip = ("> у строки под курсором — прогнать буфер (F5)\n"
                         "тN в гуттере — в каком такте операция выдаётся\n"
                         "тN→M — точный поиск кладёт её в такт M")
         self._draw_side()
@@ -1572,7 +1572,7 @@ class CodeScreen(ModeScreen):
             if text is not None:
                 self.open_file(text, f"{name}.s", example=name)
             return
-        # Клик по ✕ (правый край строки) — спросить про удаление.
+        # Клик по x (правый край строки) — спросить про удаление.
         if getattr(event, "at_x", -1) >= self.DELETE_X and self._deletable(key):
             self._to_delete = key
             self._draw_explorer()
@@ -1585,7 +1585,10 @@ class CodeScreen(ModeScreen):
             if con is not None:
                 con.note(f"  {key}: {exc}", "error")
             return
-        self.open_file(text, key.rsplit("/", 1)[-1], path=key)
+        # Имя вкладки — только имя файла. Делить строку по «/» нельзя:
+        # на Windows ключ приходит с обратными слэшами, и в заголовке
+        # вкладки оказывался весь путь целиком (C:\...\probe.s).
+        self.open_file(text, Path(key).name, path=key)
 
     def _new_buffer(self, kind: str = "s") -> None:
         """Пустая вкладка выбранного типа.
@@ -2302,7 +2305,7 @@ class CodeScreen(ModeScreen):
     #: набор остановился: «slots» — это пять обходов вместо одного.
     FIND_DEBOUNCE = 0.2
 
-    #: С какой колонки в строке проводника начинается ✕ удаления. Клик левее
+    #: С какой колонки в строке проводника начинается x удаления. Клик левее
     #: — это «открыть файл»: удаление не должно случаться от промаха.
     DELETE_X = 24
 
@@ -2489,7 +2492,7 @@ class CodeScreen(ModeScreen):
             if path == str(folder):
                 continue
             name = Path(path).name or path
-            rows.append(("hist:" + path, "↩ " + name, True))
+            rows.append(("hist:" + path, "← " + name, True))
         try:
             with os.scandir(folder) as it:
                 entries = list(it)
@@ -2665,7 +2668,7 @@ class CodeScreen(ModeScreen):
             rel = self._rel(Path(key))
             mine = (not is_dir) and self._deletable(rel)
             t = Text()
-            t.append("  " + ("▸ " if is_dir else "  "),
+            t.append("  " + ("> " if is_dir else "  "),
                      style=palette.role_hex("accent2" if is_dir else "faint"))
             short = label if len(label) <= 19 else "…" + label[-18:]
             t.append(short, style=palette.role_hex("text") if is_dir else dim)
@@ -2679,13 +2682,13 @@ class CodeScreen(ModeScreen):
             if "OBSOLETE" in Path(key).name.upper():
                 t.append("  экспонат", style=palette.role_hex("warning"))
             if mine:
-                # ✕ — только у файлов рабочего каталога: примеры лежат в
+                # x — только у файлов рабочего каталога: примеры лежат в
                 # пакете, и стереть их промахом мимо имени нельзя.
                 t.append(" " * max(1, self.DELETE_X - t.cell_len), style=faint)
-                # ✕ виден ВСЕГДА, приглушённым: кнопка, которая появляется
+                # x виден ВСЕГДА, приглушённым: кнопка, которая появляется
                 # только после нажатия, — не кнопка. Красным он становится,
                 # когда ждёт подтверждения.
-                t.append("✕", style=palette.role_hex(
+                t.append("x", style=palette.role_hex(
                     "error" if self._to_delete == rel else "faint"))
             cls = "side-item"
             if len(items) - (1 if not rows else 0) == self._explorer_at:
@@ -2694,7 +2697,7 @@ class CodeScreen(ModeScreen):
                             t, classes=cls)
             item.tooltip = (f"{key}\n" + ("клик — зайти в папку" if is_dir
                                           else "клик — открыть вкладкой"
-                                          + ("\n✕ справа — удалить файл"
+                                          + ("\nx справа — удалить файл"
                                              if mine else "")))
             items.append(item)
         if self._to_delete:
@@ -2824,7 +2827,7 @@ class CodeScreen(ModeScreen):
                                         width, style=faint))
         else:
             for act in self.ai_actions[-12:]:
-                t.append_text(self._wrapped("⚙ " + act, width,
+                t.append_text(self._wrapped("* " + act, width,
                                             style=palette.role_hex("accent2")))
         trace.update(t)
 
@@ -2836,7 +2839,7 @@ class CodeScreen(ModeScreen):
             return
         if not list(grid.children):
             for q in self.ASKS:
-                grid.mount(Chip("› " + q, q, classes="chip chip-question"))
+                grid.mount(Chip("> " + q, q, classes="chip chip-question"))
 
     def _ai_topic(self) -> str:
         """Про что агент объясняет: про код или про вкладку, с которой пришли.
@@ -3198,7 +3201,7 @@ class CodeScreen(ModeScreen):
         log = self.query_one("#core-log", RichLog)
         ws = self.app.session.workspace()
         echo = Text()
-        echo.append("❯ ", style=palette.role_hex("faint"))
+        echo.append("> ", style=palette.role_hex("faint"))
         echo.append(line, style=palette.role_hex("title"))
         log.write(echo)
         try:
@@ -3372,7 +3375,7 @@ class CodeScreen(ModeScreen):
             if self.comp is not None and self.comp.makespan > orc:
                 gap = self.comp.makespan - orc
                 t.append("резерв".ljust(15), style=dim)
-                t.append(f"−{gap} т.  "
+                t.append(f"-{gap} т.  "
                          f"({100 * gap / self.comp.makespan:.0f}%)\n",
                          style=palette.role_hex("success"))
         else:
@@ -3404,7 +3407,7 @@ class CodeScreen(ModeScreen):
             if self._have_orc():
                 gap = left.makespan - self.orc.schedule.makespan
                 if gap > 0:
-                    t.append(f" −{gap} ", style=palette.role_hex("success"))
+                    t.append(f" -{gap} ", style=palette.role_hex("success"))
         else:
             t.append(f"{left.makespan} т. ", style=palette.role_hex("accent"))
         return t
@@ -3423,7 +3426,7 @@ class CodeScreen(ModeScreen):
         if want is None:
             want = self.TAB_HEIGHT.get(self.drawer_tab, 12)
         # Редактору всегда остаётся хотя бы восемь строк кода: вкладка,
-        # которой много надо, разворачивается на весь экран (2×клик), а не
+        # которой много надо, разворачивается на весь экран (2xклик), а не
         # съедает то, ради чего экран открыт.
         room = max(self.DOCK_MIN, (self.size.height or 40) - self.EDIT_MIN - 4)
         dock.styles.height = max(self.DOCK_MIN, min(want, room))
@@ -3478,7 +3481,7 @@ class CodeScreen(ModeScreen):
         """Живые счётчики в полосе состояния: ошибки и коммиты git.
 
         Счётчик ошибок — главный аргумент заглянуть в ЗАМЕЧАНИЯ: пока он
-        «▲ 0», туда идти нечего, а «▲ 3» видно краем глаза из любого места
+        «^ 0», туда идти нечего, а «^ 3» видно краем глаза из любого места
         экрана. Счётчик git — то же для истории: журнал общий на сессию,
         и число растёт даже от команд, набранных в других режимах.
         """
@@ -3487,12 +3490,12 @@ class CodeScreen(ModeScreen):
             errs = sum(1 for p in self.problems if p.severity == "error")
             warns = len(self.problems) - errs
             if errs:
-                lint.set_label(f"▲ {errs}"
+                lint.set_label(f"^ {errs}"
                                + (f" ~{warns}" if warns else ""))
             elif warns:
                 lint.set_label(f"~ {warns}")
             else:
-                lint.set_label("✓ чисто")
+                lint.set_label("+ чисто")
             term = self.query_one("#status-term", DrawerChip)
             n = len(self.app.session.journal_runs)
             term.set_label(f"git {n}" if n else "git")
@@ -3671,7 +3674,7 @@ class CodeScreen(ModeScreen):
             bits.append("буфер пуст")
         errs = sum(1 for p in self.problems if p.severity == "error")
         if errs:
-            bits.append(f"▲ {errs} {plural(errs, 'ошибка', 'ошибки', 'ошибок')}")
+            bits.append(f"^ {errs} {plural(errs, 'ошибка', 'ошибки', 'ошибок')}")
         if self.app.session.code_path:
             bits.append(self.app.session.code_path)
         bits.append(s.model().name)
@@ -3741,7 +3744,7 @@ class CodeScreen(ModeScreen):
         # целиком — ЯДРО, РАЗБОР и АГЕНТ уходят в свои полноэкранные экраны,
         # Esc возвращает сюда же. Мышиный жест нигде больше не написан, а
         # догадаться о нём неоткуда.
-        pairs.append(("2×клик", "блок на весь экран"))
+        pairs.append(("2xклик", "блок на весь экран"))
         pairs.append(("^P", "команда"))
         pairs.append(("^O", "режимы"))
         return pairs[:self.MAX_HINTS]
@@ -4014,7 +4017,7 @@ class CodeScreen(ModeScreen):
         шесть открытых файлов вытесняли их за край молча — и «15→8 т.»
         пропадало ровно тогда, когда открыто много всего и разобраться
         нужнее всего. Вкладки вместо этого сдвигаются окном вокруг активной:
-        она видна всегда, а про уехавшие говорят «‹ 2».
+        она видна всегда, а про уехавшие говорят «< 2».
         """
         try:
             strip = self.query_one("#code-head", FileStrip)
@@ -4027,7 +4030,7 @@ class CodeScreen(ModeScreen):
         mark_c = palette.mode_hex(self.mode)
 
         head = Text()
-        head.append(" ▍", style=mark_c)
+        head.append(" ▌", style=mark_c)
         head.append("NEX ", style=f"{mark_c} bold")
         width = strip.size.width or 120
         # Хвост ужимаем по кускам, пока он не станет длиннее половины
@@ -4068,10 +4071,10 @@ class CodeScreen(ModeScreen):
             t.append(f" {rec['name'][:22]}", style=base)
             # Признак «правлен после прогона» на самой вкладке: он про ЭТОТ
             # буфер, а в общей строке состояния был бы про какой-то.
-            t.append(" ●" if (on and self._stale()) else "  ",
+            t.append(" *" if (on and self._stale()) else "  ",
                      style=(f"{palette.role_hex('warning')} on {raised}"
                             if on else faint))
-            t.append(" ✕ " if closable else " ",
+            t.append(" x " if closable else " ",
                      style=(f"{dim} on {raised}" if on else faint))
             chunks.append(t)
 
@@ -4095,14 +4098,14 @@ class CodeScreen(ModeScreen):
         line = head
         spans: list[tuple[int, int, int, bool]] = []
         if lo:
-            line.append(f" ‹{lo} ", style=faint)
+            line.append(f" <{lo} ", style=faint)
         for i in range(lo, hi + 1):
             begin = line.cell_len
             line.append_text(chunks[i])
             spans.append((begin, line.cell_len, i, closable))
             line.append(" ", style=faint)
         if hi < n - 1:
-            line.append(f"› {n - 1 - hi} ", style=faint)
+            line.append(f"> {n - 1 - hi} ", style=faint)
 
         pad = max(1, width - line.cell_len - len(tail)
                   - self._toggles_width() - 2)
@@ -4157,7 +4160,7 @@ class CodeScreen(ModeScreen):
         for i, rec in enumerate(self.files):
             t = Text()
             here = i == self.file_i
-            t.append("  " + ("▸ " if here else "  "),
+            t.append("  " + ("> " if here else "  "),
                      style=palette.role_hex("accent2" if here else "faint"))
             nm = rec["name"]
             t.append(nm if len(nm) <= 16 else nm[:15] + "…",
@@ -4296,13 +4299,13 @@ class CodeScreen(ModeScreen):
             t.append("  не операция", style=palette.role_hex("faint"))
         mine = [x for x in self.problems if x.line == line]
         if mine:
-            t.append(f"  ▲{len(mine)}", style=palette.role_hex("error"))
+            t.append(f"  ^{len(mine)}", style=palette.role_hex("error"))
         # На широком окне у стрелки есть подпись: догадаться, что строка
         # состояния кликабельна, иначе неоткуда.
         if (self.size.width or 120) >= 120:
-            t.append("  разбор ▸", style=palette.role_hex("faint"))
+            t.append("  разбор >", style=palette.role_hex("faint"))
         else:
-            t.append("  ▸", style=palette.role_hex("faint"))
+            t.append("  >", style=palette.role_hex("faint"))
         chip.tooltip = ("что под курсором: строка, класс операции, "
                         "латентность, такт выдачи\n"
                         "«→ N у поиска» — в какой такт её кладёт точный "
@@ -4360,10 +4363,10 @@ class CodeScreen(ModeScreen):
                     label = f"т{o.cycle}"
                     role = "faint"
                 if o.line in bad:
-                    label = "▲ " + label
+                    label = "^ " + label
                     role = "error"
                 elif o.line in warn:
-                    label = "▲ " + label
+                    label = "^ " + label
                     role = "warning"
                 style = RichStyle(color=palette.role_hex(role),
                                   bold=role in ("success", "error"))
@@ -4371,7 +4374,7 @@ class CodeScreen(ModeScreen):
         for line in sorted(bad | warn):
             if line - 1 not in marks:
                 role = "error" if line in bad else "warning"
-                marks[line - 1] = ("▲", RichStyle(color=palette.role_hex(role),
+                marks[line - 1] = ("^", RichStyle(color=palette.role_hex(role),
                                                   bold=True))
         edit.set_marks(marks)
 
@@ -4417,7 +4420,7 @@ class CodeScreen(ModeScreen):
 
         for k, what in (("^E", "проводник — найти свой .s на диске"),
                         ("F5", "посчитать: как лёг компилятор и как можно"),
-                        ("2×клик", "по вкладке внизу — блок на весь экран")):
+                        ("2xклик", "по вкладке внизу — блок на весь экран")):
             t.append(f"  {k:<8}", style=key)
             t.append(what + "\n", style=dim)
 
@@ -5069,7 +5072,7 @@ class CodeScreen(ModeScreen):
                     style=palette.role_hex("faint"))))
         if not self._lint_expanded and len(self.problems) > 4:
             widgets.append(Static(Text(
-                f"\n  ещё {len(self.problems) - 4} — 2×клик по панели",
+                f"\n  ещё {len(self.problems) - 4} — 2xклик по панели",
                 style=palette.role_hex("faint"))))
         if widgets:
             scroll.mount(*widgets)
@@ -5107,7 +5110,7 @@ class CodeScreen(ModeScreen):
         for cls, count in sorted(heavy.items(), key=lambda kv: -kv[1])[:3]:
             chans = ",".join(str(c) for c in model.channels_for(cls))
             t.append(f"  {cls}", style=palette.op_style(cls))
-            t.append(f" ×{count}   ждать {model.latency(cls)} т.   "
+            t.append(f" x{count}   ждать {model.latency(cls)} т.   "
                      f"каналы {chans}\n", style=faint)
         if self.comp is not None:
             free = model.width - round(
@@ -5159,7 +5162,7 @@ class CodeScreen(ModeScreen):
             return 40
 
     #: Метка серьёзности замечания: та же грамматика, что у находок доктора.
-    MARKS = {"error": ("▲", "error"), "warn": ("▲", "warning"),
+    MARKS = {"error": ("^", "error"), "warn": ("^", "warning"),
              "info": ("·", "dim")}
 
     def _lint_text(self, p) -> Text:
@@ -5189,7 +5192,7 @@ class CodeScreen(ModeScreen):
         t.append(f" {f.mark():>2} ", style=palette.role_hex(role))
         t.append(f.title, style=palette.role_hex("text"))
         if f.cycles_lost:
-            t.append(f"  −{f.cycles_lost} т.", style=palette.role_hex(role))
+            t.append(f"  -{f.cycles_lost} т.", style=palette.role_hex(role))
         if self._lint_expanded:
             t.append("\n      " + f.why, style=palette.role_hex("dim"))
             t.append("\n      " + f.fix, style=palette.role_hex("faint"))
@@ -5285,7 +5288,7 @@ class CodeScreen(ModeScreen):
                 "error" if k <= 1 else "warning")
             # Полоска занятости: заполненные слоты и пустые.
             t.append("█" * k, style=palette.role_hex(role))
-            t.append("░" * (width - k), style=palette.role_hex("faint"))
+            t.append("·" * (width - k), style=palette.role_hex("faint"))
             t.append(f" {k}/{width}  ", style=palette.role_hex(role))
             if ops:
                 t.append("  ".join(f"{o.mnemonic},{o.channel}"

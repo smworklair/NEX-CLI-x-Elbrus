@@ -68,7 +68,9 @@ def _make_app(start_mode):
 def _poly_gemm_path() -> str:
     root = Path(__file__).resolve().parent.parent
     p = root / "real_candidates_100_400" / "asm" / "poly_gemm.s"
-    return str(p.resolve())
+    # Прямые слэши и на Windows: тест про путь, скопированный из адресной
+    # строки, а она отдаёт именно «/». Python такие пути открывает.
+    return p.resolve().as_posix()
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")

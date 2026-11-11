@@ -20,7 +20,7 @@
 `probe_matrix.py`, `validate_jsonl.py` и `report_runs.py` доступны и как
 команды `vliw` (`/verify`, `/validate`, `/report`) — та же проверка в
 процессе, без второго питона. `kaggle_push.sh` — как `/kaggle`. См.
-[`../docs/CLI.md`](../docs/CLI.md#обслуживание-проекта).
+[`../docs/CLI.md`](../docs/CLI.md#данные).
 
 ## Обычный цикл
 
@@ -33,7 +33,7 @@ tools/kaggle_push.sh pull && python tools/report_runs.py  # результаты
 ```
 
 Порядок прогонов и что каким шагом доказывается — в
-[`../docs/RUNBOOK_EOS.md`](../docs/RUNBOOK_EOS.md).
+[`../docs/archive/RUNBOOK_EOS.md`](../docs/archive/RUNBOOK_EOS.md).
 
 ## Что здесь намеренно НЕ так
 

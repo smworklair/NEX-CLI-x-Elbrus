@@ -22,7 +22,7 @@ except ImportError:                      # запуск из каталога te
 from vliw.core.baseline import GreedyListScheduler
 from vliw.core.dag import DagBuilder
 from vliw.core.model import get_profile
-from vliw.tiny.fast import TinyFastScheduler
+from vliw.tiny.fast import TinyFlashScheduler
 from vliw.tiny.features import build_dag, parse_graph_entries
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -139,7 +139,7 @@ class TestSolve(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.fast = TinyFastScheduler(mode="exact", with_trace=False)
+        cls.fast = TinyFlashScheduler(mode="exact", with_trace=False)
         cls.greedy = GreedyListScheduler()
         rows = []
         with open(ROOT / "eval_hard.jsonl", encoding="utf-8") as f:
@@ -212,7 +212,7 @@ class TestRowsAndVerification(unittest.TestCase):
             p.write_text(SAMPLE, encoding="utf-8")
             items, _ = mer.collect([p], 2, False, 12, 56)
         self.it = items[0]                      # ADD, MUL, ADD <- 0 1
-        fast = TinyFastScheduler(mode="exact", with_trace=False)
+        fast = TinyFlashScheduler(mode="exact", with_trace=False)
         self.r = mer.solve(self.it.dag, MODEL, fast, GreedyListScheduler(), 0)
 
     def test_proven_row_has_the_eval_format(self):

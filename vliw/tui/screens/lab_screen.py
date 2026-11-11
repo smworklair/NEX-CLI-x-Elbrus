@@ -1,7 +1,7 @@
 """РАЗБОР — расписание, которое можно потрогать.
 
 Раньше расписание было картинкой в ленте: его печатали и листали. Здесь оно
-стало решёткой «такты × каналы», по которой ходит курсор, а панель под ней
+стало решёткой «такты x каналы», по которой ходит курсор, а панель под ней
 на каждое движение отвечает на один вопрос — почему эта операция оказалась
 именно здесь. Это и есть главный инструмент режима: не «посмотреть отчёт»,
 а разобраться.
@@ -184,7 +184,7 @@ class LabScreen(ModeScreen):
         # Не Esc: Esc теперь везде значит «шаг назад» и ничего больше.
         # Переключение фокуса — это шаг ВНУТРЬ, противоположное действие, и
         # вешать его на ту же клавишу значило делать её непредсказуемой.
-        ("f2", "swap_focus", "решётка ⇄ ввод"),
+        ("f2", "swap_focus", "решётка <> ввод"),
     ]
 
     def __init__(self, **kw) -> None:
@@ -316,11 +316,11 @@ class LabScreen(ModeScreen):
                     title="РАСПИСАНИЕ", id="p-grid", topic="grid")
                 yield Panel(
                     PanelToolbar(
-                        ("↻ повторить", "journal-repeat",
+                        ("~ повторить", "journal-repeat",
                          "прогнать выбранный запуск заново (^R)"),
                         ("очистить", "journal-wipe",
                          "стереть историю git (^L)"),
-                        ("решётка ▶", "open-grid",
+                        ("решётка >", "open-grid",
                           "развернуть РАСПИСАНИЕ"),
                     ),
                     Console(id="console",
@@ -338,8 +338,8 @@ class LabScreen(ModeScreen):
             with Vertical(id="lab-right"):
                 yield Panel(
                     PanelToolbar(
-                        ("решётка ▶", "open-grid", "развернуть РАСПИСАНИЕ"),
-                        ("диагноз ▶", "open-diag",
+                        ("решётка >", "open-grid", "развернуть РАСПИСАНИЕ"),
+                        ("диагноз >", "open-diag",
                          "развернуть ДИАГНОЗ — все находки"),
                     ),
                     Static(id="numbers"),
@@ -356,17 +356,17 @@ class LabScreen(ModeScreen):
                     id="p-ai", topic="ai")
                 yield Panel(
                     PanelToolbar(
-                        ("◀ операция", "op-prev",
+                        ("< операция", "op-prev",
                          "курсор на предыдущую операцию расписания"),
-                        ("операция ▶", "op-next",
+                        ("операция >", "op-next",
                          "курсор на следующую операцию расписания"),
                         # Дальше — чипы, которые на тесном экране прячутся
                         # (класс tb-spare): остаются пара навигации и всё,
                         # что влезает в одну строку. Сами действия никуда
                         # не деваются — чипы возвращаются на ширине от 100.
-                        ("по цепочке ▶", "chain-step",
+                        ("по цепочке >", "chain-step",
                          "следующее звено критического пути", "tb-spare"),
-                        ("решётка ▶", "open-grid",
+                        ("решётка >", "open-grid",
                          "развернуть РАСПИСАНИЕ", "tb-spare"),
                     ),
                     # Прокручиваемый разбор: ответ ИИ и длинные объяснения
@@ -381,11 +381,11 @@ class LabScreen(ModeScreen):
                     id="p-detail", topic="detail")
                 yield Panel(
                     PanelToolbar(
-                        ("◀ пред.", "diag-prev", "предыдущая находка"),
-                        ("след. ▶", "diag-next", "следующая находка"),
+                        ("< пред.", "diag-prev", "предыдущая находка"),
+                        ("след. >", "diag-next", "следующая находка"),
                         ("сброс фильтра", "/find filter all",
                          "показать находки всех серьёзностей", "tb-spare"),
-                        ("решётка ▶", "show-active",
+                        ("решётка >", "show-active",
                          "курсор на клетку активной находки", "tb-spare"),
                     ),
                     Horizontal(id="diag-filter"),
@@ -397,7 +397,7 @@ class LabScreen(ModeScreen):
                          "сортировать по числу операций в участке"),
                         ("по латентности", "matrix-sort-lat",
                          "сортировать по ожиданию операции"),
-                        ("решётка ▶", "open-grid",
+                        ("решётка >", "open-grid",
                          "развернуть РАСПИСАНИЕ", "tb-spare"),
                     ),
                     Static(id="machine"),
@@ -437,7 +437,7 @@ class LabScreen(ModeScreen):
             con.write(row)
 
     def hint_pairs(self):
-        out = [("F2", "решётка ⇄ ввод"), ("↑↓←→", "по тактам"),
+        out = [("F2", "решётка <> ввод"), ("↑↓←→", "по тактам"),
                ("Enter", "разбор такта"), ("Esc", "назад")]
         # Клавиши развёрнутой решётки — в общей полосе, пока она развёрнута.
         if self._grid_expanded:
@@ -781,7 +781,7 @@ class LabScreen(ModeScreen):
         Развёрнутые панели РАЗБОРА — режимы отрисовки (флаги _*_expanded),
         а не просто размеры. Здесь они переключаются ЦЕЛИКОМ: прежняя
         панель возвращается в обычный вид, новая получает свою полосу и
-        свои слои. Так раньше делали переходы находка⇄решётка; теперь тот
+        свои слои. Так раньше делали переходы находка<>решётка; теперь тот
         же путь у инструментов каждой панели.
         """
         for t in ("scen", "grid", "detail", "console",
@@ -794,7 +794,7 @@ class LabScreen(ModeScreen):
         # клик шлёт Panel.Expanded, а этот путь звал maximize() напрямую —
         # `_expanded_panel` оставался None, и всё, что на него смотрит,
         # считало, что развёрнутого ничего нет. Видно было по Tab: после
-        # 2×клика справочник ИИ открывался, после клавиши `d` — нет, при
+        # 2xклика справочник ИИ открывался, после клавиши `d` — нет, при
         # свободных четырнадцати строках внизу. Побочно съедалось одно
         # нажатие Esc: выйти из панели, развёрнутой клавишей, требовалось
         # дважды.
@@ -1268,7 +1268,7 @@ class LabScreen(ModeScreen):
 
         Это НЕ придирка к оформлению: 85% ошибок «ресурс» у прогона 1 —
         STORE, поставленный на канал `,0`, который его не исполняет
-        (см. docs/ROADMAP.md). Красные клетки показывают это глазами, вместо
+        (см. docs/archive/ROADMAP.md). Красные клетки показывают это глазами, вместо
         строчки «нарушений 3» в конце отчёта.
         """
         sched = self.model_sched
@@ -1593,7 +1593,7 @@ class LabScreen(ModeScreen):
         if f is None:
             tf.append("под курсором нет проблем доктора", style=faint)
         else:
-            head = f"−{f.cycles_lost} т. "
+            head = f"-{f.cycles_lost} т. "
             tf.append(head, style=palette.role_hex(
                 "dim" if f.kind == "limit" else "error"))
             tf.append(_wrapped(f.title, 36, len(head)),
@@ -1643,7 +1643,7 @@ class LabScreen(ModeScreen):
                 ("n / N", "находка вперёд / назад"),
                 ("[ / ]", "операция вперёд / назад"),
                 ("c", "звено критического пути"),
-                ("v", "вид: baseline ↔ оракул"),
+                ("v", "вид: baseline <> оракул"),
                 ("z x p w", "слои — как помечено выше"),
                 ("d", "диагноз: все находки списком"),
                 ("o", "развернуть git сессии"),
@@ -1655,13 +1655,13 @@ class LabScreen(ModeScreen):
         tl.append("\n")
         tl.append_text(self._section("метки"))
         tl.append("\n\n")
-        tl.append("  ▸ разошлась с оракулом\n", style=palette.role_hex("diverge"))
+        tl.append("  > разошлась с оракулом\n", style=palette.role_hex("diverge"))
         tl.append("  жирное имя — критический путь\n",
                   style=f"{title} bold")
-        tl.append("  ✗ канал не исполняет операцию\n",
+        tl.append("  - канал не исполняет операцию\n",
                   style=palette.role_hex("error"))
-        tl.append("  ─── простой ≥ 3 тактов\n", style=faint)
-        tl.append("  ▁▄█ загрузка строки такта", style=dim)
+        tl.append("  ─── простой >= 3 тактов\n", style=faint)
+        tl.append("  _▄█ загрузка строки такта", style=dim)
         legend.update(tl)
 
     def _row_of_cycle(self, cycle: int) -> int:
@@ -1714,7 +1714,7 @@ class LabScreen(ModeScreen):
         role = "error" if (f is not None and f.recoverable) else "dim"
         t = Text()
         t.append(f"т.{start}–{end}", style=palette.role_hex(role))
-        t.append(f" ⌄{end - start + 1}", style=palette.role_hex("faint"))
+        t.append(f" v{end - start + 1}", style=palette.role_hex("faint"))
         return t
 
     def _cell_text(self, dag, instr: int, crit: set[int],
@@ -1731,12 +1731,12 @@ class LabScreen(ModeScreen):
             # Значком, а не только цветом: цвет теряется на 256-цветном
             # терминале и у людей с нарушением цветовосприятия, а именно эти
             # клетки — главное, что показывает прогон модели.
-            t.append("✗", style=palette.role_hex("error") + " bold")
+            t.append("-", style=palette.role_hex("error") + " bold")
         else:
             moved = instr in self.diverged
             mark_style = palette.role_hex("diverge") if moved \
                 else palette.role_hex("faint") if related is False else ""
-            t.append("▸" if moved else " ", style=mark_style)
+            t.append(">" if moved else " ", style=mark_style)
         op_style = palette.op_style(ins.op)
         if related is False:
             op_style = palette.role_hex("faint")
@@ -1762,7 +1762,7 @@ class LabScreen(ModeScreen):
         """
         t = Text()
         if issued == 0:
-            role, mark = "error", "▁"
+            role, mark = "error", "_"
         elif issued == width:
             role, mark = "success", "█"
         else:
@@ -1936,7 +1936,7 @@ class LabScreen(ModeScreen):
         def col(label: str, key: str) -> Text:
             t = Text(label, style=dim)
             if key == self._scen_sort_key:
-                t.append(" ▾" if self._scen_sort_rev else " ▴",
+                t.append(" v" if self._scen_sort_rev else " ^",
                         style=palette.role_hex("accent_soft"))
             return t
 
@@ -1980,7 +1980,7 @@ class LabScreen(ModeScreen):
             here = key == cur
             row_style = (title + " bold") if here else palette.role_hex("text")
             row = [
-                Text(("▸ " if here else "  ") + key, style=row_style),
+                Text(("> " if here else "  ") + key, style=row_style),
                 Text(str(len(dag)), style=dim),
                 Text(f"{lb} т.", style=title if here else dim),
                 Text(binding, style=palette.role_hex("warning")
@@ -2072,7 +2072,7 @@ class LabScreen(ModeScreen):
         link.active = True
         link.tooltip = (f"{f.title}\n{f.why}\nклик — полный список в ДИАГНОЗЕ")
         t = Text()
-        t.append("▸ ", style=palette.role_hex("accent"))
+        t.append("> ", style=palette.role_hex("accent"))
         t.append(f.title, style=palette.role_hex("title") + " bold")
         t.append("   ·   клик — все находки в ДИАГНОЗЕ",
                  style=palette.role_hex("accent_soft"))
@@ -2490,7 +2490,7 @@ class LabScreen(ModeScreen):
     def _detail_model(self) -> Text:
         """Почему клетка красная — на месте, а не строчкой в отчёте.
 
-        Главная находка прогона 1 (docs/ROADMAP.md): 85% ошибок «ресурс» —
+        Главная находка прогона 1 (docs/archive/ROADMAP.md): 85% ошибок «ресурс» —
         это STORE на канале `,0`, который его не исполняет. В отчёте это
         одна строка «нарушений 3». Здесь на неё можно навести курсор и
         увидеть, какие каналы операцию исполняют и откуда это известно.
@@ -2529,7 +2529,7 @@ class LabScreen(ModeScreen):
             return t
 
         labels = ", ".join(machine.port_label(c) for c in allowed) or "нет таких"
-        t.append("✗ этот канал операцию НЕ исполняет\n",
+        t.append("- этот канал операцию НЕ исполняет\n",
                  style=palette.role_hex("error") + " bold")
         t.append(f"{ins.op} исполняют только: ", style=faint)
         t.append(f"{labels}\n", style=palette.role_hex("success"))
@@ -2557,7 +2557,7 @@ class LabScreen(ModeScreen):
                      style=palette.role_hex("faint"))
             return t
         if f.recoverable:
-            t.append(f"−{f.cycles_lost} т. можно отыграть\n",
+            t.append(f"-{f.cycles_lost} т. можно отыграть\n",
                      style=palette.role_hex("error") + " bold")
         else:
             t.append("предел участка, а не просчёт\n",
@@ -2860,7 +2860,7 @@ class LabScreen(ModeScreen):
             if tail:
                 # Хвост сверх предела — пунктиром: он не такой же, как тело
                 # полосы, он и есть то единственное, что можно отыграть.
-                t.append("┄" * tail, style=palette.role_hex("error"))
+                t.append("─" * tail, style=palette.role_hex("error"))
             t.append(" " * (top_w - body - tail), style=faint)
             t.append(f"{val:>4}", style=style)
             if tail:
@@ -2921,7 +2921,7 @@ class LabScreen(ModeScreen):
             label = " ".join(model.port_label(c) for c in chans)
             r.append("    " + label.ljust(22)[:22], style=dim)
             r.append(f"{slots:>3}", style=title)
-            r.append(" слот.  ÷ ", style=faint)
+            r.append(" слот.  / ", style=faint)
             r.append(f"{len(chans)}", style=title)
             r.append(" порт.  = ", style=faint)
             r.append(f"{need:>2} т.", style=title)
@@ -2933,7 +2933,7 @@ class LabScreen(ModeScreen):
         res.update(r)
 
     def _draw_ai(self) -> None:
-        """НЕЙРОСЕТИ: что сделал TINY AI и что оценил NNL AI. Считается само, без команд."""
+        """НЕЙРОСЕТИ: что сделал TINY Flash. Считается само, без команд."""
         body = self.query_one("#ai-body", Static)
         h = getattr(self, "hints", None)
         dim = palette.role_hex("dim")
@@ -2941,62 +2941,35 @@ class LabScreen(ModeScreen):
         title = palette.role_hex("title")
         accent = palette.role_hex("accent")
         t = Text()
-        if h is None or (h.tiny is None and h.nnl is None):
-            t.append("нейросети не ответили (нет весов?) — инструмент работает и без них",
+        if h is None or h.tiny is None:
+            t.append("крошки не ответили (нет весов?) — инструмент работает и без них",
                      style=faint)
             body.update(t)
             return
         tn = h.tiny
-        t.append("TINY AI", style=accent)
+        t.append("TINY Flash", style=accent)
         t.append("  строит расписание", style=dim)
-        if h.tiny is not None and h.tiny.через_ядро:
+        if tn.через_ядро:
             t.append("  · блок «планировщик», ядро NEX", style=faint)
         t.append("\n")
-        if tn is None:
-            t.append("  нет ответа\n", style=faint)
-        else:
-            gain = tn.baseline - tn.tiny
-            t.append(f"  baseline {tn.baseline} → крошки {tn.tiny} т.", style=title)
-            if gain > 0:
-                t.append(f"  (−{gain})", style=palette.role_hex("success"))
-            elif gain == 0:
-                t.append("  (вровень)", style=dim)
-            t.append(f"\n  {tn.winner} · {tn.ms:.0f} мс", style=faint)
-            if tn.oracle is not None:
-                t.append(f" · oracle {tn.oracle}", style=faint)
-            t.append("\n")
-        nn = h.nnl
-        t.append("NNL AI", style=accent)
-        t.append("  оценивает: есть ли что улучшать\n", style=dim)
-        if nn is None:
-            t.append("  нет весов\n", style=faint)
-        elif nn.rule:
-            t.append("  baseline на нижней границе\n", style=title)
-            t.append("  искать нечего — доказано (правило)\n", style=palette.role_hex("success"))
-        else:
-            def one(r):
-                return "не знаю" if r[0] is None else f"{r[0]} p={r[1]:.2f}"
-            t.append(f"  зазор до границы: {nn.gap} т.\n", style=dim)
-            t.append(f"  ядро А: {one(nn.a)}\n  ядро Б: {one(nn.b)}\n", style=dim)
-            word = {"есть": "стоит искать", "нет": "скорее всего нет выигрыша",
-                    None: "не знаю — ищем как обычно"}[nn.verdict]
-            t.append(f"  оценка ядер: {word}", style=title)
-            t.append(f"  ({nn.ms:.0f} мс)\n", style=faint)
+        gain = tn.baseline - tn.tiny
+        t.append(f"  baseline {tn.baseline} → крошки {tn.tiny} т.", style=title)
+        if gain > 0:
+            t.append(f"  (-{gain})", style=palette.role_hex("success"))
+        elif gain == 0:
+            t.append("  (вровень)", style=dim)
+        t.append(f"\n  {tn.winner} · {tn.ms:.0f} мс", style=faint)
+        if tn.oracle is not None:
+            t.append(f" · oracle {tn.oracle}", style=faint)
+        t.append("\n")
         if h.blocks:
             t.append("\nБЛОКИ ФАЙЛА", style=accent)
             t.append(f"  {len(h.blocks)} из {h.blocks_total}\n", style=dim)
-            t.append("  NNL AI: оценка   →   TINY AI: такты\n", style=faint)
             for r in h.blocks:
-                if r.nnl is not None and r.nnl.rule:
-                    est = "граница ✓"
-                elif r.nnl is None:
-                    est = "  —  "
-                else:
-                    est = f"{ {'есть': '▲', 'нет': '▽', None: '?'}[r.nnl.verdict] } p={r.nnl.p_есть:.2f}"
-                t.append(f"  #{r.index:<3} n={r.n:<4} {est:<10} ", style=dim)
+                t.append(f"  #{r.index:<3} n={r.n:<4} ", style=dim)
                 t.append(f"{r.baseline}→{r.tiny}", style=title)
                 if r.baseline > r.tiny:
-                    t.append(f" −{r.baseline - r.tiny}", style=palette.role_hex("success"))
+                    t.append(f" -{r.baseline - r.tiny}", style=palette.role_hex("success"))
                 t.append("\n")
         body.update(t)
 
@@ -3034,7 +3007,7 @@ class LabScreen(ModeScreen):
         self._row_model(row, b, o)
         row("предел", str(lb), title, self.met.binding)
         gap = b - o
-        row("выигрыш", f"−{gap}" if gap else "нет",
+        row("выигрыш", f"-{gap}" if gap else "нет",
             palette.role_hex("success") if gap else dim,
             f"{100 * gap // b}%" if gap and b else "")
         t.append("\n")
@@ -3109,7 +3082,7 @@ class LabScreen(ModeScreen):
         # строкой в решётке, находка под курсором — в инспекторе разворота,
         # переходы — клавишами n/N. Панель оставляет себе единственное, чего
         # нет больше нигде: сколько проблем всего и какая хуже — видно до
-        # того, как тронул хоть одну клавишу. Полный список — d / 2×клик.
+        # того, как тронул хоть одну клавишу. Полный список — d / 2xклик.
         self.query_one("#diag-filter", Horizontal).remove_children()
         scroll.remove_children()
         from ...core.doctor import diagnose
@@ -3131,13 +3104,13 @@ class LabScreen(ModeScreen):
         t.append(f"{n} ", style=palette.role_hex("title") + " bold")
         t.append(plural(n, "находка", "находки", "находок") + "  ·  худшая ",
                  style=palette.role_hex("dim"))
-        t.append(f"−{worst.cycles_lost} т.", style=palette.role_hex("error"))
+        t.append(f"-{worst.cycles_lost} т.", style=palette.role_hex("error"))
         t.append(" ")
         width = max(20, self.query_one("#p-diag", Panel).size.width - 4)
         t.append(_wrapped(worst.title, width - 24, 0)[:width],
                  style=palette.role_hex("text"))
         t.append("\n")
-        t.append("d или 2×клик — все находки и переход по ним",
+        t.append("d или 2xклик — все находки и переход по ним",
                  style=palette.role_hex("accent_soft"))
         scroll.mount(Static(t))
 
@@ -3187,7 +3160,7 @@ class LabScreen(ModeScreen):
             here = active is not None and f == active
             mark, role = self._finding_mark(f)
             t = Text()
-            head = f"{'▸' if here else mark:<3}−{f.cycles_lost} т. "
+            head = f"{'>' if here else mark:<3}-{f.cycles_lost} т. "
             t.append(head, style=palette.role_hex("accent" if here else role))
             t.append(_wrapped(f.title, width, len(head)),
                      style=(palette.role_hex("title") + " bold") if here
@@ -3273,7 +3246,7 @@ class LabScreen(ModeScreen):
         def head(label: str, key: str) -> Text:
             t = Text(label, style=dim)
             if key == self._matrix_sort_key:
-                t.append(" ▾" if self._matrix_sort_rev else " ▴",
+                t.append(" v" if self._matrix_sort_rev else " ^",
                         style=palette.role_hex("accent_soft"))
             return t
 
@@ -3308,9 +3281,9 @@ class LabScreen(ModeScreen):
                 elif name in mono:
                     # Единственный исполнитель — то самое место, где расписание
                     # чаще всего и упирается. Помечено формой, не только цветом.
-                    row.append(Text("  ◆", style=accent))
+                    row.append(Text("  *", style=accent))
                 else:
-                    row.append(Text("  ●", style=palette.op_style(name)))
+                    row.append(Text("  *", style=palette.op_style(name)))
             row.append(Text(f"{op.latency} т.".rjust(6),
                             style=title if n else faint))
             row.append(Text((f"{op.occupancy} т." if op.blocks_channel()
@@ -3357,9 +3330,9 @@ class LabScreen(ModeScreen):
                     t.append("   не занят ни разу", style=faint)
                 t.append("\n")
             t.append("\n")
-        t.append("    ◆ ", style=accent)
+        t.append("    * ", style=accent)
         t.append("единственный исполнитель", style=dim)
-        t.append("      ● исполним      · нет\n", style=faint)
+        t.append("      * исполним      · нет\n", style=faint)
         # Откуда цифры. Проект держится на том, что измеренное отделено от
         # предположенного, и в матрице это должно быть видно, а не в отчёте.
         srcs = {model.matrix_source}

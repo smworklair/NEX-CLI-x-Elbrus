@@ -97,9 +97,9 @@ def _wait_line(dag, model, sched, t0, t1, held) -> str:
             f"{sched.placements[i].cycle + model.occupancy(dag[i].op)}"
             for p, i in held
         )
-        note = paint("error", f"⏳ {cycles(span)} без выдачи") + Style.dim(f" — {who}")
+        note = paint("error", f"... {cycles(span)} без выдачи") + Style.dim(f" — {who}")
     else:
-        note = paint("error", f"⏳ {cycles(span)} без выдачи") + Style.dim(" — ждём операндов")
+        note = paint("error", f"... {cycles(span)} без выдачи") + Style.dim(" — ждём операндов")
     return Style.dim(f"  {label:>10}  ") + note
 
 
@@ -113,7 +113,7 @@ def render_item(dag, model, sched, item, hl) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# Расписание как сетка «такты × порты» — основной вид
+# Расписание как сетка «такты x порты» — основной вид
 # --------------------------------------------------------------------------
 
 CONT = "│"      # операция продолжает занимать порт
@@ -221,7 +221,7 @@ def render_dag_path(dag: DAG, model: MachineModel, met: DagMetrics) -> list[str]
     crit = critical_set(dag, met)
     rows = []
     for ins in dag:
-        star = paint(render.CRIT_CODE, "★") if ins.id in crit else " "
+        star = paint(render.CRIT_CODE, "*") if ins.id in crit else " "
         name = (paint(render.CRIT_CODE, ins.name) if ins.id in crit
                 else paint_op(ins.op, ins.name))
         preds = ", ".join(dag[p].name for p in ins.preds) or Style.dim("—")
@@ -236,7 +236,7 @@ def render_dag_path(dag: DAG, model: MachineModel, met: DagMetrics) -> list[str]
     ))
     out.append("")
     out += wrap(Style.dim(
-        "★ — узлы критического пути (asap + height = длина критического пути "
+        "* — узлы критического пути (asap + height = длина критического пути "
         f"{met.critical_path_bound}). Эту цепочку зависимостей не ускорит ни один "
         "планировщик; всё, что можно отыграть, — вокруг неё."), render.W - 2)
     return out
@@ -283,7 +283,7 @@ def render_verdict(base: SchedulingResult, orc: SchedulingResult, met: DagMetric
     bar = paint(role, "▌")
 
     if gap > 0:
-        head = paint(role, f"выигрыш  −{gap} "
+        head = paint(role, f"выигрыш  -{gap} "
                            f"{plural(gap, 'такт', 'такта', 'тактов')}  "
                            f"из {b}  ({100 * gap / b:.0f}%)")
     else:
@@ -433,10 +433,10 @@ def render_explain(t: int, base, orc, dag, model) -> list[str]:
             out.append("    выдал: " + paint("error", "ничего"))
         for c in step.candidates:
             if c.chosen:
-                out += wrap(paint("success", "✓ ") + f"{dag[c.instr].name}: {c.reason}", render.W, "    ")
+                out += wrap(paint("success", "+ ") + f"{dag[c.instr].name}: {c.reason}", render.W, "    ")
         for c in step.candidates:
             if not c.chosen:
-                out += wrap(Style.dim(f"✗ {dag[c.instr].name}: {c.reason}"), render.W, "    ")
+                out += wrap(Style.dim(f"- {dag[c.instr].name}: {c.reason}"), render.W, "    ")
         if step.comment:
             out += wrap(paint("warning", "! " + step.comment), render.W, "    ")
     out.append("")

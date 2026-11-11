@@ -179,7 +179,7 @@ class ModeScreen(Screen):
         if self.screen is self and self.screen.maximized is not None:
             out.append(("Esc", "свернуть панель"))
         else:
-            out.append(("2×клик", "панель на весь экран"))
+            out.append(("2xклик", "панель на весь экран"))
         # Tab виден только там, где он что-то делает: справочник живёт
         # исключительно у развёрнутой панели.
         if (self.screen is self and self.maximized is not None
@@ -187,9 +187,9 @@ class ModeScreen(Screen):
             out.append(("Tab", "справочник ИИ"
                         if not list(self.query(PanelPrompt)) else "закрыть"))
         if self.SIDE_ID:
-            out.append(("^B", "панель" if self.side_shown else "панель ↩"))
+            out.append(("^B", "панель" if self.side_shown else "панель ←"))
         if self.TIPS_ID:
-            out.append(("^T", "подсказки" if self.tips_shown else "подсказки ↩"))
+            out.append(("^T", "подсказки" if self.tips_shown else "подсказки ←"))
         return out
 
     def refresh_hints(self) -> None:
@@ -397,7 +397,7 @@ class ModeScreen(Screen):
         """Esc — выйти на один уровень наружу, вплоть до начального экрана.
 
         Раньше Esc значил три разных вещи в зависимости от того, что в
-        фокусе: закрыть справочник, переключить решётка⇄ввод, уйти к выбору
+        фокусе: закрыть справочник, переключить решётка<>ввод, уйти к выбору
         режима. Каждый обработчик стоял в своём классе и не знал про
         остальные — отсюда и ощущение костыля. Теперь уровень ровно один и
         разбирается сверху вниз: что открыто последним, то и закрывается.

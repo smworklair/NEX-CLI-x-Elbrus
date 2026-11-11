@@ -59,9 +59,9 @@ def загрузить(путь, паспорт):
             raise ValueError(f"нет файла весов крошек {имя!r}")
         if _sha256(по_имени[имя]) != сумма:
             raise ValueError(f"веса крошек {имя!r} не совпадают с блоком (sha256): подмена или переобучение")
-    from vliw.tiny.scheduler import TinyScheduler
+    from vliw.tiny.fast import TinyFlashScheduler
 
-    return {"tiny": TinyScheduler(), "кэш": (None, None), "ответы": list(ОТВЕТЫ),
+    return {"tiny": TinyFlashScheduler(), "кэш": (None, None), "ответы": list(ОТВЕТЫ),
             "чисел": int(sum(_числа_в_json(json.loads(по_имени[n].read_text(encoding="utf-8"))) for n in имена))}
 
 

@@ -1,4 +1,8 @@
-"""NNL AI («есть ли что улучшать») и TINY AI рядом: правило границы, панель, контекст агента, блоки файла."""
+"""TINY AI рядом с инструментом: честность против baseline, блоки файла, панель, контекст агента.
+
+NNL AI из CLI убран (он оценивал «есть ли что улучшать» и в самой CLI был лишним),
+поэтому здесь проверяется только TINY AI — крошки, которые строят расписание.
+"""
 
 from __future__ import annotations
 
@@ -28,65 +32,59 @@ def _session(scenario="slotclash"):
     return s
 
 
-class TestBoundaryRule(unittest.TestCase):
-    def test_rule_is_exact_on_builtin_scenarios(self):
-        """Если NNL AI ссылается на правило («baseline на границе»), оракул и правда не лучше baseline."""
-        for sc in cli.SCENARIOS:
-            s = _session(sc)
-            base, orc, _ = s.results()
-            nn = ai_hints.nnl_ai(s.dag_obj, s.model(), base.schedule.makespan)
-            self.assertIsNotNone(nn, sc)
-            if nn.rule:
-                self.assertEqual(nn.verdict, "нет", sc)
-                self.assertEqual(orc.schedule.makespan, base.schedule.makespan, sc)
-
-    def test_gap_means_model_is_asked(self):
-        s = _session("slotclash")
-        base, _orc, _ = s.results()
-        nn = ai_hints.nnl_ai(s.dag_obj, s.model(), base.schedule.makespan)
-        self.assertFalse(nn.rule)
-        self.assertGreater(nn.gap, 0)
-        self.assertTrue(0.0 <= nn.p_есть <= 1.0)
-
+class TestTinyAI(unittest.TestCase):
     def test_tiny_ai_is_never_worse_than_baseline(self):
         for sc in ("slotclash", "memstream", "loadchain"):
             s = _session(sc)
             base, orc, _ = s.results()
             t = ai_hints.tiny_ai(s.dag_obj, s.model(), base.schedule.makespan, orc.schedule.makespan)
-            self.assertTrue(t.legal)
+            self.assertIsNotNone(t, sc)
+            self.assertTrue(t.legal, sc)
             self.assertLessEqual(t.tiny, t.baseline, sc)
+
+    def test_collect_returns_tiny_and_no_nnl_field(self):
+        s = _session("slotclash")
+        base, orc, _ = s.results()
+        h = ai_hints.collect(s, base, orc, with_blocks=False)
+        self.assertIsNotNone(h.tiny)
+        self.assertFalse(hasattr(h, "nnl"), "NNL AI из CLI убран")
+        self.assertEqual(h.blocks, [])
 
 
 class TestAgentFacts(unittest.TestCase):
-    def test_context_has_nnl_line(self):
+    def test_context_has_tiny_line(self):
         s = _session("slotclash")
         s.results()
         text = context.build(s)
-        self.assertIn("NNL AI", text)
+        self.assertIn("крошки", text)
 
-    def test_rule_line_says_it_is_not_an_estimate(self):
-        s = _session("simple4")
+    def test_context_has_no_nnl_ai(self):
+        s = _session("slotclash")
         s.results()
-        line = " ".join(ai_hints.nnl_facts(s))
-        self.assertIn("доказано", line)
-        self.assertIn("не оценка", line)
+        self.assertNotIn("NNL AI", context.build(s))
+
+    def test_ai_hints_module_has_no_nnl_ai(self):
+        self.assertFalse(hasattr(ai_hints, "nnl_ai"))
+        self.assertFalse(hasattr(ai_hints, "nnl_facts"))
+        self.assertFalse(hasattr(ai_hints, "NnlAI"))
 
 
 @unittest.skipUnless(ASM.exists(), "нет файла .s")
 class TestBlocks(unittest.TestCase):
-    def test_blocks_proven_by_rule_go_last(self):
+    def test_blocks_sorted_by_tiny_gain(self):
         s = _session()
         rows, total = ai_hints.block_rows(ASM.read_text(encoding="utf-8"), s.model(), limit=50)
         self.assertGreater(total, 0)
-        flags = [bool(r.nnl and r.nnl.rule) for r in rows]
-        self.assertEqual(flags, sorted(flags), "блоки на границе должны идти после остальных")
+        gains = [(r.tiny_gain, r.n) for r in rows]
+        self.assertEqual(gains, sorted(gains, key=lambda g: (-g[0], -g[1])),
+                         "блоки идут по убыванию выигрыша крошек")
         for r in rows:
             self.assertLessEqual(r.tiny, r.baseline)
 
 
 @unittest.skipUnless(HAS_TEXTUAL, "textual не установлен")
 class TestPanel(unittest.TestCase):
-    def test_lab_shows_both_nets(self):
+    def test_lab_shows_tiny_but_not_nnl(self):
         from tests.test_tui_smoke import _make_app
 
         async def go():
@@ -100,8 +98,8 @@ class TestPanel(unittest.TestCase):
                     return str(body.render())
 
         text = asyncio.run(go())
-        self.assertIn("TINY AI", text)
-        self.assertIn("NNL AI", text)
+        self.assertIn("TINY Flash", text)
+        self.assertNotIn("NNL AI", text)
 
 
 if __name__ == "__main__":

@@ -124,9 +124,9 @@ class ModeCard(Static):
         card.append_text(ex)
         self.update(card)
         if self.selected:
-            self.styles.border = ("round", accent)
+            self.styles.border = ("solid", accent)
         else:
-            self.styles.border = ("round", palette.SURFACES["line"])
+            self.styles.border = ("solid", palette.SURFACES["line"])
 
     def on_click(self) -> None:
         self.post_message(self.Chosen(self.index))
@@ -166,9 +166,9 @@ class PickerScreen(Screen):
     # ВОСЕМЬ, и внизу оставалась дыра в восемь строк пустоты. Ужиматься надо
     # ровно настолько, насколько не хватает:
     #
-    #   snug   (< 41)  убрать отступы между карточками      −4
-    #   short  (< 36)  карточки 6 → 5 строк                 −4
-    #   tiny   (< 32)  спрятать знак NEX                    −8
+    #   snug   (< 41)  убрать отступы между карточками      -4
+    #   short  (< 36)  карточки 6 → 5 строк                 -4
+    #   tiny   (< 32)  спрятать знак NEX                    -8
     #   micro  (< 24)  спрятать подпись, карточки в 3 строки
     #
     # Карточки не прячутся никогда: без них экран теряет смысл.

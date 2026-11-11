@@ -11,7 +11,7 @@ from ..agent.analyst import Analysis
 from . import render
 from .render import Style, paint, wrap
 
-BAR = "┃"
+BAR = "│"
 
 _CONF = {
     "high": ("success", "высокая"),
@@ -38,7 +38,7 @@ def render_analysis(a: Analysis, scenario: str = "") -> list[str]:
         out.append(f"  {bar}")
         out.append(f"  {bar} {Style.dim('план')}")
         for i, s in enumerate(a.plan, 1):
-            gain = (paint("success", f"−{s.gain_cycles} т.")
+            gain = (paint("success", f"-{s.gain_cycles} т.")
                     if s.gain_cycles > 0 else Style.dim("—"))
             head = f"{i}. {s.step}"
             lines = wrap(head, render.W - 14, f"  {bar}   ")
@@ -55,7 +55,7 @@ def render_analysis(a: Analysis, scenario: str = "") -> list[str]:
     out.append(f"  {bar}")
     line = f"  {bar} {Style.dim('уверенность')} {paint(role, conf_word)}"
     if a.total_gain > 0:
-        line += Style.dim(f"   ·   суммарно по плану ") + paint("success", f"−{a.total_gain} т.")
+        line += Style.dim(f"   ·   суммарно по плану ") + paint("success", f"-{a.total_gain} т.")
     if a.tokens:
         line += Style.dim(f"   ·   {a.tokens} токенов")
     if a.offline:

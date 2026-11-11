@@ -3,7 +3,7 @@
 Главное, что здесь проверяется:
   * FastNet считает ровно те же числа, что TinyPriority.scores (сравнение по ==,
     не «почти»), с памятью и без, на чистом Python и на numpy;
-  * TinyFastScheduler даёт тот же makespan, что полный TinyScheduler, во всех
+  * TinyFlashScheduler даёт тот же makespan, что полный TinyScheduler, во всех
     режимах точности ("exact"), и никогда не хуже жадного;
   * расписание законно и полно, флаг optimal ставится только при makespan ==
     нижней границе;
@@ -115,25 +115,25 @@ class TestTinyFast(unittest.TestCase):
                 self.assertEqual(res.search_stats["lower_bound"], lb)
 
     def test_exact_default(self):
-        self._check(fast.TinyFastScheduler(), "exact")
+        self._check(fast.TinyFlashScheduler(), "exact")
 
     def test_exact_without_numpy(self):
-        self._check(fast.TinyFastScheduler(use_numpy=False), "exact/без numpy")
+        self._check(fast.TinyFlashScheduler(use_numpy=False), "exact/без numpy")
 
     def test_exact_without_stop(self):
-        self._check(fast.TinyFastScheduler(stop_at_bound=False), "exact/без остановки")
+        self._check(fast.TinyFlashScheduler(stop_at_bound=False), "exact/без остановки")
 
     def test_exact_without_trace_and_memo(self):
-        self._check(fast.TinyFastScheduler(with_trace=False, memo_limit=0), "exact/без трассы и памяти")
+        self._check(fast.TinyFlashScheduler(with_trace=False, memo_limit=0), "exact/без трассы и памяти")
 
     def test_custom_order_keeps_result(self):
         """Порядок групп не меняет итоговый makespan при полном проходе."""
-        s = fast.TinyFastScheduler(order=("defer", "hold", "prio", "bt", "rule", "bh"),
+        s = fast.TinyFlashScheduler(order=("defer", "hold", "prio", "bt", "rule", "bh"),
                                    stop_at_bound=False)
         self._check(s, "другой порядок")
 
     def test_asm_mode_legal_not_worse_than_greedy(self):
-        s = fast.TinyFastScheduler(mode="asm")
+        s = fast.TinyFlashScheduler(mode="asm")
         for key, dag in self.graphs:
             res = s.schedule(dag, MODEL)
             g = GreedyListScheduler().schedule(dag, MODEL).schedule.makespan
@@ -145,7 +145,7 @@ class TestTinyFast(unittest.TestCase):
                 self.assertNotIn("defer", res.search_stats["groups_run"])
 
     def test_greedy_on_bound_skips_search(self):
-        s = fast.TinyFastScheduler()
+        s = fast.TinyFlashScheduler()
         hit = 0
         for key, dag in self.graphs:
             res = s.schedule(dag, MODEL)
@@ -159,7 +159,7 @@ class TestTinyFast(unittest.TestCase):
         self.assertGreater(hit, 0, "ожидался хотя бы один граф, где жадный уже на границе")
 
     def test_trace_matches_when_same_winner(self):
-        s = fast.TinyFastScheduler()
+        s = fast.TinyFlashScheduler()
         same = 0
         for key, dag in self.graphs:
             res = s.schedule(dag, MODEL)
@@ -170,14 +170,14 @@ class TestTinyFast(unittest.TestCase):
         self.assertGreater(same, 0)
 
     def test_no_trace_is_empty(self):
-        s = fast.TinyFastScheduler(with_trace=False)
+        s = fast.TinyFlashScheduler(with_trace=False)
         res = s.schedule(SCENARIOS["slotclash"], MODEL)
         self.assertEqual(res.trace, [])
         self.assertEqual(res.schedule.validate(), [])
 
     def test_fallback_without_weights_same_as_parent(self):
         parent = TinyScheduler(weights="/nonexistent/weights.json")
-        child = fast.TinyFastScheduler(weights="/nonexistent/weights.json")
+        child = fast.TinyFlashScheduler(weights="/nonexistent/weights.json")
         self.assertIsNone(child.tiny)
         for key, dag in self.graphs:
             a = parent.schedule(dag, MODEL).schedule.makespan
@@ -187,7 +187,7 @@ class TestTinyFast(unittest.TestCase):
                 self.assertEqual(res.schedule.validate(), [])
 
     def test_instance_reuse_has_no_state_leak(self):
-        s = fast.TinyFastScheduler()
+        s = fast.TinyFlashScheduler()
         order = list(self.graphs)
         random.Random(1).shuffle(order)
         for key, dag in order + order[:5]:
@@ -195,7 +195,7 @@ class TestTinyFast(unittest.TestCase):
             self.assertEqual(res.schedule.makespan, self.refs[key].schedule.makespan, key)
 
     def test_threads(self):
-        s = fast.TinyFastScheduler()
+        s = fast.TinyFlashScheduler()
         out: dict[str, int] = {}
         errs: list[str] = []
 
@@ -218,9 +218,9 @@ class TestTinyFast(unittest.TestCase):
 
     def test_bad_arguments(self):
         with self.assertRaises(ValueError):
-            fast.TinyFastScheduler(mode="turbo")
+            fast.TinyFlashScheduler(mode="turbo")
         with self.assertRaises(ValueError):
-            fast.TinyFastScheduler(order=("bh", "nope"))
+            fast.TinyFlashScheduler(order=("bh", "nope"))
 
 
 @unittest.skipUnless(_HAVE_WEIGHTS, "весов нет — только после обучения")
@@ -255,10 +255,10 @@ class TestTinyFastHardSample(unittest.TestCase):
                 self.assertEqual(res.schedule.makespan, self.refs[key])
 
     def test_exact_equals_full_portfolio(self):
-        self._same(fast.TinyFastScheduler(), "exact")
+        self._same(fast.TinyFlashScheduler(), "exact")
 
     def test_exact_without_stop_and_numpy(self):
-        self._same(fast.TinyFastScheduler(stop_at_bound=False, use_numpy=False), "без остановки и numpy")
+        self._same(fast.TinyFlashScheduler(stop_at_bound=False, use_numpy=False), "без остановки и numpy")
 
     def test_beam_calls_match_parent(self):
         """Те же веера с теми же зёрнами, что у TinyScheduler: иначе набор
@@ -278,7 +278,7 @@ class TestTinyFastHardSample(unittest.TestCase):
             sched._beam_orders, sched._beam_holds = orders, holds
             return calls
 
-        parent, child = TinyScheduler(), fast.TinyFastScheduler(stop_at_bound=False)
+        parent, child = TinyScheduler(), fast.TinyFlashScheduler(stop_at_bound=False)
         pc, cc = record(parent), record(child)
         seen = set()
         for key, dag in self.graphs[:40]:
@@ -293,7 +293,7 @@ class TestTinyFastHardSample(unittest.TestCase):
         self.assertIn(("holds", 16, 3000), seen)
 
     def test_asm_mode_never_worse_than_greedy(self):
-        s = fast.TinyFastScheduler(mode="asm")
+        s = fast.TinyFlashScheduler(mode="asm")
         for key, dag in self.graphs:
             g = GreedyListScheduler().schedule(dag, MODEL).schedule.makespan
             res = s.schedule(dag, MODEL)
@@ -306,7 +306,7 @@ class TestTinyFastHardSample(unittest.TestCase):
 
 class TestFastNoWeightsNeeded(unittest.TestCase):
     def test_constructs_and_runs_without_weights(self):
-        s = fast.TinyFastScheduler(weights="/nonexistent/a.json",
+        s = fast.TinyFlashScheduler(weights="/nonexistent/a.json",
                                    defer_weights="/nonexistent/b.json",
                                    hold_weights="/nonexistent/c.json")
         for key in ("simple4", "slotclash", "memstream", "loadchain", "mixed18"):
@@ -316,6 +316,13 @@ class TestFastNoWeightsNeeded(unittest.TestCase):
             self.assertLessEqual(
                 res.schedule.makespan,
                 GreedyListScheduler().schedule(dag, MODEL).schedule.makespan)
+
+
+class TestRenameCompat(unittest.TestCase):
+    """Старое имя TinyFastScheduler осталось алиасом после переименования в TINY Flash."""
+
+    def test_old_name_is_alias(self):
+        self.assertIs(fast.TinyFastScheduler, fast.TinyFlashScheduler)
 
 
 if __name__ == "__main__":

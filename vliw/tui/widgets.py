@@ -19,8 +19,8 @@ from textual.widgets.option_list import Option
 
 from . import palette
 
-MARK = "▍"
-ARROW = "▸"
+MARK = "▌"
+ARROW = ">"
 
 
 # --------------------------------------------------------------------------
@@ -497,7 +497,7 @@ class ConsoleJournal(Horizontal):
     ]
 
     #: Ширина левой колонки. 32 — по строке коммита истории
-    #: («▸ #12 14:02 к /code run»), а не «на глаз побольше».
+    #: («> #12 14:02 к /code run»), а не «на глаз побольше».
     SIDE_W = 32
 
     class RunRequested(Message):
@@ -566,7 +566,7 @@ class ConsoleJournal(Horizontal):
         accent = palette.mode_hex(self.mode)
         # Тот же маркер, что у командной строки в доке: акцентный шеврон
         # без фоновой плашки. Все места, где печатают, выглядят одинаково.
-        mark = Text("❯ ", style=f"{accent} bold")
+        mark = Text("> ", style=f"{accent} bold")
         self.query_one("#journal-mark", Static).update(mark)
 
     # --- ввод -------------------------------------------------------------
@@ -794,7 +794,7 @@ class ConsoleJournal(Horizontal):
         t = Text()
         # Точка графа: цвет — режим, где сделан коммит. История читается
         # как карта сессии: оранжевые коммиты — разбор, мятные — код…
-        t.append("● ", style=palette.mode_hex(run_mode))
+        t.append("* ", style=palette.mode_hex(run_mode))
         t.append(f"#{i + 1}".ljust(4),
                  style=palette.role_hex("title") if here else faint)
         t.append(f"{run.get('time') or '--:--'}  ", style=faint)
@@ -805,7 +805,7 @@ class ConsoleJournal(Horizontal):
                             else palette.role_hex("dim")))
         t.append(run["cmd"][:14], style=name_style)
         if failed:
-            t.append(" ✗", style=palette.role_hex("error"))
+            t.append(" -", style=palette.role_hex("error"))
         # Строка 2: линия графа и состояние, которое несёт запись.
         dag = run.get("dag")
         t.append("\n│  ", style=faint)
@@ -873,7 +873,7 @@ class BridgeRow(Horizontal):
         self.sync([], -1)
 
     def compose(self):
-        yield Static("мостик ▸", classes="bridge-label")
+        yield Static("мостик >", classes="bridge-label")
         p = self.prefix
         yield Tool("в разбор", "@lab",
                    "сделать этот прогон участком РАЗБОРА", id=f"{p}-lab")
@@ -887,7 +887,7 @@ class BridgeRow(Horizontal):
         yield Tool("вернуть", "@restore",
                    "вернуть состояние сессии этого прогона "
                    "(участок, исходник) — без перехода", id=f"{p}-restore")
-        yield Tool("↻ повторить", "@repeat",
+        yield Tool("~ повторить", "@repeat",
                    "прогнать команду заново", id=f"{p}-repeat")
 
     def sync(self, runs: list[dict], pos: int) -> None:
@@ -1115,7 +1115,7 @@ class PromptBar(Vertical):
         # табличкой на общем поле, а не приглашением. «Сюда печатают»
         # показывают само поле (подложка, волосок сверху в доке), а марка
         # только подталкивает. Бренд «NEX» живёт в шапке, а не в поле.
-        mark = Text("❯ ", style=f"{accent} bold")
+        mark = Text("> ", style=f"{accent} bold")
         self.query_one("#prompt-mark", Static).update(mark)
 
     # --- доступ -----------------------------------------------------------
@@ -1323,7 +1323,7 @@ class PanelToolbar(ItemGrid):
 
     Сетка, а не строка: в узкой правой колонке РАЗБОРА четыре чипа в ряд
     не помещаются (надо 48–53 клетки при 44), и Horizontal молча обрезал
-    последний («решётка ▶» читалась как «ре»). ItemGrid переносит лишнее
+    последний («решётка >» читалась как «ре»). ItemGrid переносит лишнее
     второй строкой, а когда место есть — выглядит тем же рядом. Высоту
     держит контент (см. CSS: height auto), а не фиксированная единица.
     Экрану остаётся только отвечать на Tool.Picked —
@@ -1333,8 +1333,8 @@ class PanelToolbar(ItemGrid):
     def __init__(self, *tools: tuple, **kw) -> None:
         # Колонка под чип: без минимума сетка складывается в один столбец
         # (каждый чип своей строкой), с ним — переносит только лишнее.
-        # 14 клеток хватает на короткие чипы («◀ пред.», «решётка ▶»),
-        # длинные («по цепочке ▶», «сброс фильтра») берут сколько надо:
+        # 14 клеток хватает на короткие чипы («< пред.», «решётка >»),
+        # длинные («по цепочке >», «сброс фильтра») берут сколько надо:
         # колонка растёт за контентом, минимум — только пол.
         kw.setdefault("min_column_width", 14)
         super().__init__(**kw)
@@ -1446,7 +1446,7 @@ class PanelPrompt(Vertical):
         # надёжно, чем обычная строка.
         with Horizontal(id="pp-header"):
             yield Static("", id="pp-title")
-            yield CloseBtn("✕", id="pp-close")
+            yield CloseBtn("x", id="pp-close")
         yield VerticalScroll(id="pp-answer")
         yield ItemGrid(id="pp-chips", min_column_width=30)
         with Horizontal(id="pp-field"):
@@ -1464,17 +1464,17 @@ class PanelPrompt(Vertical):
         # скриншоте, ни во многих терминалах без мыши, и тогда крестик без
         # подписи ничем не выдаёт, чем его закрыть.
         close = Text()
-        close.append("✕ ", style=palette.role_hex("dim"))
+        close.append("x ", style=palette.role_hex("dim"))
         close.append("Esc", style=palette.role_hex("faint"))
         self.query_one("#pp-close", CloseBtn).update(close)
         self.query_one("#pp-close", CloseBtn).tooltip = "закрыть (Esc)"
         # Тот же маркер, что у дока внизу и журнала: акцентный шеврон.
         # Все места, где печатают, выглядят одинаково, а не по-своему.
-        mark = Text("❯ ", style=f"{accent} bold")
+        mark = Text("> ", style=f"{accent} bold")
         self.query_one("#pp-mark", Static).update(mark)
         chips = self.query_one("#pp-chips", ItemGrid)
         for q in self._chips:
-            chips.mount(PromptChip(q, "‹ " + q, classes="chip prompt-chip"))
+            chips.mount(PromptChip(q, "< " + q, classes="chip prompt-chip"))
         self.query_one("#pp-answer", VerticalScroll).display = False
         inp = self.query_one("#pp-input", Input)
         inp.placeholder = "спросить или сделать что-то с сессией  ·  /clear — очистить"
@@ -1568,7 +1568,7 @@ class PanelPrompt(Vertical):
         log = self.query_one("#pp-answer", VerticalScroll)
         log.display = True
         t = Text()
-        t.append("⚙ ", style=palette.role_hex("accent"))
+        t.append("* ", style=palette.role_hex("accent"))
         t.append(note, style=palette.role_hex("accent_soft"))
         line = Static(t, classes="pp-line")
         if self._wait is not None and self._wait.is_mounted:
@@ -1700,7 +1700,7 @@ class PanelChat(Vertical):
         return self.query_one("#pchat-log", Static)
 
     def echo(self, question: str) -> None:
-        self._body.append("\n\n› ", style=palette.role_hex("accent"))
+        self._body.append("\n\n> ", style=palette.role_hex("accent"))
         self._body.append(question, style=palette.role_hex("title"))
         self._body.append("\n")
         self._log().update(self._body)

@@ -37,14 +37,14 @@ from vliw.core.blocks import BUCKETS, block_graphs_of_file  # noqa: E402
 from vliw.core.dag import compute_metrics  # noqa: E402
 from vliw.core.model import DEFAULT_PROFILE, get_profile  # noqa: E402
 from vliw.core.oracle import OracleScheduler  # noqa: E402
-from vliw.tiny.fast import TinyFastScheduler  # noqa: E402
+from vliw.tiny.fast import TinyFlashScheduler  # noqa: E402
 
 BUCKET_NAMES = [b for b, _ in BUCKETS]
 
 
 def collect(paths: list[Path], model, min_ops: int, mode: str, oracle_s: float):
     base = GreedyListScheduler()
-    tiny = TinyFastScheduler(mode=mode, with_trace=False)
+    tiny = TinyFlashScheduler(mode=mode, with_trace=False)
     rows = []
     for p in paths:
         for g in block_graphs_of_file(p):
@@ -187,7 +187,7 @@ def main() -> int:
     ap.add_argument("--min-ops", type=int, default=10, help="блоки короче не планируем (как в статье)")
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--mode", choices=("exact", "asm"), default="exact",
-                    help="exact: как полный портфель; asm: без hold/defer (см. docs/TINY_FAST.md)")
+                    help="exact: как полный портфель; asm: без hold/defer (см. docs/archive/TINY_FAST.md)")
     ap.add_argument("--oracle", type=float, default=3.0, help="бюджет точного поиска на блок, с (0 = выключить)")
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--json", help="записать строки по блокам в JSON")

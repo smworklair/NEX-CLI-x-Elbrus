@@ -1,6 +1,6 @@
 """Быстрые крошки: то же качество, меньше времени. Новый файл, старый код не тронут.
 
-Что здесь и почему (замеры — docs/TINY_FAST.md):
+Что здесь и почему (замеры — docs/archive/TINY_FAST.md):
 
   1. ГРАНИЦА. У графа есть нижняя граница makespan (`DagMetrics.lower_bound`):
      быстрее неё расписания не бывает. Если жадный уже на границе — оптимум
@@ -23,7 +23,7 @@
      .s эти две группы не дали ничего (после остальных), на eval_hard — 6 из
      300. Это уже НЕ гарантия, а замер: режим выбирает вызывающий.
 
-Гарантии класса `TinyFastScheduler(mode="exact")`:
+Гарантии класса `TinyFlashScheduler(mode="exact")`:
   * makespan равен makespan `TinyScheduler` на любом графе (при корректной
     нижней границе); не хуже жадного (жадный идёт первым, как и раньше);
   * каждое принятое расписание прошло `validate()` и `complete`;
@@ -51,7 +51,7 @@ try:  # numpy только ускоряет; без него тот же рез�
 except Exception:  # noqa: BLE001
     _np = None
 
-#: Порядок групп: дешёвые и результативные первыми (см. docs/TINY_FAST.md).
+#: Порядок групп: дешёвые и результативные первыми (см. docs/archive/TINY_FAST.md).
 DEFAULT_ORDER: tuple[str, ...] = ("bh", "rule", "bt", "prio", "hold", "defer")
 #: Режим "asm": без дорогих групп, не давших ничего на настоящем коде.
 ASM_ORDER: tuple[str, ...] = ("bh", "rule", "bt", "prio")
@@ -211,10 +211,10 @@ class _Ctx:
         self.base_cycles = None  # такт выдачи каждой инструкции у жадного
 
 
-class TinyFastScheduler(TinyScheduler):
+class TinyFlashScheduler(TinyScheduler):
     name = "Крошки быстрые (граница + порядок групп, без потерь)"
     kind = "learned"
-    short = "tiny-fast"
+    short = "tiny-flash"
 
     def __init__(self, weights: str | None = None,
                  defer_weights: str | None = None,
@@ -406,7 +406,7 @@ class TinyFastScheduler(TinyScheduler):
                 trace = list_schedule(dag, model, priority=pr, defer_until=df,
                                       height=metrics.height, collect_trace=True)[1]
         proved = sched.makespan <= lb
-        notes = [f"tiny-fast[{self.mode}]: greedy={g_ms} -> best={sched.makespan} "
+        notes = [f"tiny-flash[{self.mode}]: greedy={g_ms} -> best={sched.makespan} "
                  f"({best['tag']}); граница={lb}"
                  + (" — оптимум доказан границей" if proved else ""),
                  "группы: " + (",".join(ran) if ran else "не запускались")
@@ -430,3 +430,7 @@ class TinyFastScheduler(TinyScheduler):
                           "weights": self.weights_path, "defer_weights": self.defer_path,
                           "hold_weights": self.hold_path, "beam": self.beam},
         )
+
+
+# Прежнее имя оставлено для совместимости внешних импортов и старых скриптов.
+TinyFastScheduler = TinyFlashScheduler

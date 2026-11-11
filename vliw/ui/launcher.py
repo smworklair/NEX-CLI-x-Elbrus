@@ -95,7 +95,7 @@ def prompt_plain() -> str:
     print()
     while True:
         try:
-            ans = input(paint("prompt", "  nex ") + Style.dim("▸ ")).strip().lower()
+            ans = input(paint("prompt", "  nex ") + Style.dim("> ")).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return ""

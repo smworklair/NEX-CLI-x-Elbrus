@@ -143,11 +143,54 @@ def paint(code: str, s: str) -> str:
     return f"\033[{_resolve_color(code)}m{s}\033[0m"
 
 
+def utf8_console() -> None:
+    """Переключить консоль Windows на UTF-8 (вывод и ввод).
+
+    Python и так пишет UTF-8, но сама консоль со старой кодовой страницей
+    (cp866/cp1251) показывает кириллицу и рамки как «?». Только для tty:
+    при перенаправлении в файл кодовую страницу не трогаем.
+    """
+    if os.name != "nt":
+        return
+    try:
+        if not sys.stdout.isatty():
+            return
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        if k.GetConsoleOutputCP() != 65001:
+            k.SetConsoleOutputCP(65001)
+        if k.GetConsoleCP() != 65001:
+            k.SetConsoleCP(65001)
+    except Exception:
+        pass
+
+
+def enable_vt() -> bool:
+    """Включить обработку ANSI-последовательностей в консоли Windows.
+
+    Без этого свежий `cmd` печатает коды цвета как текст («←[1;38;5;135m»),
+    и экран выглядит сломанным. Возвращает False, если режим не включился.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        return bool(k.SetConsoleMode(k.GetStdHandle(-11), 7))
+    except Exception:
+        return False
+
+
 def setup_output(color: bool | None = None, theme_name: str | None = None) -> None:
     """Настроить кодировку, цвет, тему и ширину под текущий вывод."""
     global W
     if theme_name:
         apply_theme(theme_name)
+    # Windows: Python пишет UTF-8, а свежий cmd остаётся на cp866/cp1251 —
+    # тогда кириллица и рамки превращаются в «?».
+    utf8_console()
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -155,13 +198,7 @@ def setup_output(color: bool | None = None, theme_name: str | None = None) -> No
     if color is None:
         color = sys.stdout.isatty() and os.environ.get("TERM") != "dumb"
     if color and os.name == "nt":
-        try:
-            import ctypes
-
-            k = ctypes.windll.kernel32
-            k.SetConsoleMode(k.GetStdHandle(-11), 7)
-        except Exception:
-            color = False
+        color = enable_vt()
     Style.enabled = bool(color)
     W = detect_width()
 
@@ -247,7 +284,7 @@ def cycles(n: int) -> str:
 
 
 def h1(title: str) -> str:
-    return "\n" + Style.bold("═" * W) + "\n" + Style.bold(title) + "\n" + Style.bold("═" * W)
+    return "\n" + Style.bold("─" * W) + "\n" + Style.bold(title) + "\n" + Style.bold("─" * W)
 
 
 def h2(title: str) -> str:
@@ -381,7 +418,7 @@ def ansi_box(lines: list[str], title: str = "", color: str = "border", double: b
     """Рамка вокруг строк. Содержимое может нести собственные ANSI-коды."""
     color = _resolve_color(color)
     if double:
-        tl, tr, bl, br, hz, vt = "╔", "╗", "╚", "╝", "═", "║"
+        tl, tr, bl, br, hz, vt = "┌", "┐", "└", "┘", "─", "│"
     else:
         tl, tr, bl, br, hz, vt = "┌", "┐", "└", "┘", "─", "│"
     inner = max((vlen(l) for l in lines), default=0)

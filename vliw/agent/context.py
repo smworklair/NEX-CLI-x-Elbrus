@@ -164,10 +164,10 @@ def schedule_layout(session, which: str = "baseline", max_rows: int = 40) -> lis
 
 
 def tiny_facts(session) -> list[str]:
-    """Крошки против baseline: третья цифра в сравнении планировщиков.
+    """TINY Flash против baseline: третья цифра в сравнении планировщиков.
 
-    Синергия в честную сторону: крошки считаются детерминированно (десятки
-    миллисекунд, без LLM), а агент получает готовое число и объясняет его —
+    Синергия в честную сторону: TINY Flash считается детерминированно
+    (миллисекунды, без LLM), а агент получает готовое число и объясняет его —
     наоборот (модель подсказывает планировщику) было бы выдумкой вместо
     поиска. Без весов — молча пропускаем: портфель тогда равен baseline,
     и строка была бы шумом, а не фактом.
@@ -176,9 +176,9 @@ def tiny_facts(session) -> list[str]:
     if cached is None:
         return []
     try:
-        from ..tiny.scheduler import TinyScheduler
+        from ..tiny.fast import TinyFlashScheduler
 
-        res = TinyScheduler().schedule(session.dag_obj, session.model())
+        res = TinyFlashScheduler().schedule(session.dag_obj, session.model())
     except Exception:
         return []
     errs = res.schedule.validate()
@@ -188,9 +188,9 @@ def tiny_facts(session) -> list[str]:
     b, o, t = base.schedule.makespan, orc.schedule.makespan, res.schedule.makespan
     winner = res.search_stats.get("tiny_winner", "?")
     if t >= b:
-        return [f"крошки (tiny, {winner}): {t} тактов — вровень с baseline, "
+        return [f"TINY Flash ({winner}): {t} тактов — вровень с baseline, "
                 f"хуже не стало (оракул: {o})."]
-    return [f"крошки (tiny, {winner}): {t} тактов — лучше baseline ({b}), "
+    return [f"TINY Flash ({winner}): {t} тактов — лучше baseline ({b}), "
             f"оракул: {o}."]
 
 
@@ -200,15 +200,12 @@ def build(session, include_layout: bool = False) -> str:
     parts += machine_facts(session.model())
     parts.append("")
     parts += schedule_facts(session)
-    from ..ai_hints import core_facts, nnl_facts
+    from ..ai_hints import core_facts
     # Крошки теперь внутри ядра NEX (блок «планировщик»): рассказчик берёт строку от ядра;
     # нет ядра — прежний прямой путь.
     tiny = core_facts(session) or tiny_facts(session)
     if tiny:
         parts += tiny
-    nnl = nnl_facts(session)
-    if nnl:
-        parts += nnl
     doc = doctor_facts(session)
     if doc:
         parts.append("")

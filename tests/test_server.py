@@ -124,6 +124,9 @@ def _server_at(path: str) -> LlamaServer:
     return srv
 
 
+@unittest.skipUnless(hasattr(socket, "AF_UNIX"),
+                     "AF_UNIX нет на этой платформе (Windows): "
+                     "транспорт llama-server проверяется на POSIX")
 class TestCompletionStream(unittest.TestCase):
 
     def test_chunks_arrive_and_stop_flag_ends_the_stream(self) -> None:

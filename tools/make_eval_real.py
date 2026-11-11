@@ -14,7 +14,7 @@
      (`vliw/core/blocks.py`). Одинаковые графы (по операциям и связям) сливаются в
      один; сколько раз граф встретился, пишется в `meta.seen`.
   2. Для каждого графа ищется доказанный оптимум:
-       * быстрые крошки (`TinyFastScheduler`, режим точности) дали makespan, равный
+       * быстрые крошки (`TinyFlashScheduler`, режим точности) дали makespan, равный
          нижней границе, — оптимум доказан границей (`meta.proven_by = "bound"`);
        * иначе точный поиск (`OracleScheduler`) в бюджет `--oracle` секунд на граф:
          доказал — оптимум доказан поиском (`"oracle"`).
@@ -68,7 +68,7 @@ from vliw.core.blocks import (  # noqa: E402
 from vliw.core.dag import DAG, compute_metrics  # noqa: E402
 from vliw.core.model import get_profile  # noqa: E402
 from vliw.core.oracle import OracleScheduler  # noqa: E402
-from vliw.tiny.fast import TinyFastScheduler  # noqa: E402
+from vliw.tiny.fast import TinyFlashScheduler  # noqa: E402
 from vliw.tiny.features import build_dag, parse_graph_entries  # noqa: E402
 
 DEFAULT_DIR = ROOT / "real_candidates_100_400" / "asm"
@@ -156,7 +156,7 @@ _W: dict = {}
 
 def _init(profile: str, oracle_budget: float) -> None:
     _W["model"] = get_profile(profile)
-    _W["fast"] = TinyFastScheduler(mode="exact", with_trace=False)
+    _W["fast"] = TinyFlashScheduler(mode="exact", with_trace=False)
     _W["greedy"] = GreedyListScheduler()
     _W["budget"] = oracle_budget
 

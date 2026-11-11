@@ -20,13 +20,13 @@ from .render import Style, paint, table, wrap
 
 
 def _cost(f: Finding) -> str:
-    return f"−{f.cycles_lost} т." if f.cycles_lost > 0 else "—"
+    return f"-{f.cycles_lost} т." if f.cycles_lost > 0 else "—"
 
 
 def _bar(load: float, width: int = 12) -> str:
     filled = int(width * load)
     role = "error" if load > 0.8 else ("accent2" if load > 0.55 else "accent_soft")
-    return paint(role, "▄" * filled) + Style.dim("▁" * (width - filled))
+    return paint(role, "▄" * filled) + Style.dim("_" * (width - filled))
 
 
 # --------------------------------------------------------------------------
@@ -36,7 +36,7 @@ def _bar(load: float, width: int = 12) -> str:
 
 # Задержки разных операций перекрываются во времени, поэтому их цены НЕЛЬЗЯ
 # складывать: сумма выйдет больше самого расписания и станет бессмыслицей
-# (было «−126 т.» при расписании в 59 т.). Складываем только заведомо
+# (было «-126 т.» при расписании в 59 т.). Складываем только заведомо
 # непересекающиеся находки — участки простоя.
 _ADDITIVE = {"idle-stall"}
 
@@ -69,7 +69,7 @@ def _group_title(f: Finding, count: int) -> str:
         return f"очередь на монопольный порт: {count} операции(-й)"
     if f.code == "monopoly-block":
         return f"монопольный порт занят не тем: {count} случая(-ев)"
-    return f"{f.title} (×{count})"
+    return f"{f.title} (x{count})"
 
 
 # --------------------------------------------------------------------------
@@ -84,9 +84,9 @@ def render_diagnosis(d: Diagnosis, label: str = "") -> list[str]:
 
     # --- одна строка с главным числом ---------------------------------
     if d.total_lost > 0:
-        head = paint("error", f"■ {d.total_lost} т.") + paint("title", " можно сократить")
+        head = paint("error", f"* {d.total_lost} т.") + paint("title", " можно сократить")
     else:
-        head = paint("success", "■ упирается в предел машины")
+        head = paint("success", "* упирается в предел машины")
     tail = Style.dim(f"{d.makespan} т.  →  предел {d.lower_bound} т.")
     out.append(f"  {head}    {tail}")
 
@@ -118,8 +118,8 @@ def render_diagnosis(d: Diagnosis, label: str = "") -> list[str]:
     if losses:
         out.append("  " + paint("error", "МОЖНО ОТЫГРАТЬ"))
         for n, (f, cnt, total) in enumerate(_group(losses), 1):
-            mark = paint("error", "●") if n == 1 else Style.dim("○")
-            out.append(f"   {mark} {n}  {paint('warning', f'−{total} т.'):>12}  "
+            mark = paint("error", "*") if n == 1 else Style.dim("o")
+            out.append(f"   {mark} {n}  {paint('warning', f'-{total} т.'):>12}  "
                        f"{_group_title(f, cnt)}")
         out.append("")
         # Подробно — только про самую дорогую: остальное по /doctor N.
@@ -136,7 +136,7 @@ def render_diagnosis(d: Diagnosis, label: str = "") -> list[str]:
     if limits:
         out.append("  " + Style.dim("ПРЕДЕЛЫ МАШИНЫ") + Style.dim(" — не ошибки планировщика"))
         for f, cnt, total in _group(limits):
-            cost = f"−{total} т." if total > 0 else "—"
+            cost = f"-{total} т." if total > 0 else "—"
             out.append(f"   {Style.dim('·')}    {Style.dim(cost):>12}  "
                        f"{Style.dim(_group_title(f, cnt))}")
         out.append("")
@@ -166,7 +166,7 @@ def render_detail(d: Diagnosis, n: int) -> list[str]:
     if n < 1 or n > len(groups):
         return ["  " + paint("error", f"нет находки №{n}; всего {len(groups)}")]
     f, cnt, total = groups[n - 1]
-    out = [f"  {paint('error', f'−{total} т.')}  {_group_title(f, cnt)}", ""]
+    out = [f"  {paint('error', f'-{total} т.')}  {_group_title(f, cnt)}", ""]
     out += _detail(f, prefix="  ")
     return out
 
@@ -177,15 +177,15 @@ def sidebar_rows(d: Diagnosis, width: int) -> list[str]:
     limits = [f for f in d.findings if not f.recoverable]
     out: list[str] = []
     if d.total_lost > 0:
-        out.append(paint("error", f"  ■ {d.total_lost} т. сверх предела"))
+        out.append(paint("error", f"  * {d.total_lost} т. сверх предела"))
     else:
-        out.append(paint("success", "  ■ упирается в предел"))
+        out.append(paint("success", "  * упирается в предел"))
     groups = _group(losses)
     if groups:
         f, cnt, total = groups[0]
         out.append(Style.dim(f"  {len(groups)} потери · {len(limits)} предела"))
         title = _group_title(f, cnt)
-        out.append(paint("warning", f"  −{total} т."))
+        out.append(paint("warning", f"  -{total} т."))
         for line in wrap(Style.dim(title), width, "    ")[:2]:
             out.append(line)
     else:
@@ -229,7 +229,7 @@ def render_parsed(parsed, dag, compiler_cycles: int | None,
     if compiler_cycles is not None and oracle_cycles is not None:
         gap = compiler_cycles - oracle_cycles
         if unknown_share >= 0.05:
-            out.append("  " + paint("warning", "■ сравнение с компилятором несостоятельно"))
+            out.append("  " + paint("warning", "* сравнение с компилятором несостоятельно"))
             out += wrap(Style.dim(
                 f"{unknown_ops} из {len(parsed.ops)} операций "
                 f"({unknown_share:.0%}) машине неизвестны — их латентность "
@@ -242,11 +242,11 @@ def render_parsed(parsed, dag, compiler_cycles: int | None,
         else:
             if gap > 0:
                 pct = 100.0 * gap / compiler_cycles
-                head = paint("success", f"■ резерв {gap} т. ({pct:.0f}%)")
+                head = paint("success", f"* резерв {gap} т. ({pct:.0f}%)")
             elif gap == 0:
-                head = paint("dim", "■ резерва нет")
+                head = paint("dim", "* резерва нет")
             else:
-                head = paint("warning", f"■ компилятор быстрее на {-gap} т.")
+                head = paint("warning", f"* компилятор быстрее на {-gap} т.")
             out.append(f"  {head}")
             out.append("  " + Style.dim(
                 f"lcc {compiler_cycles} т.  →  поиск {oracle_cycles} т."
@@ -259,18 +259,18 @@ def render_parsed(parsed, dag, compiler_cycles: int | None,
         head, detail = compiler_problem or (
             "расписание компилятора не восстановлено",
             "раскладка по каналам не сходится с моделью")
-        out.append("  " + paint("warning", "■ " + head))
+        out.append("  " + paint("warning", "* " + head))
         out += wrap(Style.dim(detail), render.W, "  ")
     out.append("")
 
     out += wrap(Style.dim(
         f"{len(parsed.ops)} операций · {parsed.bundles} широких команд · "
         f"{parsed.nop_cycles} т. в nop"), render.W, "  ")
-    ops = "  ".join(f"{k}×{v}" for k, v in sorted(parsed.op_counts().items()))
+    ops = "  ".join(f"{k}x{v}" for k, v in sorted(parsed.op_counts().items()))
     out += wrap(Style.dim(ops), render.W, "  ")
 
     if parsed.unknown_mnemonics:
-        unk = ", ".join(f"{k}×{v}" for k, v in
+        unk = ", ".join(f"{k}x{v}" for k, v in
                         sorted(parsed.unknown_mnemonics.items(),
                                key=lambda kv: -kv[1])[:6])
         # НЕ «считано как арифметика»: с версии 0.9 незнакомая мнемоника
@@ -293,7 +293,7 @@ def render_parsed(parsed, dag, compiler_cycles: int | None,
         out.append("")
         if errors:
             out.append("  " + paint("error",
-                                    f"■ ошибок: {len(errors)}"))
+                                    f"* ошибок: {len(errors)}"))
             for pr in errors[:5]:
                 out += wrap(paint("error", f"строка {pr.line}: {pr.text}"),
                             render.W, "    ")

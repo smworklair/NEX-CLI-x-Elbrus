@@ -1,0 +1,15 @@
+
+[dev]
+rich>=13
+textual>=8.2
+
+[learned]
+torch
+transformers
+peft
+accelerate
+safetensors
+
+[tui]
+rich>=13
+textual>=8.2

@@ -1,0 +1,2 @@
+[console_scripts]
+vliw = vliw.cli:main

@@ -1,46 +1,37 @@
-"""Клиент языковой модели: фабрика поверх `backends/` (концепт Nex-pilot).
+"""Language model client: factory over `backends/` (Nex-pilot pattern).
 
-Провайдер — это backend с единым интерфейсом (`backends/base.py:Backend`):
-верхние слои (`agent.py`, `analyst.py`) не знают, куда ушёл запрос.
-Добавление нового API — новый файл в `backends/` + строка в реестре ниже.
+A provider is a backend implementing `backends/base.py:Backend`: upper layers
+(`agent.py`, `analyst.py`) do not care which API handles the request. Adding a
+new API means adding one file in `backends/` and one entry in the registry below.
 
-Поддерживаются (выбор — `NEX_PROVIDER`):
-  * `mistral` — Le Chat / Mistral AI — по умолчанию;
+Supported providers (selected via `NEX_PROVIDER`):
+  * `mistral` — Le Chat / Mistral AI (default);
   * `gemini`  — Google AI Studio;
   * `openai` / `deepseek` / `qwen` / `kimi` / `grok` (xAI) / `glm` (Z.ai) —
-    готовые пресеты поверх OpenAI-совместимого API
-    (`backends/openai_compat.py`);
+    presets over the OpenAI-compatible API (`backends/openai_compat.py`);
   * `anthropic` — Claude API (`backends/anthropic.py`);
   * `muse` — Muse Spark, Meta Model API (`backends/muse.py`);
-  * `openrouter` — агрегатор OpenRouter (свой ключ `OPENROUTER_API_KEY`);
-  * `vercel` — агрегатор Vercel AI Gateway;
-  * `local-server` — Local: свой сервер на loopback
-    (Ollama / LM Studio / llama.cpp, только `NEX_LOCAL_URL`);
-  * `custom` — legacy: любой другой OpenAI-совместимый сервер
-    (`NEX_BASE_URL` + `NEX_MODEL`, в каталоге скрыт);
-  * `gigachat` — Сбер GigaChat (OAuth по client_id/secret);
-  * `yandex` (`yandexgpt`) — Yandex Cloud (API-ключ или IAM + folder_id);
-  * `local` — внутренний режим машины (llama-server, см. `local.py`;
-    в каталоге скрыт, Local настраивается отдельно).
+  * `openrouter` — OpenRouter aggregator (`OPENROUTER_API_KEY`);
+  * `vercel` — Vercel AI Gateway;
+  * `local-server` — Local loopback server (Ollama / LM Studio / llama.cpp,
+    via `NEX_LOCAL_URL` only);
+  * `custom` — legacy: any other OpenAI-compatible server (`NEX_BASE_URL` +
+    `NEX_MODEL`, hidden from the live catalog);
+  * `gigachat` — Sber GigaChat (OAuth client_id/secret);
+  * `yandex` (`yandexgpt`) — Yandex Cloud (API key or IAM + folder_id);
+  * `local` — in-process local model (llama-server, see `local.py`).
 
-Ключ берётся так (ничего из этого не идёт в git):
-  1. `NEX_API_KEY` в окружении (общий; для GigaChat — вид "id:secret");
-  2. `~/.config/nex/key` (тот же формат, вне репозитория);
-  3. `.env` в корне проекта: сначала переменная провайдера
-     (`MISTRAL_API_KEY=...` и т.д.), потом общий `NEX_API_KEY`
-     (файл в `.gitignore`, формат — в `.env.example`).
-Неключевые настройки (`NEX_PROVIDER`, `NEX_MODEL`, адреса, folder) —
-окружение поверх `.env` (см. `setting()`), поэтому смена через `/ai`
-переживает перезапуск.
+Key resolution (none of these are committed to git):
+  1. `NEX_API_KEY` in environment (generic; for GigaChat, "id:secret");
+  2. `~/.config/nex/key` (same format, outside the repo);
+  3. `.env` at the project root: provider-specific variable first
+     (`MISTRAL_API_KEY=...`, etc.), then generic `NEX_API_KEY`
+     (gitignored; see `.env.example`).
+Non-key settings (`NEX_PROVIDER`, `NEX_MODEL`, URLs, folder) check env first,
+then `.env` (see `setting()`), so changes made via `/ai` persist across restarts.
 
-Без ключа в сеть не ходим: агент честно сообщает, что модель недоступна, и
-отвечает офлайн по уже посчитанным числам.
-
-БЫЛО (до 17.08.2026): здесь лежали два настоящих ключа текстом — `EMBEDDED_KEYS
-= {"mistral": "...", "gemini": "..."}`, «одноразовые аккаунты, чтобы демо
-работало сразу после клонирования». Оба закоммичены и найдены при разборе
-`git log --all -p`. Ключи отозваны у провайдера, из кода убраны. См.
-`.env.example` — теперь то же удобство даёт файл вне git, а не строка в коде.
+Without a key, no network requests are made: the agent reports honestly that
+the model is unavailable and answers offline from computed facts.
 """
 
 from __future__ import annotations
@@ -67,12 +58,12 @@ __all__ = ["LLMError", "DEFAULT_PROVIDER", "PROVIDERS", "KEY_VAR", "provider",
            "available", "describe", "is_local", "complete", "structured",
            "stream", "check", "project_env_path", "configured_backend"]
 
-# Все провайдеры, которых понимает NEX_PROVIDER (каноничные имена).
+# Canonical provider names accepted by NEX_PROVIDER.
 PROVIDERS = ("mistral", "gemini", "openai", "deepseek", "qwen", "kimi",
              "vercel", "custom", "gigachat", "yandex", "local",
              "grok", "anthropic", "glm", "muse", "openrouter", "local-server")
 
-# Провайдер по умолчанию, если ничего не задано и ключ не опознан.
+# Default provider when nothing is configured and no key is recognized.
 DEFAULT_PROVIDER = "mistral"
 
 _ENV_VAR = {"mistral": "MISTRAL_API_KEY", "gemini": "GEMINI_API_KEY",
@@ -87,21 +78,20 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def project_env_path() -> Path:
-    """Путь к `.env` в корне проекта (файл в `.gitignore`, не коммитится)."""
+    """Path to `.env` at the project root (gitignored)."""
     return _PROJECT_ROOT / ".env"
 
 
 def _dotenv_values() -> dict[str, str]:
-    """Разбор `.env` в корне проекта — без внешних зависимостей."""
+    """Parse `.env` at the project root using stdlib only."""
     return envfile.load(project_env_path())
 
 
 def setting(name: str, default: str = "") -> str:
-    """Неключевая настройка: окружение побеждает `.env`, дальше — умолчание.
+    """Non-key setting: environment overrides `.env`, then falls back to default.
 
-    Ключи здесь намеренно НЕ ищутся (у них свой порядок в `_key_for`).
-    Читается при каждом вызове — смена через `/ai` действует сразу и
-    переживает перезапуск (CLI сохраняет в `.env`).
+    Keys are intentionally excluded here (they follow `_key_for`). Read on
+    every call so `/ai` changes take effect immediately and survive restarts.
     """
     got = os.environ.get(name, "").strip()
     if got:
@@ -110,7 +100,7 @@ def setting(name: str, default: str = "") -> str:
 
 
 def _embedded_key(prov: str) -> str:
-    """Ключ из `.env` (если он там есть) — единственный «встроенный» слой."""
+    """Provider key from `.env` if present."""
     return _dotenv_values().get(_ENV_VAR.get(prov, ""), "")
 
 
@@ -131,7 +121,7 @@ DEFAULT_MODELS = {
     "local-server": "",
     "gigachat": "GigaChat",
     "yandex": "yandexgpt",
-    "local": "phi-4-mini-instruct (4 бита, llama-server)",
+    "local": "phi-4-mini-instruct (4-bit, llama-server)",
 }
 
 _PROVIDER_LABEL = {
@@ -151,12 +141,11 @@ _PROVIDER_LABEL = {
     "custom": "custom",
     "gigachat": "gigachat",
     "yandex": "yandexgpt",
-    "local": "локально",
+    "local": "local",
 }
 
 TIMEOUT = 60
-# Модели с «размышлением» тратят часть бюджета на него, поэтому лимит с запасом:
-# иначе ответ обрывается на полуслове.
+# Reasoning models spend part of the budget on thinking — keep a generous cap.
 MAX_TOKENS = 4000
 
 RETRIES = 3
@@ -164,7 +153,7 @@ RETRY_PAUSE = 2.0
 
 
 # --------------------------------------------------------------------------
-# Выбор провайдера, ключа и модели
+# Provider, key, and model selection
 # --------------------------------------------------------------------------
 
 _ALIASES = {
@@ -189,9 +178,8 @@ _ALIASES = {
 _OPENAI_COMPAT = {"openai", "deepseek", "qwen", "kimi", "vercel", "custom",
                   "grok", "glm", "openrouter", "local-server"}
 
-#: Куда `/key` кладёт ключ для каждого однопарольного провайдера.
-#: У gigachat пара (id+secret), у yandex ключ + отдельно folder — их `/key`
-#: разбирает `key_updates()` ниже.
+#: Environment variable where `/key` stores single-key provider secrets.
+#: GigaChat (id+secret) and Yandex (key+folder) are handled by `key_updates()`.
 KEY_VAR = {"mistral": "MISTRAL_API_KEY", "gemini": "GEMINI_API_KEY",
            "openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY",
            "qwen": "QWEN_API_KEY", "kimi": "KIMI_API_KEY",
@@ -201,45 +189,40 @@ KEY_VAR = {"mistral": "MISTRAL_API_KEY", "gemini": "GEMINI_API_KEY",
            "glm": "ZAI_API_KEY", "muse": "META_API_KEY",
            "openrouter": "OPENROUTER_API_KEY", "local-server": "NEX_LOCAL_KEY"}
 
-#: Где брать ключ: (ссылка, короткая пометка). Показывается в подсказках
-#: `/key` и `/ai`, чтобы не надо было лезть в доки за ссылкой.
+#: Where to obtain an API key: (url, short note) shown in `/key` and `/ai` hints.
 KEY_SOURCE = {
-    "mistral": ("https://console.mistral.ai/api-keys", "бесплатный тариф есть"),
-    "gemini": ("https://aistudio.google.com/apikey", "бесплатно"),
-    "openai": ("https://platform.openai.com/api-keys", "платно"),
-    "deepseek": ("https://platform.deepseek.com/api_keys", "дешево"),
+    "mistral": ("https://console.mistral.ai/api-keys", "free tier available"),
+    "gemini": ("https://aistudio.google.com/apikey", "free tier"),
+    "openai": ("https://platform.openai.com/api-keys", "paid"),
+    "deepseek": ("https://platform.deepseek.com/api_keys", "low cost"),
     "qwen": ("https://bailian.console.aliyun.com/", "Alibaba Model Studio"),
-    "kimi": ("https://platform.moonshot.ai/console/api-keys", "платно"),
-    "vercel": ("https://vercel.com/docs/ai-gateway", "один ключ на сотни моделей"),
+    "kimi": ("https://platform.moonshot.ai/console/api-keys", "paid"),
+    "vercel": ("https://vercel.com/docs/ai-gateway", "one key for hundreds of models"),
     "grok": ("https://docs.x.ai", "xAI API"),
     "anthropic": ("https://platform.claude.com", "Anthropic API"),
     "glm": ("https://docs.z.ai", "Z.ai API"),
     "muse": ("https://ai.developer.meta.com/docs/models", "Muse Spark"),
     "openrouter": ("https://openrouter.ai", "OpenRouter API"),
     "local-server": ("", "Local: loopback server, NEX_LOCAL_URL/MODEL/KEY"),
-    "custom": ("", "адрес и ключ вашего сервера "
-                   "(Ollama: url=http://localhost:11434/v1, ключ любой)"),
+    "custom": ("", "URL and key of your server "
+                   "(Ollama: url=http://localhost:11434/v1, any key)"),
     "gigachat": ("https://developers.sber.ru/portal/products/gigachat",
-                 "Сбер, OAuth-пара"),
+                 "Sber OAuth pair"),
     "yandex": ("https://yandex.cloud/ru/docs/foundation-models/operations/api-key/get",
-               "нужен ещё каталог: /ai yandex folder=..."),
+               "also requires folder: /ai yandex folder=..."),
 }
 
 
 def key_source_hint(prov: str) -> str:
-    """Одна строка «где взять ключ» для подсказок CLI."""
+    """One-line hint showing where to get an API key."""
     url, note = KEY_SOURCE.get(prov, ("", ""))
     if url:
-        return f"взять: {url} ({note})"
-    return f"взять: {note}" if note else ""
+        return f"get one: {url} ({note})"
+    return f"get one: {note}" if note else ""
 
 
 def key_updates(prov: str, parts: list[str]) -> dict[str, str]:
-    """Переменные окружения для вставки ключа (`/key`, `/ai ... key=...`).
-
-    Чистая функция: ничего не пишет, только решает КУДА. Пишет вызывающий
-    (через `envfile.save` + `os.environ`), чтобы было видно и тестируемо.
-    """
+    """Build env-var updates for `/key` or `/ai ... key=...` (pure function)."""
     if prov == "gigachat":
         if len(parts) == 2:
             return {"GIGACHAT_CLIENT_ID": parts[0], "GIGACHAT_SECRET": parts[1]}
@@ -248,50 +231,35 @@ def key_updates(prov: str, parts: list[str]) -> dict[str, str]:
             if cid.strip() and sec.strip():
                 return {"GIGACHAT_CLIENT_ID": cid.strip(),
                         "GIGACHAT_SECRET": sec.strip()}
-        raise LLMError("GigaChat — пара OAuth: /key <client_id> <client_secret> "
-                       "или /ai gigachat key=<id>:<secret>")
+        raise LLMError("GigaChat requires an OAuth pair: /key <client_id> <client_secret> "
+                       "or /ai gigachat key=<id>:<secret>")
     if len(parts) != 1 or not parts[0].strip():
-        raise LLMError(f"форма: /key <ключ>  (провайдер {_label(prov)})")
+        raise LLMError(f"usage: /key <key>  (provider {_label(prov)})")
     return {KEY_VAR.get(prov, "NEX_API_KEY"): parts[0].strip()}
 
 
 def repair_pasted_key(part: str) -> tuple[str, list[str]]:
-    """Починить вставку ключа: склейка, мусор, хвост.
+    """Repair common clipboard glitches: doubled paste, leading junk, trailing tail.
 
-    Живой случай: ключ в буфере уже склеенный (вставили дважды или со
-    словом спереди — видели 146 символов при норме 73), и ругаться
-    бесполезно: человек вставит то же самое ещё раз. Правила узкие и
-    безопасные — чинят только то, что настоящим ключом быть не может:
-      * точная склейка из двух одинаковых половин — взять одну;
-      * мусор спереди (`misterialsk-or-v1-…`) — резать до `sk-or-v1-`;
-      * хвост длиннее 73 у `sk-or-v1-…` (норма OpenRouter) — обрезать.
-    Возвращает (чистый_ключ, что_убрано). Пустой список — вставка чистая.
+    Returns (cleaned_key, repair_notes). Empty notes list means clean paste.
     """
     notes: list[str] = []
     s = "".join(part.split())
     if len(s) % 2 == 0 and len(s) >= 40 and s[:len(s) // 2] == s[len(s) // 2:]:
         s = s[:len(s) // 2]
-        notes.append("склейка из двух одинаковых половин — взял одну")
+        notes.append("doubled paste detected — kept one copy")
     i = s.find("sk-or-v1-")
     if i > 0:
         s = s[i:]
-        notes.append("убран мусор спереди")
+        notes.append("stripped leading garbage")
     if s.startswith("sk-or-v1-") and len(s) > 73:
         s = s[:73]
-        notes.append("хвост обрезан до нормы 73")
+        notes.append("trimmed trailing chars to 73")
     return s, notes
 
 
 def looks_like_key_text(line: str) -> bool:
-    """Похоже ли введённое на ключ, а не на вопрос (для строки ввода АГЕНТА).
-
-    Ошибка в любую сторону стоит дорого: вопрос, съеденный как ключ, —
-    потерянный вопрос; ключ, ушедший вопросом в историю, — засвеченный
-    секрет. Поэтому правило консервативное: ключ — это один длинный токен
-    без пробелов (настоящие ключи — от 20 символов) либо узнаваемый вид
-    (sk-or-v1, AIza, пара id:secret), либо пара длинных токенов.
-    «Привет» и «почему медленно» под него не подпадают — проверено тестами.
-    """
+    """Return True if user input looks like an API key rather than a question."""
     s = (line or "").strip()
     if not s or s.startswith("/"):
         return False
@@ -307,25 +275,18 @@ def looks_like_key_text(line: str) -> bool:
 
 
 def adopt_pasted_key(text: str) -> tuple[str, str, list[str]]:
-    """Вставленный ключ → провайдер, сохранение, сводка для ответа.
+    """Detect provider from a pasted key and store it in process memory only.
 
-    Провайдер угадывается по виду ключа (как `_key_fits`, только наоборот):
-    sk-or-v1 — OpenRouter (custom + его адрес/модель по умолчанию, если своих
-    нет), AIza — Gemini, id:secret — GigaChat, остальное — Mistral (дефолт).
-    Возвращает (подпись_провайдера, замаскированный_ключ, что_починили).
-
-    Сохранение — ТОЛЬКО в память процесса (`os.environ`), на диск ничего не
-    пишется: вставил на сессию — закрыл терминал — ключа нет. Это требование
-    к экрану АГЕНТА (см. `AgentScreen`).
+    Returns (provider_label, masked_key, repair_notes). Nothing is written to
+    disk: closing the terminal clears the key.
     """
     s = " ".join((text or "").split())
     if not s:
-        raise LLMError("пусто — вставь ключ одной строкой")
+        raise LLMError("empty — paste your key on a single line")
     parts = s.split(" ")
     repaired_notes: list[str] = []
     if len(parts) == 1:
-        # Починка — до угадывания провайдера: иначе склеенный ключ
-        # опознаётся неверно, а обрезанный — вообще никак.
+        # Repair before provider detection so doubled/prefixed keys still match.
         parts[0], repaired_notes = repair_pasted_key(parts[0])
     if len(parts) == 2:
         prov = "gigachat"
@@ -341,7 +302,7 @@ def adopt_pasted_key(text: str) -> tuple[str, str, list[str]]:
     elif len(parts) == 1 and try_decode_gigachat_key(parts[0]) is not None:
         cid, sec = try_decode_gigachat_key(parts[0])  # type: ignore[misc]
         prov, key_parts = "gigachat", [cid, sec]
-        repaired_notes = repaired_notes + ["готовый ключ Сбера разобран на пару"]
+        repaired_notes = repaired_notes + ["decoded Sber base64 key into id:secret pair"]
     else:
         prov, key_parts = "mistral", parts
     updates: dict[str, str | None] = {"NEX_PROVIDER": prov}
@@ -363,12 +324,7 @@ def adopt_pasted_key(text: str) -> tuple[str, str, list[str]]:
 
 
 def has_session_key() -> bool:
-    """Есть ли ключ в ЭТОЙ сессии (память), а не в сохранённых файлах.
-
-    Экран АГЕНТА живёт одну сессию: вставил — работаешь, закрыл терминал —
-    ключа нет. Поэтому просьбу вставить показывают именно по этому флагу,
-    а не по `available()` (тот видит и `.env`, и `~/.config/nex/key`).
-    """
+    """Whether an API key is loaded in THIS session's memory (not just `.env`)."""
     if provider() == "local":
         return local.ready()
     e = os.environ
@@ -388,12 +344,7 @@ def has_session_key() -> bool:
 
 
 def provider_updates(prov: str, kv: dict[str, str]) -> dict[str, str | None]:
-    """Настройки смены провайдера (`/ai ...`, окно каталога): проверки + словарь.
-
-    Чистая функция: ничего не пишет, только решает ЧТО. Пишет вызывающий
-    (в память сессии — см. `AgentScreen`, `cli._ai_save`), чтобы было видно
-    и тестируемо. Ошибки — как LLMError с готовым текстом для вывода.
-    """
+    """Validate and build env-var updates for switching providers (`/ai ...`)."""
     if prov == "local-server":
         from . import models
 
@@ -413,8 +364,8 @@ def provider_updates(prov: str, kv: dict[str, str]) -> dict[str, str | None]:
             updates["NEX_LOCAL_KEY"] = kv["key"]
         return updates
     updates: dict[str, str | None] = {"NEX_PROVIDER": prov}
-    # Чужой NEX_MODEL при смене провайдера — утечка через границу: модель
-    # одного API уехала бы в другой. Чистим, если модель явно не задана.
+    # Clear stale NEX_MODEL when switching providers so one API's model name
+    # does not leak into another API.
     if kv.get("model"):
         if prov == "yandex":
             updates["YANDEX_MODEL"] = kv["model"]
@@ -428,8 +379,8 @@ def provider_updates(prov: str, kv: dict[str, str]) -> dict[str, str | None]:
     if prov == "custom":
         url = kv.get("url") or setting("NEX_BASE_URL", "")
         if not url:
-            raise LLMError("нужен адрес сервера: /ai custom url=... model=... key=... "
-                           "(например, url=https://openrouter.ai/api/v1)")
+            raise LLMError("server URL required: /ai custom url=... model=... key=... "
+                           "(e.g. url=https://openrouter.ai/api/v1)")
         updates["NEX_BASE_URL"] = url
     elif prov == "gigachat":
         cid = kv.get("id") or setting("GIGACHAT_CLIENT_ID", "")
@@ -439,8 +390,8 @@ def provider_updates(prov: str, kv: dict[str, str]) -> dict[str, str | None]:
             pair = key_updates("gigachat", [kv["key"]])
             cid, sec = pair["GIGACHAT_CLIENT_ID"], pair["GIGACHAT_SECRET"]
         if not cid or not sec:
-            raise LLMError("нужна пара OAuth: /ai gigachat key=<id>:<secret> "
-                           "(или id=... secret=... — или короче: /key <id> <secret>)")
+            raise LLMError("OAuth pair required: /ai gigachat key=<id>:<secret> "
+                           "(or id=... secret=... — or simply: /key <id> <secret>)")
         updates["GIGACHAT_CLIENT_ID"] = cid
         updates["GIGACHAT_SECRET"] = sec
         if kv.get("scope"):
@@ -448,7 +399,7 @@ def provider_updates(prov: str, kv: dict[str, str]) -> dict[str, str | None]:
     elif prov == "yandex":
         folder = kv.get("folder") or setting("YANDEX_FOLDER_ID", "")
         if not folder:
-            raise LLMError("нужен каталог: /ai yandex folder=... key=...")
+            raise LLMError("folder ID required: /ai yandex folder=... key=...")
         updates["YANDEX_FOLDER_ID"] = folder
 
     if kv.get("key") and prov != "gigachat":
@@ -457,7 +408,7 @@ def provider_updates(prov: str, kv: dict[str, str]) -> dict[str, str | None]:
 
 
 def normalize_provider(name: str) -> str | None:
-    """Каноничное имя провайдера из вольного написания (алиасы — как в Nex-pilot)."""
+    """Resolve a free-form provider alias to its canonical name."""
     key = (name or "").strip().lower()
     if not key:
         return None
@@ -470,14 +421,7 @@ def _looks_google(key: str) -> bool:
 
 
 def try_decode_gigachat_key(token: str) -> tuple[str, str] | None:
-    """Готовый ключ авторизации Сбера — это base64(client_id:client_secret).
-
-    В личном кабинете лежит именно готовая строка, а не пара отдельно, и
-    человек вставляет её как есть (видели живьём: 100 символов base64).
-    Проверка строгая: валидный base64, внутри печатный ASCII, ровно одно
-    двоеточие, обе части от 8 символов — случайный чужой ключ сюда попасть
-    не может физически.
-    """
+    """Decode Sber's combined base64(client_id:client_secret) authorization key."""
     import base64
     import string
 
@@ -501,30 +445,20 @@ def try_decode_gigachat_key(token: str) -> tuple[str, str] | None:
 
 
 def provider() -> str:
-    """Провайдер меняется только явно: NEX_PROVIDER. Иначе — Le Chat.
-
-    Раньше ключ Gemini в NEX_API_KEY / ~/.config/nex/key молча переключал
-    агента на Google — и «привет» уходил в исчерпанную квоту.
-    Для новых провайдеров (gigachat/yandex/openai-совместимые) автовыбора
-    по виду ключа нет — их включают явно через NEX_PROVIDER.
-    """
+    """Return active provider (explicit NEX_PROVIDER, local if ready, or default)."""
     name = normalize_provider(setting("NEX_PROVIDER", ""))
     if name:
         return name
     raw = setting("NEX_PROVIDER", "")
     if raw:
-        return raw  # неизвестное имя — честно упадёт в _make_backend с подсказкой
-    # Без ключа и без явного выбора — локальная модель, если она есть. Это не
-    # «запасной вариант похуже», а нормальный режим: агент и так строит ответ
-    # поверх посчитанных чисел, языковая модель отвечает только за
-    # формулировку. Зато без сети, без ключа и без чужой квоты.
+        return raw  # unknown name — will raise a clear error in _make_backend
     if not _raw_key() and local.ready():
         return "local"
     return DEFAULT_PROVIDER
 
 
 def _raw_key() -> str:
-    """Ключ, заданный пользователем (без встроенных значений)."""
+    """User-supplied generic key (env or ~/.config/nex/key)."""
     key = os.environ.get("NEX_API_KEY", "").strip()
     if key:
         return key
@@ -552,15 +486,13 @@ def _key_for(prov: str) -> str:
         raw = _raw_key()
         if raw:
             return raw
-        # Ключ конкретного совместимого провайдера из `.env` — точнее общего.
         emb = _embedded_key(prov)
         if emb:
             return emb
         gen = _dotenv_values().get("NEX_API_KEY", "")
         return gen.strip().strip('"').strip("'")
     if prov in ("gigachat", "yandex"):
-        # У этих провайдеров аутентификация не одним ключом — наличие
-        # проверяет сам backend; здесь возвращаем то, что есть, для `available()`.
+        # Multi-field auth checked by the backend itself; return sentinel for `available()`.
         return _raw_key() or "configured"
     raw = _raw_key()
     if raw and _key_fits(raw, prov):
@@ -594,7 +526,7 @@ def _provider_order() -> list[str]:
 
 
 def _is_exhausted(msg: str) -> bool:
-    """Квота кончилась — повторять тот же запрос бессмысленно, надо сменить бэкенд."""
+    """Quota exhausted — retrying the same backend won't help."""
     low = msg.lower()
     return any(s in low for s in ("quota", "billing", "exceeded your current",
                                   "rate limit", "capacity"))
@@ -607,7 +539,7 @@ def model_name() -> str:
     if name:
         return name
     if provider() == "local":
-        return f"{local.model_label()} (4 бита, здесь)"
+        return f"{local.model_label()} (4-bit, local)"
     if provider() == "custom":
         return setting("NEX_MODEL", "") or "custom"
     if provider() == "yandex":
@@ -630,17 +562,17 @@ def available() -> bool:
 
 
 def describe() -> str:
-    """Строка для интерфейса: кто отвечает и какой моделью."""
+    """Short UI label: active provider and model."""
     return f"{_PROVIDER_LABEL.get(provider(), provider())} · {model_name()}"
 
 
 def is_local() -> bool:
-    """Отвечает ли сейчас модель на этой машине, а не чужой сервер."""
+    """Whether the active model runs locally on this machine."""
     return provider() == "local"
 
 
 # --------------------------------------------------------------------------
-# Фабрика backend'ов
+# Backend factory
 # --------------------------------------------------------------------------
 
 
@@ -696,13 +628,13 @@ def configured_backend(prov: str, model: str, api_key: str = "",
             folder_id=folder or setting("YANDEX_FOLDER_ID", ""),
             model=model or setting("YANDEX_MODEL", ""), use_env=False)
     else:
-        raise LLMError(f"неизвестный или неподдерживаемый snapshot провайдер {prov!r}")
+        raise LLMError(f"unknown or unsupported snapshot provider {prov!r}")
     backend._frozen = True
     return backend
 
 
 def _make_backend(prov: str):
-    """Backend по имени провайдера. Настройки — env поверх `.env` (см. `setting`)."""
+    """Instantiate backend by provider name using env over `.env`."""
     if prov == "muse":
         return configured_backend(prov, setting("NEX_MODEL", ""), _key_for(prov))
     if prov == "local-server":
@@ -723,21 +655,19 @@ def _make_backend(prov: str):
     if prov in _OPENAI_COMPAT:
         key = _key_for(prov)
         if not key and prov != "custom":
-            # Совместимый провайдер без своего ключа — пробуем общий.
             key = _raw_key()
         return OpenAICompatBackend(key, provider=prov,
                                    base_url=setting("NEX_BASE_URL", "") if prov == "custom" else "",
                                    model=setting("NEX_MODEL", ""))
     if prov == "local":
-        raise LLMError("локальные веса удалены с диска (см. docs/WINDOWS.md): "
-                       "поднимите их через tools/setup_local_llm.sh или "
-                       "выберите облачный NEX_PROVIDER")
-    raise LLMError(f"неизвестный провайдер {prov!r}: NEX_PROVIDER=mistral|gemini|"
+        raise LLMError("local model weights are not present on disk (see docs/WINDOWS.md): "
+                       "install them via tools/setup_local_llm.sh or choose a cloud NEX_PROVIDER")
+    raise LLMError(f"unknown provider {prov!r}: NEX_PROVIDER=mistral|gemini|"
                    "openai|deepseek|qwen|kimi|custom|gigachat|yandex|local")
 
 
 # --------------------------------------------------------------------------
-# Публичный интерфейс
+# Public API
 # --------------------------------------------------------------------------
 
 
@@ -762,7 +692,7 @@ def complete(system: str, question: str,
 
 def structured(system: str, question: str, schema: dict,
                temperature: float = 0.1) -> tuple[str, int]:
-    """Ответ строго по схеме. Возвращает (JSON-строка, потрачено токенов)."""
+    """Schema-constrained response returning (json_str, output_tokens)."""
     if provider() == "local":
         return local.structured(system, question, schema, temperature)
     errors: list[str] = []
@@ -782,15 +712,11 @@ def structured(system: str, question: str, schema: dict,
 def stream(system: str, question: str,
            history: list[tuple[str, str]] | None = None,
            temperature: float = 0.3, nudge: bool = True):
-    """Ответ по частям: текст появляется по мере генерации.
+    """Stream response chunks as they arrive.
 
-    Ожидание в 5–10 секунд без признаков жизни выглядит как зависание, поэтому
-    в диалоге используется именно потоковый режим.
-
-    `nudge` — только для локального провайдера, см. `agent.local`: False для
-    реплик не по делу («привет»), иначе модель тащит числа из ФАКТОВ в любой
-    ответ. Облачные модели этот параметр игнорируют — им хватает правил
-    самого системного промпта.
+    `nudge` applies only to the local provider (see `agent.local`): False for
+    small-talk turns so the small model doesn't inject FACTS numbers into a
+    greeting. Cloud models ignore it.
     """
     if provider() == "local":
         yield from local.stream(system, question, history, temperature,
@@ -813,39 +739,30 @@ def stream(system: str, question: str,
 
 
 def _misfit_hint(prov: str, raw: str) -> str:
-    """Ключ вставлен, но он явно не от выбранного провайдера — куда с ним.
-
-    Классическая ошибка (видели живьём): в Mistral вставляют ключ OpenRouter
-    и получают голый 401. Вид ключа такое палит сразу.
-    """
+    """Detect when a pasted key clearly belongs to a different provider."""
     if not raw:
         return ""
     if "sk-or-v1-" in raw and prov != "openrouter":
-        return ("похоже на ключ OpenRouter (sk-or-v1-…) — ему нужен: "
-                "/ai openrouter key=... "
-                "(ключ — ровно как выдан, без приставок)")
+        return ("looks like an OpenRouter key (sk-or-v1-…) — use: "
+                "/ai openrouter key=... (exact key, no prefix)")
     if try_decode_gigachat_key(raw) is not None and prov != "gigachat":
-        return ("похоже на готовый ключ Сбера (id:secret в base64) — ему нужен: "
-                "/ai gigachat (или вставь его прямо в АГЕНТЕ)")
+        return ("looks like a Sber GigaChat key (base64 id:secret) — use: "
+                "/ai gigachat (or paste directly in AGENT)")
     if raw.startswith("vck_") and prov != "vercel":
-        return ("похоже на ключ Vercel (vck_…) — ему нужен: "
-                "/ai vercel key=... (или вставь его прямо в АГЕНТЕ)")
+        return ("looks like a Vercel key (vck_…) — use: "
+                "/ai vercel key=... (or paste directly in AGENT)")
     if _looks_google(raw) and prov == "mistral":
-        return "ключ похож на Gemini (AIza…) — переключите: /ai gemini"
+        return "looks like a Gemini key (AIza…) — switch with: /ai gemini"
     if prov == "gemini" and not _looks_google(raw) and len(raw) > 12:
-        return "ключ не похож на Gemini — для Le Chat: /ai mistral"
+        return "does not look like a Gemini key — for Le Chat use: /ai mistral"
     if ":" in raw and "/" not in raw and prov != "gigachat":
-        return ("похоже на пару GigaChat (id:secret) — переключите: "
+        return ("looks like a GigaChat pair (id:secret) — switch with: "
                 "/ai gigachat key=<id>:<secret>")
     return ""
 
 
 def _server_message(msg: str) -> str:
-    """Вытащить текст ошибки сервера (для custom).
-
-    Две формы: сырой JSON (`{"error":{"message":"..."}}`) и уже извлечённое
-    (`HTTP 401: User not found.`) — HTTP-слой выше обычно уже распарсил тело.
-    """
+    """Extract the upstream server error text (for custom/openrouter)."""
     import re
 
     m = re.search(r'"message"\s*:\s*"([^"]{1,160})"', msg)
@@ -856,44 +773,38 @@ def _server_message(msg: str) -> str:
 
 
 def _human_error(prov: str, msg: str, key: str = "") -> str:
-    """Сырая ошибка сети → что делать. Показывается в `/ai`, читает человек."""
+    """Turn a raw network/API error into an actionable message for `/ai`."""
     label = _label(prov)
     low = msg.lower()
-    if "ключ не задан" in msg:
+    if "api key not set" in low:
         hint = key_source_hint(prov)
         tail = f" — {hint}" if hint else ""
-        return f"ключ не задан ({label}) — вставьте: /key <ключ>{tail}"
+        return f"API key not set ({label}) — set via: /key <key>{tail}"
     if ("http 401" in low or "http 403" in low or "invalid api" in low
             or "incorrect api" in low or "unauthorized" in low
-            or "invalid auth" in low or "не принят" in low):
-        # У custom/openrouter за провайдером — чужой сервер со своими
-        # причинами («User not found», «insufficient credits»): его текст —
-        # главная улика, прятать её за «отклонён» нельзя (проверено живьём).
+            or "invalid auth" in low or "rejected" in low):
         detail = _server_message(msg) if prov in ("custom", "openrouter") else ""
-        tail = f" Сервер пишет: «{detail}»." if detail else ""
+        tail = f' Server says: "{detail}".' if detail else ""
         if prov in ("custom", "openrouter") and key and len(key) > 100:
-            tail += (f" Длина ключа {len(key)} при норме ~73 — похоже, "
-                     f"вставился дважды или с мусором: вставь ровно один раз, "
-                     f"как на сайте.")
-        return f"ключ отклонён ({label}) — вставьте заново: /key <ключ>.{tail}"
+            tail += (f" Key length is {len(key)} (expected ~73) — it may have "
+                     f"been pasted twice or with extra text; paste it once exactly.")
+        return f"key rejected ({label}) — paste again: /key <key>.{tail}"
     if _is_exhausted(msg):
-        return f"квота исчерпана ({label}) — смените провайдера: /ai <другой>"
+        return f"quota exhausted ({label}) — switch provider: /ai <other>"
     if "http 404" in low or "not found" in low or "no such model" in low:
-        return (f"модель не найдена ({label}) — проверьте имя: "
+        return (f"model not found ({label}) — check the name: "
                 f"/ai {prov} model=...")
     return f"{label}: {msg.strip()[:160]}"
 
 
 def check() -> tuple[bool, str]:
-    """Быстрая проверка доступности — для команды /ai."""
+    """Quick connectivity check for `/ai`."""
     if provider() == "local":
         return local.check()
     try:
-        txt = complete("Отвечай одним словом.", "Скажи «готово».", temperature=0.0)
+        txt = complete("Reply with one word only.", 'Say "ready".', temperature=0.0)
         return True, f"{describe()}: {txt.strip()[:40]}"
     except LLMError as e:
-        # Подсказка смотрит на РЕАЛЬНЫЙ ключ (включая `.env`), а не только
-        # на окружение: иначе чужой ключ из файла не опознается.
         key = api_key()
         base = _human_error(provider(), str(e), key)
         extra = _misfit_hint(provider(), key)

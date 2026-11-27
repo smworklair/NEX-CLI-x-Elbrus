@@ -1,14 +1,12 @@
-"""Баннер: пиксельные буквы NEX + гора Эльбрус."""
+"""Banner: pixel-block NEX lettering + Mount Elbrus silhouette."""
 
 from __future__ import annotations
 
 from . import render
 from .render import Style, paint
 
-# Буквы набраны штрихом в две клетки: клетка терминала вдвое выше своей
-# ширины, и штрих в одну клетку выглядит волосяной линией рядом с горой.
-# Шесть строк — ровно столько же, сколько у горы, чтобы знак стоял на одной
-# линии, а не съезжал вниз.
+# Double-cell stroke width compensates for terminal cells being ~2x taller than wide.
+# Six rows match the mountain height so both marks sit on the same baseline.
 _GLYPHS = {
     "N": [
         "██    ██",
@@ -38,42 +36,12 @@ _GLYPHS = {
 _GLYPH_ROWS = 6
 _LETTER_GAP = "  "
 
-# Знак скрещения между NEX и горой: «NEX x Эльбрус». Он приглушённый —
-# это связка между двумя знаками, а не третий знак.
-# Одиночный знак умножения в средней строке. Нарисованный блоками крест, даже
-# тонкий, весит наравне с буквами и читается третьим знаком; здесь нужен ровно
-# соединитель — «NEX x Эльбрус».
-#
-# Строка 3 из шести: гора тяжелее книзу, и знак на строку выше зрительно
-# всплывал над связкой.
+# Subtle connector between NEX and the mountain: "NEX x Elbrus".
 _CROSS = ["", "", "", "x", "", ""]
 _CROSS_W = 1
 
-# Гора: двуглавый Эльбрус — западная вершина выше восточной, между ними
-# седловина. Это его силуэт, по нему его и узнают.
-#
-# Рисунок задан двумя параллельными сетками одинаковой ширины: символы и
-# маска тонов под ними. Так тон не привязан к строке целиком — снег может
-# языками спускаться по склону, а подножие уходить в тень, и всё это остаётся
-# читаемым текстом, который можно править глазами.
-#
-#   s — снег      r — освещённая скала      h — склон в тени
-#
-# Два правила, без которых гора выглядит нарисованной наспех:
-#
-#   1. Клетка терминала вдвое выше своей ширины, поэтому склон расширяется на
-#      две колонки за строку — иначе получается игла, а не гора. Край склона
-#      набран нижней половинкой блока (▄): она стыкуется с полным блоком
-#      следующей строки и превращает лесенку в скат.
-#   2. Снег сужается книзу и не отрывается от вершины. Пятно снега постоянной
-#      ширины читается как белая колонна, приклеенная к скале, а не как язык
-#      ледника — поэтому каждый следующий ряд снега уже предыдущего и целиком
-#      лежит внутри него.
-#
-# Свет падает слева, поэтому правый склон уходит в тень (h) и тень книзу
-# расширяется: это то, что даёт горе объём в шесть строк текста.
-# Вершины смещены вправо от середины: левый склон длиннее правого (19 колонок
-# против 17) и потому массивнее — гора перестаёт быть симметричной пирамидой.
+# Twin-peaked Mount Elbrus silhouette with a parallel tone mask:
+#   s — snow      r — sunlit rock      h — shaded slope
 _MOUNTAIN = [
     ("                 ▄█▄               ",
      "                 sss               "),
@@ -92,13 +60,7 @@ _MOUNTAIN_W = max(len(g) for g, _ in _MOUNTAIN)
 _MOUNTAIN_TONE = {"s": "snow", "r": "mountain", "h": "border"}
 
 # --------------------------------------------------------------------------
-# LEGO-заголовок «NNL» для экрана запуска.
-#
-# Буквы собраны как кирпичики LEGO: над каждой открытой сверху гранью стоит
-# ряд шляпок (`▄` — нижняя половинка клетки, она прирастает к блоку ниже),
-# а тело буквы набрано двумя тонами — двумя «слоями» кирпичей. В 256-цветной
-# теме (`nnl-purple`) слои читаются как настоящая сборка; в теме без этих
-# ролей буквы остаются просто крупным текстом.
+# Brick-style "NNL" header for the setup/launch screen.
 # --------------------------------------------------------------------------
 
 _LEGO_GLYPHS = {
@@ -120,34 +82,25 @@ _LEGO_GLYPHS = {
     ],
 }
 _LEGO_WORD = "NNL"
-_LEGO_GAP = "  "  # зазор между собранными буквами
+_LEGO_GAP = "  "  # gap between assembled letters
 
 
 def _lego_stud_row(rows: list[str]) -> str:
-    """Ряд шляпок над открытыми гранями верхней строки буквы.
-
-    `▄` — нижняя половинка клетки: верхняя половина остаётся чёрной,
-    и шляпка читается круглой. Шляпка ставится на каждую клетку
-    кирпича и сидит точно над ней — колонка к колонке, как у LEGO.
-    """
+    """Stud row above exposed top edges of the letter (`▄` half-blocks)."""
     return "".join(
-        "▄" if клетка != " " else " " for клетка in rows[0]
+        "▄" if cell != " " else " " for cell in rows[0]
     ).rstrip()
 
 
 def render_title(indent: str = "  ") -> list[str]:
-    """Готовые строки LEGO-заголовка «NNL» для экрана запуска.
-
-    Тело буквы — два слоя кирпичей: верхний ярче, нижний глубже, через границу
-    слоёв видно, что буква собрана. Цвета — роли темы (`nnl-purple`).
-    """
-    буквы = list(_LEGO_WORD)
-    шапки = [paint("accent_soft", _lego_stud_row(_LEGO_GLYPHS[b])) for b in буквы]
-    out: list[str] = [indent + _LEGO_GAP.join(шапки)]
+    """Render the brick-style 'NNL' title for the setup screen."""
+    letters = list(_LEGO_WORD)
+    studs = [paint("accent_soft", _lego_stud_row(_LEGO_GLYPHS[b])) for b in letters]
+    out: list[str] = [indent + _LEGO_GAP.join(studs)]
     for r in range(_GLYPH_ROWS):
-        тон = "banner" if r < 3 else "mountain"
-        части = [paint(тон, _LEGO_GLYPHS[b][r]) for b in буквы]
-        out.append(indent + _LEGO_GAP.join(части))
+        tone = "banner" if r < 3 else "mountain"
+        parts = [paint(tone, _LEGO_GLYPHS[b][r]) for b in letters]
+        out.append(indent + _LEGO_GAP.join(parts))
     return out
 
 
@@ -160,11 +113,7 @@ def _word_rows(word: str = "NEX") -> list[str]:
 
 
 def _mountain_row(i: int) -> str:
-    """Одна строка горы: соседние символы одного тона красятся одним куском.
-
-    Маска короче или длиннее рисунка — не повод ронять инструмент: тон под
-    неразмеченным символом считается скалой, и гора просто теряет объём.
-    """
+    """Render one mountain row, coalescing adjacent cells of the same tone."""
     if i >= len(_MOUNTAIN):
         return " " * _MOUNTAIN_W
     glyphs, mask = _MOUNTAIN[i]
@@ -185,11 +134,7 @@ def _mountain_row(i: int) -> str:
 
 
 def render_mark(indent: str = "  ") -> list[str]:
-    """Только знак: буквы NEX и гора, без подписей под ними.
-
-    Нужен экранам, у которых своя подпись под логотипом (выбор режима),
-    чтобы не разбирать готовую строку `render_logo()` обратно на части.
-    """
+    """Just the mark: NEX lettering + Elbrus mountain, no captions below."""
     word = _word_rows()
     word_w = max(len(r) for r in word)
     gap = "   "
@@ -217,7 +162,7 @@ def render_logo() -> str:
     lines.append("  " + paint("title", "NEX CLI")
                  + Style.dim("  ·  ") + paint("mountain", "Elbrus e2k")
                  + Style.dim("  ·  ") + paint("warning", VERSION_LABEL))
-    lines.append("  " + Style.dim("ядро · разбор · агент"))
+    lines.append("  " + Style.dim("core · lab · agent"))
     return "\n".join(lines)
 
 

@@ -1,4 +1,4 @@
-"""Оформление диалога с агентом — тот же язык, что у остальных панелей."""
+"""Agent dialogue formatting — same visual language as the other panes."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def markup(text: str) -> str:
 
 
 def question_line(text: str) -> list[str]:
-    out = [paint("faint", "▌ ") + Style.dim("вы")]
+    out = [paint("faint", "▌ ") + Style.dim("you")]
     out += wrap(text, render.W, "  ")
     return out
 
@@ -68,7 +68,7 @@ def stream_turn(agent, question: str) -> None:
         if kind == "action":
             _emit(Style.dim(f"  · {value}"))
         elif kind == "error":
-            _emit(paint("warning", f"  без модели: {value[:120]}"))
+            _emit(paint("warning", f"  offline: {value[:120]}"))
             _emit("")
         elif kind == "text":
             if not saw_text:
@@ -80,87 +80,83 @@ def stream_turn(agent, question: str) -> None:
 
 
 def _next_hint(detail: str) -> str:
-    """Следующий шаг из текста ошибки — той же строкой «Дальше:», что у агента.
+    """Derive a concrete 'Next:' command from an error message.
 
-    Порядок важен: сначала «ключ не от этого провайдера» (там уже есть
-    точная команда), потом общие случаи. Иначе при чужом ключе советовали
-    бы вставить его заново в тот же провайдер — бессмысленно.
+    Order matters: provider mismatch hints (which already give the exact
+    command) come before generic key/quota fallbacks.
     """
+    low = detail.lower()
     if "OpenRouter" in detail:
-        return "Дальше: /ai openrouter key=..."
-    if "похож на Gemini" in detail:
-        return "Дальше: /ai gemini"
-    if "не похож на Gemini" in detail:
-        return "Дальше: /ai mistral"
-    if "GigaChat" in detail and "переключите" in detail:
-        return "Дальше: /ai gigachat key=<id>:<secret>"
-    if "вставьте заново" in detail:
-        return "Дальше: /key <ключ>"
-    if "вставьте:" in detail or "вставьте :" in detail or "вставьте" in detail:
-        return "Дальше: /key <ключ>"
-    if "квота" in detail:
-        return "Дальше: /ai <другой провайдер>"
-    if "модель не найдена" in detail:
-        return "Дальше: /ai — там видно текущую модель"
+        return "Next: /ai openrouter key=..."
+    if "looks like a Gemini" in detail:
+        return "Next: /ai gemini"
+    if "does not look like a Gemini" in detail:
+        return "Next: /ai mistral"
+    if "GigaChat" in detail and "switch" in low:
+        return "Next: /ai gigachat key=<id>:<secret>"
+    if "paste again" in low:
+        return "Next: /key <key>"
+    if "set via:" in low or "api key not set" in low:
+        return "Next: /key <key>"
+    if "quota" in low:
+        return "Next: /ai <other provider>"
+    if "model not found" in low:
+        return "Next: /ai — shows the active model"
     return ""
 
 
 def render_status(ok: bool, detail: str) -> list[str]:
     from ..agent import llm
 
-    out = [paint("mind", "* ") + paint("title", "языковая модель")]
+    out = [paint("mind", "* ") + paint("title", "language model")]
     if ok:
-        out.append("  " + paint("success", "доступна") + Style.dim(f"   {detail}"))
+        out.append("  " + paint("success", "available") + Style.dim(f"   {detail}"))
     else:
-        out.append("  " + paint("error", "не работает") + Style.dim(f"   {detail[:160]}"))
+        out.append("  " + paint("error", "unavailable") + Style.dim(f"   {detail[:160]}"))
         out += wrap(Style.dim(
-            "агент отвечает по уже посчитанным числам, без свободной формулировки."),
+            "the agent answers from precomputed numbers without free-form LLM prose."),
             render.W, "  ")
     out.append("")
-    out.append("  " + Style.dim(f"модель  {llm.describe()}"))
+    out.append("  " + Style.dim(f"model   {llm.describe()}"))
     if llm.is_local():
-        # В локальном режиме строка про ключ была бы враньём: ключ не нужен,
-        # в сеть агент не ходит вовсе.
-        out.append("  " + Style.dim("где     на этой машине, без сети и без ключа"))
+        out.append("  " + Style.dim("mode    local on this machine, offline, no key needed"))
         out.append("  " + Style.dim(
-            "смена   /ai " + "|".join(p for p in llm.PROVIDERS if p != "local")
-            + "  (нужен ключ)"))
+            "switch  /ai " + "|".join(p for p in llm.PROVIDERS if p != "local")
+            + "  (key required)"))
     else:
-        out.append("  " + Style.dim("ключ    /key <ключ>  (только на сессию, нигде не хранится)"))
+        out.append("  " + Style.dim("key     /key <key>  (session-only, never stored on disk)"))
         try:
-            # Что реально сохранено (маской): склеенный дважды ключ виден
-            # сразу по длине, не дожидаясь 401 от сервера.
             from ..agent import envfile
 
             prov = llm.provider()
             if prov in llm.KEY_VAR:
                 cur = llm.api_key()
                 if cur:
-                    out.append("  " + Style.dim(f"сейчас  {envfile.mask(cur)}"))
+                    out.append("  " + Style.dim(f"active  {envfile.mask(cur)}"))
         except Exception:
             pass
         out.append("  " + Style.dim(
-            "смена   /ai " + "|".join(p for p in llm.PROVIDERS if p != "local")))
-        out.append("  " + Style.dim("всё сразу  /ai deepseek key=sk-... model=..."))
+            "switch  /ai " + "|".join(p for p in llm.PROVIDERS if p != "local")))
+        out.append("  " + Style.dim("all-in-one /ai deepseek key=sk-... model=..."))
     if not ok:
         hint = _next_hint(detail)
         if hint:
             out.append("  " + paint("work", hint))
     out.append("")
     out += wrap(Style.dim(
-        "числа считает ядро. перепроверить: doctor  ·  compare"), render.W, "  ")
+        "all numbers come from the core. verify: doctor  ·  compare"), render.W, "  ")
     return out
 
 
 def render_intro(width: int | None = None) -> list[str]:
     w = width or render.W
-    out = [paint("mind", "NEX") + Style.dim("  — обычным языком")]
+    out = [paint("mind", "NEX") + Style.dim("  — plain-English Q&A")]
     out.append("")
-    for q in ("почему этот участок медленный?",
-              "где теряются такты и что менять?",
-              "загрузи examples/probe.s и разбери",
-              "сравни baseline с точным поиском",
-              "что за монопольный порт ,5?"):
+    for q in ("why is this block slow?",
+              "where are cycles lost and what should change?",
+              "load examples/probe.s and analyze it",
+              "compare baseline against the exact oracle",
+              "what is the exclusive port ,5?"):
         out += wrap(paint("mind_soft", "> ") + Style.dim(q), w, "")
     out.append("")
     out.append(Style.dim("/ai  ·  /ask  ·  /exit"))

@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# Заливка в Kaggle одной командой.
+# Push dataset and kernels to Kaggle in one command.
 #
-#   tools/kaggle_push.sh            # датасет + ядро шага 0 (baseline, без обучения)
-#   tools/kaggle_push.sh run1       # датасет + ТОЛЬКО прогон 1 (обучение с EOS)
-#   tools/kaggle_push.sh run2       # датасет + ТОЛЬКО прогон 2 (с нуля, train_merged)
-#   tools/kaggle_push.sh resume     # ТОЛЬКО доводка прогона 2: чекпоинт из
-#                                   #   вывода vliw-run2-merged -> --resume + замеры
-#   tools/kaggle_push.sh diag       # диагностика: 20 примеров, сырой текст ответа
-#   tools/kaggle_push.sh all        # датасет + step0 и run1 разом (БЕЗ run2/resume/diag)
-#   tools/kaggle_push.sh pull       # забрать дампы обратно в training/checkpoints
-#   tools/kaggle_push.sh status     # статус датасета и ядер на Kaggle, без заливки
+#   tools/kaggle_push.sh            # dataset + step0 kernel (baseline, no training)
+#   tools/kaggle_push.sh run1       # dataset + ONLY run 1 (training with EOS)
+#   tools/kaggle_push.sh run2       # dataset + ONLY run 2 (from scratch, train_merged)
+#   tools/kaggle_push.sh resume     # ONLY resume run 2 from vliw-run2-merged
+#                                   #   checkpoint -> --resume + eval
+#   tools/kaggle_push.sh diag       # diagnostics: 20 examples, raw completion text
+#   tools/kaggle_push.sh all        # dataset + step0 and run1 (excludes run2/resume/diag)
+#   tools/kaggle_push.sh pull       # pull dumps back into training/checkpoints
+#   tools/kaggle_push.sh status     # check Kaggle dataset/kernel status (read-only)
 #
-# Каждый режим заливает ТОЛЬКО своё ядро — раньше `run1` тянул за собой ещё и
-# повторный прогон step0 (уместно было, пока step0 ни разу не отработал; после
-# первого успешного прогона это лишние ~8 часов GPU впустую на детерминированный
-# повтор — do_sample=False, тот же адаптер, тот же результат). Обнаружено
-# 17.08.2026: `run1` перезапустил step0 версией 5 без всякой пользы.
+# Each mode pushes ONLY its own kernel (avoids re-running step0 unnecessarily).
 #
-# Прогон 2 (с нуля на train_merged) заливается ТОЛЬКО явным режимом `run2`:
-# он дорогой по квоте (~2 эпохи по 39 700 примеров), и в `all` он тоже НЕ
-# входит — чтобы разовый прогон всех дешёвых ядер не запускал дорогой по
-# ошибке. Решение о нём принимается отдельно. См. docs/RUNBOOK_EOS.md.
 #
-# Ключ: поддержаны ОБА формата, потому что Kaggle сменил их в процессе работы
-# над этим проектом (17.08.2026 выдавали уже только новый).
-#   старый  ~/.kaggle/kaggle.json        {"username": "...", "key": "..."}
-#   новый   ~/.kaggle/access_token       KGAT_... (или переменная KAGGLE_API_TOKEN)
-# У нового username в файле не лежит — его отдаёт `kaggle config view` уже
-# после того, как CLI сходил на сервер и опознал токен.
+#
+#
+#
+# Run 2 (from scratch on train_merged) requires explicit `run2` due to GPU quota cost.
+#
+#
+#
+#
+# Credentials: supports both legacy kaggle.json and new access_token / KAGGLE_API_TOKEN.
+#
+#   legacy  ~/.kaggle/kaggle.json        {"username": "...", "key": "..."}
+#   new     ~/.kaggle/access_token       KGAT_... (or env KAGGLE_API_TOKEN)
+# With access_token, username is resolved via `kaggle config view`.
+#
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -37,15 +37,15 @@ PY="${PY:-$ROOT/.venv/bin/python}"
 MODE="${1:-step0}"
 
 # --- CLI ---------------------------------------------------------------
-# Ставится ДО определения username: у нового формата username узнаёт сам
-# kaggle CLI, инструмента без него ещё нет.
+# Install kaggle CLI before resolving username.
+#
 if ! "$PY" -c "import kaggle" 2>/dev/null; then
-  echo "ставлю kaggle CLI в .venv (единственная новая зависимость)"
+  echo "installing kaggle CLI into .venv"
   "$PY" -m pip install -q kaggle
 fi
 KG=("$PY" -m kaggle)
 
-# --- ключ ----------------------------------------------------------------
+# --- credentials ---------------------------------------------------------
 CONFIG_DIR="${KAGGLE_CONFIG_DIR:-$HOME/.kaggle}"
 LEGACY_CREDS="$CONFIG_DIR/kaggle.json"
 TOKEN_FILE="$CONFIG_DIR/access_token"
@@ -57,39 +57,39 @@ elif [[ -f "$TOKEN_FILE" || -n "${KAGGLE_API_TOKEN:-}" ]]; then
   chmod 600 "$TOKEN_FILE" 2>/dev/null || true
   USER_NAME="$("${KG[@]}" config view 2>/dev/null | sed -n 's/^- username: //p')"
   if [[ -z "$USER_NAME" ]]; then
-    echo "токен есть, но 'kaggle config view' не назвал username — токен" \
-         "недействителен или сервис недоступен" >&2
+    echo "token present, but 'kaggle config view' returned no username — token" \
+         "invalid or service unavailable" >&2
     exit 1
   fi
 else
   cat >&2 <<'EOF'
-Нет ни ~/.kaggle/kaggle.json (старый формат), ни ~/.kaggle/access_token (новый).
+Neither ~/.kaggle/kaggle.json (legacy) nor ~/.kaggle/access_token (new) was found.
 
   1. kaggle.com -> Settings -> API -> Create New Token
-  2. страница покажет команду вида:
+  2. the page will display a command like:
        mkdir -p ~/.kaggle && echo KGAT_... > ~/.kaggle/access_token \
          && chmod 600 ~/.kaggle/access_token
-     выполнить её (или export KAGGLE_API_TOKEN=KGAT_...)
-  3. запустить эту команду снова
+     run it (or export KAGGLE_API_TOKEN=KGAT_...)
+  3. re-run this script
 
-Всё остальное уже готово: build/kaggle собран, скрипты ядер написаны.
+Everything else is ready: build/kaggle and kernel scripts are prepared.
 EOF
   exit 1
 fi
-echo "пользователь Kaggle: $USER_NAME"
+echo "Kaggle user: $USER_NAME"
 
-# --- сборка ----------------------------------------------------------------
+# --- build ---------------------------------------------------------------
 "$PY" tools/kaggle_prep.py
 
-# Подставляем настоящий username в id/dataset_sources ТОЧЕЧНО через JSON, а
-# не глобальным sed по всему файлу. Раньше здесь стоял
-# `sed -i "s|USERNAME/|$USER_NAME/|g"` — небезопасен в обе стороны: (а) не
-# экранировал $USER_NAME в шаблоне замены (метасимволы sed вроде `&`/`|`
-# сломали бы подстановку, если бы когда-нибудь оказались в имени), (б) бил по
-# ЛЮБОМУ вхождению строки "USERNAME/" во всём файле, а не только по полям
-# id/dataset_sources — будущий title/description с тем же текстом испортился
-# бы молча. Оба класса регрессии сюда больше не попадут: правим только
-# конкретные JSON-поля, значение подставляем как данные, а не как текст sed.
+# Patch username in JSON id/dataset_sources fields safely via Python.
+#
+#
+#
+#
+#
+#
+#
+#
 "$PY" - "$USER_NAME" "$BUILD/dataset/dataset-metadata.json" "$BUILD"/*/kernel-metadata.json <<'PYEOF'
 import json, sys
 user, *paths = sys.argv[1:]
@@ -104,11 +104,11 @@ for p in paths:
     json.dump(d, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYEOF
 
-# Слаг датасета и список ядер — из того, что реально лежит в build/kaggle/,
-# а не отдельные литералы, которые легко забыть поправить при переименовании
-# или добавлении нового ядра (так уже вышло однажды: kaggle_push.sh молча
-# продолжал пушить только два старых ядра). id датасета теперь уже "user/slug"
-# — подставлен строкой выше.
+# Read dataset slug and kernel list dynamically from build/kaggle/.
+#
+#
+#
+#
 DATASET_ID="$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" \
              "$BUILD/dataset/dataset-metadata.json")"
 mapfile -t KERNEL_SLUGS < <(find "$BUILD" -mindepth 1 -maxdepth 1 -type d \
@@ -118,56 +118,56 @@ case "$MODE" in
   pull)
     mkdir -p training/checkpoints
     for k in "${KERNEL_SLUGS[@]}"; do
-      echo "забираю вывод $k"
+      echo "pulling output for $k"
       "${KG[@]}" kernels output "$USER_NAME/$k" -p training/checkpoints || \
-        echo "  (ещё нет вывода — ядро не отработало)"
+        echo "  (no output yet — kernel not finished)"
     done
     echo
-    echo "дальше: $PY tools/report_runs.py"
+    echo "next: $PY tools/report_runs.py"
     exit 0
     ;;
   status)
-    # Только чтение: ничего не заливает и не запускает, квоту не трогает.
-    echo "датасет: $DATASET_ID"
-    # `kaggle ... status` не завершает вывод переводом строки — добавляем
-    # свой, иначе следующая строка приклеивается прямо к «ready».
+    # Read-only status check (does not upload or consume quota).
+    echo "dataset: $DATASET_ID"
+    # `kaggle ... status` omits trailing newline — add one.
+    #
     "${KG[@]}" datasets status "$DATASET_ID" 2>&1 | sed 's/^/  /' || true
     echo
     for k in "${KERNEL_SLUGS[@]}"; do
-      echo "ядро: $USER_NAME/$k"
+      echo "kernel: $USER_NAME/$k"
       "${KG[@]}" kernels status "$USER_NAME/$k" 2>&1 | sed 's/^/  /' || true
     done
     exit 0
     ;;
   step0|run1|run2|resume|diag|diag3|all) ;;
-  *) echo "неизвестный режим: $MODE (step0 | run1 | run2 | resume | diag | diag3 | all | pull | status)" >&2; exit 2 ;;
+  *) echo "unknown mode: $MODE (step0 | run1 | run2 | resume | diag | diag3 | all | pull | status)" >&2; exit 2 ;;
 esac
 
-# --- датасет ---------------------------------------------------------------
-# create падает, если датасет уже есть; version — если ещё нет. Пробуем
-# version, при неудаче создаём. Так скрипт можно гонять повторно.
-echo "заливаю датасет ($(du -sh "$BUILD/dataset" | cut -f1))"
+# --- dataset -------------------------------------------------------------
+# Try `version` first; fall back to `create` for new datasets.
+#
+echo "uploading dataset ($(du -sh "$BUILD/dataset" | cut -f1))"
 T0=$(date -u +%s)
-if ! "${KG[@]}" datasets version -p "$BUILD/dataset" -m "обновление $(date +%F_%H%M)" -q -r zip 2>/dev/null; then
+if ! "${KG[@]}" datasets version -p "$BUILD/dataset" -m "update $(date +%F_%H%M)" -q -r zip 2>/dev/null; then
   "${KG[@]}" datasets create -p "$BUILD/dataset" -q -r zip
 fi
 
-echo "жду, пока Kaggle распакует датасет (обычно 1-3 минуты)"
-# Раньше эта проверка не гейтила ничего после себя: таймаут молча проваливался
-# в запуск ядра против датасета, который мог быть ещё не готов, а любая
-# НАСТОЯЩАЯ ошибка API (протухший токен, rate limit, сеть) неотличимо
-# сливалась с обычным "ещё не готово" через `2>/dev/null || echo pending` —
-# оба случая жгли полные 10 минут впустую и всё равно запускали GPU-ядро.
-# Теперь: настоящая ошибка — стоп сразу; таймаут без "ready" — тоже стоп,
-# ядро не запускается вообще.
+echo "waiting for Kaggle to unpack dataset (usually 1-3 min)"
+# Fail fast on real API errors or timeout without starting GPU kernels.
+#
+#
+#
+#
+#
+#
 ready=0
 for _ in $(seq 1 30); do
   if ! st="$("${KG[@]}" datasets status "$DATASET_ID" 2>&1)"; then
-    echo "!! ошибка проверки статуса датасета (не 'ещё не готов', настоящий сбой API):" >&2
+    echo "!! dataset status check failed (real API error):" >&2
     echo "$st" >&2
     exit 1
   fi
-  echo "  статус: $st"
+  echo "  status: $st"
   if [[ "$st" == "ready" ]]; then
     ready=1
     break
@@ -175,16 +175,16 @@ for _ in $(seq 1 30); do
   sleep 20
 done
 if [[ "$ready" != 1 ]]; then
-  echo "!! датасет не стал 'ready' за 10 минут — ядро НЕ запускаю, квоту не жгу." >&2
-  echo "   проверить вручную: $PY -m kaggle datasets status $DATASET_ID" >&2
+  echo "!! dataset did not become 'ready' within 10 min — aborting kernel push." >&2
+  echo "   check manually: $PY -m kaggle datasets status $DATASET_ID" >&2
   exit 1
 fi
 
-# «ready» относится и к ПРЕДЫДУЩЕЙ версии: пока новая распаковывается,
-# статус уже зелёный, и однажды (23.08) ядро стартовало на старых файлах —
-# упало через минуту на неизвестном аргументе, сжегши запуск впустую.
-# Поэтому ждём ЕЩЁ и свежести: дата train_qlora.py в датасете должна быть
-# не старее момента начала заливки. Дата приходит в UTC, как и T0.
+# Also verify freshness so kernels do not run against stale dataset versions.
+#
+#
+#
+#
 fresh=0
 ts=""
 for _ in $(seq 1 30); do
@@ -197,24 +197,24 @@ for _ in $(seq 1 30); do
   sleep 20
 done
 if [[ "$fresh" != 1 ]]; then
-  echo "!! датасет не обновился за 10 минут (файлы всё ещё старше заливки:" \
-       "$ts) — ядро НЕ запускаю." >&2
+  echo "!! dataset did not refresh within 10 min (files still older than upload:" \
+       "$ts) — aborting kernel push." >&2
   exit 1
 fi
-echo "датасет свежий: train_qlora.py от ${ts} UTC"
+echo "dataset fresh: train_qlora.py updated ${ts} UTC"
 
-# --- ядро ------------------------------------------------------------------
+# --- kernel --------------------------------------------------------------
 push_kernel () {
   local slug="$1"
-  echo "запускаю ядро $slug"
+  echo "pushing kernel $slug"
   "${KG[@]}" kernels push -p "$BUILD/$slug"
-  echo "  следить: https://www.kaggle.com/code/$USER_NAME/$slug"
+  echo "  monitor: https://www.kaggle.com/code/$USER_NAME/$slug"
 }
 
-pick_kernel () {   # находит слаг, содержащий имя режима (step0 / run1)
+pick_kernel () {   # find slug matching mode name (step0 / run1)
   local mode="$1" match
   match="$(printf '%s\n' "${KERNEL_SLUGS[@]}" | grep -m1 "$mode")" || {
-    echo "!! не нашёл ядро для режима '$mode' среди: ${KERNEL_SLUGS[*]}" >&2
+    echo "!! no kernel found for mode '$mode' among: ${KERNEL_SLUGS[*]}" >&2
     exit 1
   }
   echo "$match"
@@ -224,17 +224,17 @@ case "$MODE" in
   step0) push_kernel "$(pick_kernel step0)" ;;
   run1)  push_kernel "$(pick_kernel run1)" ;;
   run2)  push_kernel "$(pick_kernel run2)" ;;
-  # resume — ядро-доводка: монтирует вывод vliw-run2-merged и продолжает
-  # с последнего чекпоинта (или сразу замеры, если обучение дало train_meta).
+  # resume — continues from last vliw-run2-merged checkpoint
+  #
   resume) push_kernel "$(pick_kernel resume)" ;;
-  # diag — только инференс на 20 примерах с сырым текстом ответа в дампе:
-  # разводит «модель молчит» / «адаптер не тот» / «обрыв». Минуты GPU.
+  # diag — 20-example raw-completion diagnostic run
+  #
   diag)  push_kernel "$(pick_kernel diag2)" ;;
-  # diag3 — квадрат 2x2 на широком эвале: два адаптера x два режима
-  # генерации, все 300 примеров. Часы, не минуты; см. docs/DIAG2.md.
+  # diag3 — 2x2 matrix on eval_wide (2 adapters x 2 decoding modes)
+  #
   diag3) push_kernel "$(pick_kernel diag3)" ;;
-  # `all` — только дешёвые ядра; дорогой run2 и его доводка запускаются
-  # явно (см. шапку).
+  # `all` pushes cheap kernels only; run2/resume require explicit invocation.
+  #
   all)   for k in "${KERNEL_SLUGS[@]}"; do
            [[ "$k" == *run2* || "$k" == *diag* ]] || push_kernel "$k"
          done ;;
@@ -242,8 +242,8 @@ esac
 
 cat <<EOF
 
-Готово. Ядра считаются на стороне Kaggle, ждать здесь нечего.
-Проверить статус:   $PY -m kaggle kernels status $USER_NAME/vliw-<slug>
-Забрать результаты: tools/kaggle_push.sh pull
-Свести в таблицу:   $PY tools/report_runs.py
+Done. Kernels are running on Kaggle.
+Check status:       $PY -m kaggle kernels status $USER_NAME/vliw-<slug>
+Pull results:       tools/kaggle_push.sh pull
+Aggregate report:   $PY tools/report_runs.py
 EOF

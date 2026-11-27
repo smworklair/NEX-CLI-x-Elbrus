@@ -1,32 +1,13 @@
-"""Прогулка инженера: настоящий .s → F5 → законное расписание.
+"""End-to-end engineer UX walk: real `.s` file -> F5 -> legal VLIW schedule.
 
-Зачем этот тест
-----------------
-Инженер открывает НАСТОЯЩИЙ .s (например poly_gemm.s, 190 узлов), жмёт F5
-и быстро получает законное расписание. Раньше это было сломано двумя
-независимыми багами, и каждый из них этот тест ловит:
+Guards two independent regressions:
+1. Typing `/` in the command bar used to reset the input to `"/"`, making it
+   impossible to type paths containing slashes (`/code load /.../poly_gemm.s`).
+2. F5 on large real graphs (190 ops in `poly_gemm.s`) used to overrun the
+   oracle time budget inside `_count_vectors` without falling back.
 
-1. Клавиша `/` сносила набранную команду: `action_slash` при фокусе НЕ в
-   редакторе звал `action_command()` → `set_value("/")`, и из
-   `/code load /home/.../poly_gemm.s` оставалось `/poly_gemm.s`. Набрать
-   путь со слэшами с клавиатуры было невозможно.
-
-2. F5 висел мимо бюджета на реальных графах: проверка дедлайна `ctx.tick()`
-   была во внешнем цикле комбинаций `_candidate_subsets`, но НЕ во
-   внутреннем переборе `_count_vectors` — `budget_s=10` не ограничивал этот
-   путь, `session.results()` не возвращался, фолбэк на портфель не срабатывал.
-
-Правила headless (иначе тест врёт)
-----------------------------------
-* Никаких ассертов на скриншоты/пиксели/координаты: headless-регионы нулевые.
-  Только стейт: `.value` виджетов, `app.focused`, `session.code_text`,
-  `session.peek()`, makespan, `validate()`.
-* Печать с паузами (~0.05 с/символ) и проверкой длины ДО Enter: быстрая
-  печать headless теряет символы (артефакт харнесса, не продукта).
-* Фокус проверяем чтением `app.focused` после каждого перехода.
-* Не печатаем в `#core-input` (даёт «странный символ» — ошибка харнесса),
-  не пишем напрямую в `session.code_text` (воюет с редактором как источником
-  правды — F5 посчитает демо-буфер).
+Headless testing rules: assert only widget/session state (never pixel coords),
+type with small pauses, and verify input length before pressing Enter.
 """
 
 from __future__ import annotations
@@ -42,14 +23,14 @@ try:
     import textual  # noqa: F401
 
     HAS_TEXTUAL = True
-except Exception:  # pragma: no cover - зависит от окружения
+except Exception:  # pragma: no cover - environment-dependent
     HAS_TEXTUAL = False
 
 from vliw import cli
 
 
 def _make_app(start_mode):
-    """Приложение и сессия — как в `cli.run_tui()` (образец: test_tui_smoke)."""
+    """Build app and session matching `cli.run_tui()` (mirrors test_tui_smoke)."""
     import tempfile
 
     from vliw.tui.app import NexApp
@@ -68,23 +49,22 @@ def _make_app(start_mode):
 def _poly_gemm_path() -> str:
     root = Path(__file__).resolve().parent.parent
     p = root / "real_candidates_100_400" / "asm" / "poly_gemm.s"
-    # Прямые слэши и на Windows: тест про путь, скопированный из адресной
-    # строки, а она отдаёт именно «/». Python такие пути открывает.
+    # Use forward slashes even on Windows to test slash input handling.
     return p.resolve().as_posix()
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen UX walk")
 class TestUxWalk(unittest.TestCase):
-    """Инженер: набрать путь со слэшами → F5 на 190 узлах → законно и быстро."""
+    """Type a path with slashes -> press F5 on 190-op graph -> legal schedule within budget."""
 
     def test_type_path_with_slashes_then_f5_on_real_graph(self):
         poly = _poly_gemm_path()
-        self.assertTrue(Path(poly).exists(), f"нет файла {poly}")
-        # Путь обязан содержать слэши — иначе тест не про тот баг.
+        self.assertTrue(Path(poly).exists(), f"missing fixture file {poly}")
+        # Path must contain slashes to exercise the slash-key regression.
         self.assertIn("/", poly)
 
         full_cmd = f"/code load {poly}"
-        # После ^P префилл уже "/", допечатываем остаток.
+        # Ctrl+P prefills "/"; type the remainder.
         rest = full_cmd[1:]
 
         async def run():
@@ -96,25 +76,23 @@ class TestUxWalk(unittest.TestCase):
                     screen = app.screen
                     self.assertEqual(screen.__class__.__name__, "CodeScreen")
 
-                    # 1. Стартовый фокус — редактор (так задумано).
+                    # 1. Initial focus is on the code editor.
                     focused_id = getattr(app.focused, "id", "")
                     self.assertEqual(focused_id, "code-edit",
-                                     f"стартовый фокус {focused_id!r}, а не code-edit")
+                                     f"initial focus was {focused_id!r}, expected code-edit")
 
-                    # 2. Штатный путь к строке команд — ^P (фокус + префилл "/").
+                    # 2. Standard command bar shortcut is Ctrl+P (focus + "/" prefill).
                     await pilot.press("ctrl+p")
                     await pilot.pause()
                     await pilot.pause()
                     focused_id = getattr(app.focused, "id", "")
                     self.assertEqual(focused_id, "prompt-input",
-                                     f"после ^P фокус {focused_id!r}, а не prompt-input")
+                                     f"focus after Ctrl+P was {focused_id!r}, expected prompt-input")
                     bar = screen.query_one("#prompt")
                     self.assertEqual(bar.input.value, "/",
-                                     "префилл ^P обязан быть '/'")
+                                     "Ctrl+P prefill must be '/'")
 
-                    # 3. Печатаем остаток медленно, как человек.
-                    # "/" жмём как "slash": именно эта клавиша раньше сносила
-                    # команду через action_slash → set_value("/").
+                    # 3. Type the command slowly; send "/" as "slash" to exercise action_slash.
                     for ch in rest:
                         if ch == "/":
                             await pilot.press("slash")
@@ -124,44 +102,41 @@ class TestUxWalk(unittest.TestCase):
                     await pilot.pause()
                     await pilot.pause()
 
-                    # 4. Проверка длины ДО Enter (быстрая печать headless
-                    # теряет символы — это артефакт харнесса, ловим его здесь,
-                    # а не в ложном «баге ввода»).
+                    # 4. Verify full command string before pressing Enter.
                     typed = screen.query_one("#prompt").input.value
                     self.assertEqual(
                         typed, full_cmd,
-                        f"ввод со слэшами дошёл не целиком: {typed!r} != {full_cmd!r}. "
-                        "На незафикшенном коде здесь остаётся '/poly_gemm.s'.")
+                        f"slash input truncated: {typed!r} != {full_cmd!r}")
 
-                    # 5. Выполняем загрузку штатным путём.
+                    # 5. Execute `/code load`.
                     await pilot.press("enter")
                     try:
                         await asyncio.wait_for(app.workers.wait_for_complete(),
                                                timeout=20)
                     except asyncio.TimeoutError:
-                        self.fail("воркеры не завершились за 20с после /code load")
+                        self.fail("workers did not finish within 20s after /code load")
                     await pilot.pause()
                     await pilot.pause()
 
                     self.assertEqual(session.code_path, poly,
                                      f"code_path {session.code_path!r} != {poly!r}")
                     self.assertTrue(session.code_text.strip(),
-                                    "буфер пуст после /code load")
+                                    "code buffer is empty after /code load")
                     edit = screen.query_one("#code-edit")
                     self.assertEqual(edit.text, session.code_text,
-                                     "редактор не подхватил загруженный файл")
+                                     "editor did not load the file")
 
-                    # Граф настоящий: ≥100 узлов (poly_gemm — 190).
+                    # Real graph: >=100 ops (poly_gemm has 190).
                     from vliw.core import asm_parser
 
                     parsed = asm_parser.parse_asm(session.code_text,
-                                                  source="<буфер>")
+                                                  source="<buffer>")
                     n_ops = len(parsed.ops)
                     self.assertGreaterEqual(
                         n_ops, 100,
-                        f"граф {n_ops} узлов — тест обязан идти на ≥100")
+                        f"graph has {n_ops} ops — test requires >=100")
 
-                    # 6. F5 — прогнать буфер. Замеряем стену.
+                    # 6. Press F5 and measure wall-clock time.
                     t0 = time.monotonic()
                     await pilot.press("f5")
                     try:
@@ -169,20 +144,19 @@ class TestUxWalk(unittest.TestCase):
                                                timeout=55)
                     except asyncio.TimeoutError:
                         self.fail(
-                            "F5 висел дольше 55с: бюджет oracle не сработал, "
-                            "фолбэк на портфель не наступил (баг _candidate_subsets)")
+                            "F5 hung past 55s: oracle budget/fallback failed")
                     await pilot.pause()
                     await pilot.pause()
                     elapsed = time.monotonic() - t0
 
                     cached = session.peek()
-                    self.assertIsNotNone(cached, "после F5 нет кэша session.peek()")
+                    self.assertIsNotNone(cached, "no cached result in session.peek() after F5")
                     base, orc, met = cached
                     errs = list(orc.schedule.validate())
                     self.assertEqual(errs, [],
-                                     f"расписание незаконно: {errs[:5]}")
+                                     f"illegal schedule: {errs[:5]}")
                     self.assertTrue(getattr(orc.schedule, "complete", True),
-                                    "расписание неполное")
+                                    "incomplete schedule")
                     self.assertGreater(orc.schedule.makespan, 0)
                     self.assertGreaterEqual(len(orc.schedule.dag), 100)
                     return elapsed, orc.schedule.makespan, n_ops
@@ -190,5 +164,5 @@ class TestUxWalk(unittest.TestCase):
         elapsed, makespan, n_ops = asyncio.run(run())
         self.assertLess(
             elapsed, 60,
-            f"F5 на {n_ops} узлах занял {elapsed:.1f}с — ориентир секунды, не минуты")
+            f"F5 on {n_ops} ops took {elapsed:.1f}s — expected seconds, not minutes")
         self.assertGreater(makespan, 0)

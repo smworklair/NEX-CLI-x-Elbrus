@@ -1,69 +1,61 @@
-# Интерфейс: карта для правок
+# TUI: Code Map for Edits
 
-Полноэкранное рабочее место на [Textual](https://github.com/Textualize/textual).
-Один процесс, один экран (`NexApp`), внутри четыре режима: КОД, РАЗБОР, АГЕНТ, ЯДРО.
-Экраны только читают уже посчитанные данные.
+Fullscreen workspace built on [Textual](https://github.com/Textualize/textual).
+Single process, single app (`NexApp`), four modes inside: CODE, LAB, AGENT, CORE.
+Screens only read already computed data.
 
-Пользовательское поведение — в [`docs/CODE_MODE.md`](../../docs/CODE_MODE.md) и
-[`docs/LAB_MODE.md`](../../docs/LAB_MODE.md). Здесь — где что лежит в коде.
+User-facing behavior: [`docs/CODE_MODE.md`](../../docs/CODE_MODE.md) and [`docs/LAB_MODE.md`](../../docs/LAB_MODE.md). This file maps where everything lives in code.
 
-## Карта
+## File Map
 
 ```text
 vliw/tui/
-  app.py             NexApp: точка входа и переключение режимов
-  bridge.py          фоновый счёт, чтобы экран не замирал
-  palette.py         цветовые роли темы
-  widgets.py         переиспользуемые панели, чипы, тулбары
-  nex.tcss           вся вёрстка, без инлайн-стилей
+  app.py             NexApp: entry point and mode switching
+  bridge.py          background computation so the UI never freezes
+  palette.py         theme color roles
+  widgets.py         reusable panels, chips, toolbars
+  nex.tcss           all styling, no inline styles
   screens/
-    base.py          ModeScreen: Esc-лестница, разворот панелей, теснота
-    picker.py        экран выбора режима (1–4)
-    code_screen.py   КОД
-    lab_screen.py    РАЗБОР
-    core_screen.py   ЯДРО
-    agent_screen.py  АГЕНТ
+    base.py          ModeScreen: Esc ladder, panel expand, compact layouts
+    picker.py        mode selection screen (1–4)
+    code_screen.py   CODE
+    lab_screen.py    LAB
+    core_screen.py   CORE
+    agent_screen.py  AGENT
 ```
 
-## Точка входа
+## Entry Point
 
-`NexApp.__init__` получает `session`, callback `execute` и список команд от `cli.py`.
-`open_mode(name)` монтирует экран по имени (`code` / `lab` / `mind` / `work`) и держит
-по одному экземпляру на сессию. Первым открывается КОД; остальные — точки выхода из работы (`Ctrl+O`).
+`NexApp.__init__` receives `session`, the `execute` callback, and the command list from `cli.py`.
+`open_mode(name)` mounts a screen by name (`code` / `lab` / `mind` / `work`) and keeps one instance per session. CODE opens first; other modes are exit points via `Ctrl+O`.
 
-## Общий контракт
+## Shared Contract
 
-Все экраны наследуют `ModeScreen`. Он даёт:
+All screens inherit from `ModeScreen`, which provides:
 
-- лестницу `Esc`: подсказка → развёрнутая панель → выход из режима;
-- разворот любой панели по двойному клику;
-- три уровня тесноты по размеру терминала (`.narrow`, `.tight`, `.low`).
+- the `Esc` ladder: hint → expanded panel → exit mode;
+- double-click to expand any panel;
+- three terminal compactness classes (`.narrow`, `.tight`, `.low`).
 
-Новый экран наследуйте от `ModeScreen`, а не пишите раскладку с нуля.
+Subclass `ModeScreen` for any new screen rather than building layout mechanics from scratch.
 
-## Граница с ядром
+## Boundary with the Core
 
-Ни один экран не вызывает планировщик напрямую. Единственное место, где создаются
-`GreedyListScheduler` / `OracleScheduler` и вызывается `.schedule()`, — `Session.results()` в `vliw/cli.py`,
-вне `core/` и `tui/`. Экраны читают `session.dag_obj`, `session.results()` и готовый `Schedule`.
+No screen invokes a scheduler directly. The single place where `GreedyListScheduler` / `OracleScheduler` are instantiated and `.schedule()` is called is `Session.results()` in `vliw/cli.py`, outside both `core/` and `tui/`. Screens read `session.dag_obj`, `session.results()`, and the finished `Schedule`.
 
-**Практический вывод:** новая панель, разворот, тема или раскладка — это `tui/`.
-Изменение того, как планировщик выбирает расписание, — это `core/`, и это отдельная работа.
+**Practical takeaway:** a new panel, zoom view, theme, or layout belongs in `tui/`. Changing how a scheduler chooses a schedule belongs in `core/`, which is a separate task.
 
-## Что безопасно менять
+## Safe to Modify
 
-- **Цвет и тема** — `palette.py` и `vliw/ui/themes/*.json`.
-- **Вёрстка** — `nex.tcss`.
-- **Новая панель** — скопируйте `Panel(...)` из `lab_screen.py` и читайте данные из `session`.
-- **Новый экран** — наследуйте `ModeScreen`, зарегистрируйте в `app.py:open_mode` и `picker.py`.
+- **Colors and themes** — `palette.py` and `vliw/ui/themes/*.json`.
+- **Layout and styling** — `nex.tcss`.
+- **New panel** — copy `Panel(...)` from `lab_screen.py` and read data from `session`.
+- **New screen** — subclass `ModeScreen`, register it in `app.py:open_mode` and `picker.py`.
 
-## Что можно выкинуть
+## Safe to Remove
 
-Режимы независимы: `_modes` — словарь, а не список фиксированной длины. Удаление ЯДРА или АГЕНТА —
-это удалить пункт из `picker.py` и не регистрировать экран в `app.py:open_mode`. Остальные продолжат работать.
+Modes are independent: `_modes` is a dictionary, not a fixed-length list. Removing CORE or AGENT means removing the entry from `picker.py` and omitting its registration in `app.py:open_mode`. Everything else keeps working.
 
-## Куда не лезть
+## Do Not Touch
 
-`vliw/core/` — алгоритм — закрыт для переделки осознанно. Отрицательный результат проекта измерен
-на этой конкретной паре планировщиков; менять её без разбора значит обесценить измерение.
-Свой планировщик можно подключить через контракт [`../core/api.py`](../core/api.py).
+`vliw/core/` — the scheduling algorithm — is intentionally closed to casual edits. The project's negative result was measured on this exact pair of schedulers; changing it without care invalidates those measurements. Plug in a custom scheduler via the contract in [`../core/api.py`](../core/api.py).

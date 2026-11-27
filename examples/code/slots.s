@@ -1,12 +1,12 @@
-! СЛОТЫ ПРОСТАИВАЮТ — восемь умножений по одному в такт
+! IDLE SLOTS — eight multiplications issued one per cycle
 ! nex: src=15 orc=8 err=0
 !
-! muls исполним на ЧЕТЫРЁХ каналах: ,0 ,1 ,3 ,4 —
-! проверено ассемблером. Компилятор сложил все восемь в
-! ,0, по одной операции в такт: расписание законное,
-! считает правильно и занимает 17% слотов машины.
+! muls can execute on FOUR channels: ,0 ,1 ,3 ,4 —
+! verified with the assembler. The compiler placed all eight on
+! ,0, one operation per cycle: the schedule is valid,
+! computes correctly, and utilizes only 17% of machine slots.
 !
-! F5 — прогнать, F6 — переписать по оракулу.
+! F5 — run, F6 — rewrite from oracle.
 {
   muls,0 %r10, %r11, %r20
 }

@@ -1,16 +1,11 @@
-"""CAB: портфель законных расписаний из одного ответа модели.
+"""CAB (Candidate-And-Best): portfolio of legal VLIW schedules from a single model response.
 
-Что здесь закрепляется и почему именно это. Ценность CAB держится на одном
-утверждении — «расписание законно по построению, а не по удаче». Утверждение
-сильное, и проверять его надо на ЗАВЕДОМО испорченном ответе: если модель
-выдала операции на каналах, которые их не исполняют, портфель обязан всё
-равно выдать законное расписание, а не почти законное.
-
-Второе, что тут стережётся, — честность отбора. При равенстве тактов
-побеждать обязан ответ самой модели, иначе портфель будет приписывать
-алгоритму победы там, где модель справилась сама и её лишь пересчитали в то
-же число тактов. Такая регрессия молчаливая: цифры в отчёте не изменятся,
-изменится только подпись под ними, — поэтому без теста её никто не заметит.
+Two core invariants are guarded here:
+1. Legal-by-construction: even if the model places operations on unsupported
+   issue ports, the portfolio must still produce a 100% legal schedule.
+2. Honest attribution: on a tie in makespan, the model's own response must win
+   over algorithmic variants so reports never credit the portfolio when the
+   model already matched that makespan.
 """
 
 from __future__ import annotations
@@ -33,7 +28,7 @@ def _fixture(scenario: str = "slotclash"):
 
 
 def _as_answer(dag, machine, placements) -> str:
-    """Расстановка → текст ответа модели в обучающем формате."""
+    """Convert placements dict into the training completion text format."""
     sched = Schedule(dag, machine)
     for i, (c, ch) in sorted(placements.items()):
         sched.place(i, c, ch)
@@ -41,11 +36,10 @@ def _as_answer(dag, machine, placements) -> str:
 
 
 def _all_on_channel_zero(dag, machine):
-    """Ответ модели, где такты разумны, а канал у всех один — нулевой.
+    """Model response with reasonable cycles but every op forced onto port ,0.
 
-    Это не выдумка ради теста: ровно так выглядел самый частый провал в
-    `docs/archive/DIAG3.md` — STORE на канале `,0` (194 раза), потому что в данных
-    прогона 1 не было ни одной записи в память.
+    Reproduces the most common failure mode from early fine-tuning runs
+    (e.g., STORE placed on port ,0, which cannot execute stores).
     """
     good = GreedyListScheduler().schedule(dag, machine).schedule
     return {p.instr: (p.cycle, 0) for p in good.placements.values()}
@@ -53,23 +47,22 @@ def _all_on_channel_zero(dag, machine):
 
 class TestOrderFromModel(unittest.TestCase):
     def test_placed_ops_keep_model_order(self):
-        """Порядок — по (такт, канал) модели, а не по номерам инструкций."""
+        """Priority order follows the model's (cycle, port), not instruction IDs."""
         placements = {0: (5, 0), 1: (0, 3), 2: (0, 1)}
         prio = P.order_from_model(placements, 3, height=[0, 0, 0])
-        # 1 стоит в такте 0 на канале 1... нет: канал 3. Раньше всех — тот,
-        # у кого меньше (такт, канал): это 2, потом 1, потом 0.
+        # Earlier (cycle, port) gets higher priority: op 2 (0,1) > op 1 (0,3) > op 0 (5,0).
         self.assertGreater(prio[2], prio[1])
         self.assertGreater(prio[1], prio[0])
 
     def test_unplaced_go_last_by_height(self):
-        """О чём модель не высказалась — в хвост, и там по правилу baseline."""
+        """Ops omitted by the model fall to the tail, ordered by baseline critical-path height."""
         placements = {1: (0, 0)}
         prio = P.order_from_model(placements, 3, height=[7, 0, 2])
-        self.assertGreater(prio[1], prio[0], "размещённая обязана идти раньше")
-        self.assertGreater(prio[0], prio[2], "в хвосте — по убыванию height")
+        self.assertGreater(prio[1], prio[0], "placed op must precede unplaced ops")
+        self.assertGreater(prio[0], prio[2], "unplaced tail ordered by descending height")
 
     def test_empty_answer_degrades_to_height(self):
-        """Пустой ответ — это ровно baseline, а не случайный порядок."""
+        """An empty model answer must degrade cleanly to baseline height ordering."""
         dag, machine = _fixture()
         height = compute_metrics(dag, machine).height
         prio = P.order_from_model({}, len(dag), height)
@@ -80,16 +73,12 @@ class TestOrderFromModel(unittest.TestCase):
 
 class TestFloorFromModel(unittest.TestCase):
     def test_hallucinated_cycle_is_dropped(self):
-        """Такт за пределами потолка — сбой формата, а не мнение о планировании.
-
-        Без отсечения одно число «такт 900» растянуло бы расписание на 900
-        тактов — совершенно законно и совершенно бессмысленно.
-        """
+        """Out-of-range cycles (e.g. 900) are format glitches and must be discarded."""
         floor = P.floor_from_model({0: (3, 0), 1: (900, 0)}, limit=25)
         self.assertEqual(floor, {0: 3})
 
     def test_zero_cycle_needs_no_floor(self):
-        """Запрет «не раньше нулевого такта» — не запрет, и в карту не идёт."""
+        """A defer_until floor of cycle 0 is vacuous and should be omitted."""
         self.assertEqual(P.floor_from_model({0: (0, 0)}, limit=25), {})
 
 
@@ -101,7 +90,7 @@ class TestVariantsAreLegalByConstruction(unittest.TestCase):
         raw = Schedule(dag, machine)
         for i, (c, ch) in broken.items():
             raw.place(i, c, ch)
-        self.assertTrue(raw.validate(), "фикстура обязана быть незаконной")
+        self.assertTrue(raw.validate(), "fixture must be illegal")
 
         cands = P.variants(dag, machine, broken)
         self.assertTrue(cands)
@@ -111,47 +100,38 @@ class TestVariantsAreLegalByConstruction(unittest.TestCase):
                 self.assertTrue(c.schedule.complete)
 
     def test_winner_never_worse_than_greedy(self):
-        """Портфель обязан быть не хуже эвристики: она сама в нём лежит."""
+        """The portfolio must never be worse than greedy list scheduling, which is included in it."""
         dag, machine = _fixture()
         broken = _all_on_channel_zero(dag, machine)
         cands = P.variants(dag, machine, broken)
-        greedy = next(c for c in cands if c.name == "жадный")
+        greedy = next(c for c in cands if c.name == "greedy")
         self.assertLessEqual(P.choose(cands).makespan, greedy.makespan)
 
 
 class TestChooseIsHonest(unittest.TestCase):
     def test_tie_goes_to_the_earlier_candidate(self):
-        """При равенстве тактов побеждает тот, кто раньше в списке.
-
-        Первым идёт ответ самой модели — значит алгоритму не приписывается
-        победа там, где он ничего не улучшил.
-        """
+        """On equal makespan, the earlier candidate wins (model sits first)."""
         dag, machine = _fixture("simple4")
         good = GreedyListScheduler().schedule(dag, machine).schedule
-        mine = P.Variant("модель", "сырой ответ", good, ())
-        clone = P.Variant("порядок", "порядок от модели", good, ())
-        self.assertEqual(P.choose([mine, clone]).name, "модель")
-        self.assertEqual(P.choose([clone, mine]).name, "порядок")
+        mine = P.Variant("model", "raw response", good, ())
+        clone = P.Variant("order", "model ordering", good, ())
+        self.assertEqual(P.choose([mine, clone]).name, "model")
+        self.assertEqual(P.choose([clone, mine]).name, "order")
 
     def test_illegal_never_wins_over_legal(self):
         dag, machine = _fixture("simple4")
         good = GreedyListScheduler().schedule(dag, machine).schedule
         short = Schedule(dag, machine)
         for p in good.placements.values():
-            short.place(p.instr, 0, 0)          # всё в один такт на один канал
-        cands = [P.Variant("модель", "сырой", short, tuple(short.validate())),
-                 P.Variant("жадный", "baseline", good, ())]
-        self.assertEqual(P.choose(cands).name, "жадный")
+            short.place(p.instr, 0, 0)          # all ops crammed onto port 0 in cycle 0
+        cands = [P.Variant("model", "raw", short, tuple(short.validate())),
+                 P.Variant("greedy", "baseline", good, ())]
+        self.assertEqual(P.choose(cands).name, "greedy")
 
 
 class TestWiredIntoScheduler(unittest.TestCase):
     def test_cab_off_by_default_keeps_model_answer(self):
-        """Без флага поведение обязано остаться прежним, до строчки.
-
-        Все прежние замеры сняты без портфеля, и менять их смысл молча
-        нельзя — это ровно та ошибка, из-за которой 84% из DIAG3 жили только
-        в отчёте.
-        """
+        """With cab=False (default), raw model output is preserved unchanged."""
         dag, machine = _fixture()
         broken = _all_on_channel_zero(dag, machine)
         text = _as_answer(dag, machine, broken)
@@ -170,37 +150,26 @@ class TestWiredIntoScheduler(unittest.TestCase):
         self.assertIsNotNone(res.search_stats["cab_winner"])
         rows = res.search_stats["cab"]
         self.assertTrue(any(r["won"] for r in rows))
-        self.assertTrue(any("порядок" in r["name"] for r in rows))
-class TestMetricsFollowTheFinalSchedule(unittest.TestCase):
-    """Инструкция, не выданная моделью, но размещённая портфелем.
+        self.assertTrue(any("order" in r["name"] for r in rows))
 
-    Стережёт конкретную ошибку проводки: `valid` считался по `missing` от
-    СЫРОГО ответа, и полное законное расписание из портфеля всё равно
-    попадало в замер как провал. Такая регрессия тихая — она не ломает
-    ничего, только занижает все числа замера разом.
-    """
+
+class TestMetricsFollowTheFinalSchedule(unittest.TestCase):
+    """Ensure `valid` reflects the final CAB-repaired schedule, not missing ops in the raw reply."""
 
     def test_valid_is_about_the_result_not_the_raw_answer(self):
         dag, machine = _fixture()
         placements = _all_on_channel_zero(dag, machine)
-        del placements[max(placements)]          # модель оборвалась на последней
+        del placements[max(placements)]          # model truncated before final op
         res = LearnedScheduler(backend=ScriptedBackend(
             _as_answer(dag, machine, placements)), cab=True).schedule(dag, machine)
 
-        self.assertTrue(res.search_stats["missing"], "фикстура: строка потеряна")
+        self.assertTrue(res.search_stats["missing"], "fixture: final line must be missing")
         self.assertTrue(res.schedule.complete)
         self.assertTrue(res.search_stats["valid"])
 
 
 class TestTieIsNotAWin(unittest.TestCase):
-    """Победа вничью — не улучшение, и в отчёте это обязано различаться.
-
-    Ответ модели стоит в портфеле первым и забирает равенство себе — так и
-    задумано, иначе алгоритму приписывались бы чужие заслуги. Но обратная
-    ошибка не менее вредна: замер на трудном эвале показал семь побед
-    кандидатов модели при пяти реальных улучшениях, и без этого разделения
-    отчёт записывал бы две ничьи в заслугу.
-    """
+    """Tying the greedy baseline must not be reported as beating it."""
 
     def test_matching_the_heuristic_is_not_beating_it(self):
         dag, machine = _fixture()
@@ -209,19 +178,17 @@ class TestTieIsNotAWin(unittest.TestCase):
         res = LearnedScheduler(backend=ScriptedBackend(
             _as_answer(dag, machine, answer)), cab=True).schedule(dag, machine)
 
-        self.assertEqual(res.search_stats["cab_winner"], "модель")
+        self.assertEqual(res.search_stats["cab_winner"], "model")
         self.assertFalse(res.search_stats["cab_beat_greedy"],
-                         "совпадение с эвристикой записано как выигрыш у неё")
+                         "tying greedy baseline must not count as beating it")
 
     def test_strictly_shorter_counts_as_a_win(self):
-        """`slotclash`: у жадного и оптимума есть зазор — числа не зашиты,
-        оба берутся у движков заново, чтобы правка латентности в model.py
-        (как 31.08.2026 у STORE) не превращала тест в устаревшую цифру."""
+        """On `slotclash`, oracle beats greedy; CAB recovers the optimal makespan even with broken ports."""
         from vliw.core.oracle import OracleScheduler
 
         dag, machine = _fixture()
         orc = OracleScheduler().schedule(dag, machine)
-        # Такты оптимума, каналы намеренно сломаны: так выглядел провал DIAG3.
+        # Optimal cycles, intentionally broken ports (all on port ,0).
         answer = {p.instr: (p.cycle, 0) for p in orc.schedule.placements.values()}
         res = LearnedScheduler(backend=ScriptedBackend(
             _as_answer(dag, machine, answer)), cab=True).schedule(dag, machine)
@@ -229,7 +196,7 @@ class TestTieIsNotAWin(unittest.TestCase):
         self.assertEqual(res.schedule.validate(), [])
         self.assertEqual(res.schedule.makespan, orc.schedule.makespan)
         self.assertTrue(res.search_stats["cab_beat_greedy"])
-        self.assertNotEqual(res.search_stats["cab_winner"], "жадный")
+        self.assertNotEqual(res.search_stats["cab_winner"], "greedy")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
-"""Эвал крошки-1: valid% / разрыв до оптимума / победы над baseline.
+"""Tiny-1 evaluation: valid% / gap to optimum / wins over baseline.
 
-Правда — meta из eval-файла (makespan=доказанный оптимум CP-SAT,
-baseline=жадный), пересчитывать оракул не надо. Tiny-расписание валидируем
-настоящим Schedule.validate().
+Ground truth comes from eval file meta (makespan=proven CP-SAT optimum,
+baseline=greedy), so no oracle rerun is needed. Tiny schedules are checked
+with the real Schedule.validate().
 """
 
 from __future__ import annotations
@@ -23,17 +23,17 @@ from vliw.tiny.scheduler import TinyScheduler
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Эвал крошки-1")
+    ap = argparse.ArgumentParser(description="Tiny-1 evaluation")
     ap.add_argument("--eval", default="eval_hard.jsonl")
     ap.add_argument("--weights", default="vliw/tiny/weights.json")
     ap.add_argument("--defer-weights", default="vliw/tiny/weights_defer.json")
     ap.add_argument("--hold-weights", default="vliw/tiny/weights_hold.json")
-    ap.add_argument("--limit", type=int, default=0, help="0 = все")
+    ap.add_argument("--limit", type=int, default=0, help="0 = all")
     ap.add_argument("--beam", type=int, default=16,
-                    help="ширина веера (по умолчанию как в /tiny)")
+                    help="beam width (defaults to /tiny setting)")
     ap.add_argument("--ignore-weights", action="store_true",
-                    help="без обученных весов: только жадный + веер вокруг "
-                         "height (чистый поиск — для абляции)")
+                    help="without trained weights: greedy + beam around "
+                         "height only (pure search — for ablation)")
     a = ap.parse_args()
     ev = a.eval if Path(a.eval).exists() else str(_ROOT / a.eval)
     def _rp(p: str) -> str:

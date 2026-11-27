@@ -1,6 +1,6 @@
 {
   "name": "nex-dark",
-  "description": "Чёрный фон, синий акцент, амбра — вторичный. Операции разного цвета: это данные.",
+  "description": "Black background, blue accent, amber secondary. Distinct operation colors encode data.",
   "roles": {
     "text": {
       "color": 253

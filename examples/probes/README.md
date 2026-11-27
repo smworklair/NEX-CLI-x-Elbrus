@@ -1,211 +1,122 @@
-# Пробы, которыми снята модель машины
+# Probes Used to Measure the Machine Model
 
-Здесь лежат исходники и **настоящий** вывод `lcc`, по которым заполнена
-матрица портов и латентности в [`vliw/core/model.py`](../../vliw/core/model.py).
-Ничего не отредактировано руками: `.s` — ровно то, что напечатал компилятор.
+This directory contains the C sources and **real** `lcc` output used to populate the port matrix and latencies in [`vliw/core/model.py`](../../vliw/core/model.py). Nothing has been hand-edited: every `.s` file is verbatim compiler output.
 
-Компилятор — кросс-lcc из свободно распространяемого комплекта МЦСТ
-(`cross-sp-public-osl-1.29.16.e2k-v6`), работает на x86-хосте:
+Compiler: cross-`lcc` from MCST's publicly distributed toolchain (`cross-sp-public-osl-1.29.16.e2k-v6`), running on an x86 host:
 
 ```bash
 LCC=~/e2k-toolchain/opt/mcst/lcc-1.29.16.e2k-v6.linux-6.1/bin.toolchain/e2k-linux-lcc
 $LCC -fverbose-asm -S -O3 probe.c -o probe.s
 ```
 
-## Что чем меряется
+## What Each Probe Measures
 
-| файл | что меряет | как читать |
+| file | what it measures | how to read |
 |---|---|---|
-| `probe.c/.s` | первая проба: 4 деления + 4 умножения | **исторический**: именно её неверно прочли, см. ниже |
-| `mul8.c/.s` | 8 независимых умножений | в bundle `<0013>` стоят `muls,0` и `muls,1` — умножитель не один |
-| `mul_burst.c/.s` | 16 независимых умножений | идут по одному в такт подряд → порт свободен сразу, occupancy = 1 |
-| `mul_latency.c/.s` | цепочка `x = x * b` | шаг между bundle = **4** → латентность MUL |
-| `div_latency.c/.s` | цепочка `x = x / b` | шаг = **11** → латентность DIV |
-| `div8.c/.s` | 8 независимых делений | шаг = **2** → делитель принимает новое деление раз в 2 такта |
-| `load_latency.c/.s` | цепочка `p = *p` | шаг = **5** → латентность LOAD (а не 2) |
-| `store_burst.c/.s` | 16 независимых записей по разным адресам | шаг = **1** → занятие канала STORE, occupancy = 1 |
-| `store_latency.c/.s` | цепочка `mem = x; x = mem + 1;` через ОДНУ volatile-ячейку | шаг store→load = **2** → латентность видимости записи (не 1) |
+| `probe.c/.s` | initial probe: 4 divisions + 4 multiplies | **historical**: this is the one that was misread; see below |
+| `mul8.c/.s` | 8 independent multiplies | bundle `<0013>` has `muls,0` and `muls,1` — more than one multiplier |
+| `mul_burst.c/.s` | 16 independent multiplies | issued back-to-back every cycle → port is free immediately, occupancy = 1 |
+| `mul_latency.c/.s` | chain `x = x * b` | spacing between bundles = **4** → `MUL` latency |
+| `div_latency.c/.s` | chain `x = x / b` | spacing = **11** → `DIV` latency |
+| `div8.c/.s` | 8 independent divisions | spacing = **2** → divider accepts a new division every 2 cycles |
+| `load_latency.c/.s` | chain `p = *p` | spacing = **5** → `LOAD` latency (not 2) |
+| `store_burst.c/.s` | 16 independent stores to distinct addresses | spacing = **1** → `STORE` channel occupancy = 1 |
+| `store_latency.c/.s` | chain `mem = x; x = mem + 1;` through ONE volatile cell | store→load spacing = **2** → store visibility latency (not 1) |
 
-Приём общий: **латентность** меряется цепочкой ЗАВИСИМЫХ операций (компилятор
-обязан развести их ровно на латентность), **темп приёма** — потоком
-НЕЗАВИСИМЫХ (шаг между выдачами). `volatile` нужен, чтобы ничего не свернулось
-в константу.
+General technique: **latency** is measured with a chain of DEPENDENT operations (the compiler must space them by at least the latency), while **issue rate** is measured with a stream of INDEPENDENT operations (spacing between consecutive issues). `volatile` prevents constant folding.
 
-## Матрица портов: спрашиваем у ассемблера, а не у планировщика
+## Port Matrix: Ask the Assembler, Not the Scheduler
 
-Главный урок этих проб: по листингу видно то, что компилятор **захотел**
-сделать, а не то, что железо **может**. Первая версия модели строилась по
-`probe.c`, где все четыре `muls` легли на `,0` подряд — и это прочли как
-«умножитель один, держит порт 8 тактов». На самом деле четырёх операций просто
-не хватило, чтобы жадному планировщику lcc понадобился второй канал.
+The main lesson from these probes: a compiler listing shows what the compiler **chose** to do, not what the hardware **can** do. The first version of the model was built from `probe.c`, where all four `muls` landed sequentially on `,0` — which was misread as "one multiplier holding its port for 8 cycles". In reality, four operations simply weren't enough to push `lcc`'s greedy scheduler onto a second channel.
 
-Надёжный способ — собрать крошечный `.s` с операцией в конкретном канале и
-посмотреть, примет ли её **ассемблер**:
+The reliable method is to assemble a tiny `.s` placing an operation in a specific channel and see if the **assembler** accepts it:
 
 ```bash
 $LCC -c one_muls_2.s -o /dev/null
 # Error: `muls' cannot be encoded in ALC2
 ```
 
-Так получена матрица (проверены все 6 каналов для каждой операции):
+That produced the matrix below (all 6 channels probed for each operation):
 
-| операция | каналы | латентность | темп |
+| operation | channels | latency | rate |
 |---|---|---|---|
-| `adds` / `subs` / `ands` / `shls` | `,0 ,1 ,2 ,3 ,4 ,5` | 1 | 1/такт |
-| `muls` / `muld` | `,0 ,1 ,3 ,4` | 4 | 1/такт |
-| `sdivs` | `,5` — единственный | 11 | раз в 2 такта |
-| `ldw` / `ldd` | `,0 ,2 ,3 ,5` | 5 | 1/такт |
-| `stw` / `std` | `,2 ,5` | 2 | 1/такт |
+| `adds` / `subs` / `ands` / `shls` | `,0 ,1 ,2 ,3 ,4 ,5` | 1 | 1/cyc |
+| `muls` / `muld` | `,0 ,1 ,3 ,4` | 4 | 1/cyc |
+| `sdivs` | `,5` — exclusive | 11 | 1 per 2 cyc |
+| `ldw` / `ldd` | `,0 ,2 ,3 ,5` | 5 | 1/cyc |
+| `stw` / `std` | `,2 ,5` | 2 | 1/cyc |
 
-Запись раньше в этой таблице стояла с прочерком в латентности — «результат
-никто не потребляет» звучало как окончательный приговор, но это верно только
-для регистрового потребителя. Метод из `store_latency.c` ниже спрашивает
-машину иначе: через ОДНУ volatile-ячейку, записанную и тут же прочитанную
-восемь раз подряд. `volatile` запрещает компилятору переставить запись и
-чтение или убрать обращение к памяти вовсе, поэтому шаг store→load в
-листинге — вынужденная видимость записи, а не выбор планировщика. Получилось
-**2 такта**, не единица, которой это место было забито допущением.
+Store previously had a dash for latency — "nobody consumes the result" sounded conclusive, but that only applies to register consumers. `store_latency.c` probes the machine differently: through ONE `volatile` cell written and immediately read eight times in a row. `volatile` forbids reordering the store and load or eliminating the memory access, so the store→load spacing in the listing reflects forced store visibility rather than scheduler choice. It came out to **2 cycles**, not the assumed 1.
 
-Занятие канала STORE подтверждено дважды, и второй раз — сильнее любого
-компиляторного листинга: тем же приёмом, каким снята сама матрица портов,
-`tools/probe_matrix.py` спросил ассемблер напрямую, кодируется ли `stw,2` и
-`stw,5` В ОДНОЙ широкой команде. Кодируется. Значит порт записи не общий на
-оба канала и не блокирует сам себя даже в один такт — про компилятор здесь
-речи вообще нет, отвечает кодировка.
+`STORE` channel occupancy was confirmed twice, the second time more strongly than any compiler listing: using the same technique as the port matrix, `tools/probe_matrix.py` asked the assembler directly whether `stw,2` and `stw,5` encode in the SAME wide instruction. They do. Thus the store port is not shared across both channels and does not block itself even within a single cycle — no compiler behavior involved, just hardware encoding rules.
 
-Оговорка, которую нельзя терять: **2 такта — это латентность «запись, потом
-чтение ТОГО ЖЕ адреса»**, а не «латентность STORE вообще». В синтетическом
-генераторе графов (`tools/vliw_gen.py`) ребро от STORE к другой операции —
-структурное, не привязанное к реальному адресу: он не проверяет, что
-случайный потомок STORE и правда читает ту же ячейку. Число 2 — лучшая
-измеренная оценка порядка величины, надёжнее прежней единицы, но не такая же
-по силе, как латентность LOAD/MUL/DIV, где потребитель — буквально та же
-операция в цепочке.
+An essential caveat: **2 cycles is the latency of "store followed by load from the SAME address"**, not "latency of STORE in general". In the synthetic graph generator (`tools/vliw_gen.py`), an edge from `STORE` to another op is structural and not tied to a real address: it does not verify that a random child of `STORE` actually reads the same cell. 2 is the best measured order-of-magnitude estimate — better than the earlier assumption of 1 — though not as airtight as `LOAD`/`MUL`/`DIV` latency where the consumer is literally the next op in the chain.
 
-Четыре `muls` в одной широкой команде (каналы `,0 ,1 ,3 ,4`) собираются
-успешно — то есть ограничения «не больше двух умножений одновременно» на
-уровне кодировки нет.
+Four `muls` in a single wide instruction (channels `,0 ,1 ,3 ,4`) assemble cleanly — so there is no encoding-level restriction of "at most two multiplies at once".
 
-Единственная настоящая монополия машины — **делитель**. Именно она и осталась
-в модели как источник разрыва между жадной эвристикой и оптимумом.
+The machine's only true monopoly is the **divider**. That is what remains in the model as the source of the gap between greedy heuristics and the optimum.
 
-## Перепроверка 24.08.2026: `volatile` в пробах и что он испортил
+## Re-Check (2026-08-24): `volatile` in Probes and What It Distorted
 
-Все пробы здесь написаны с `volatile` — чтобы компилятор не свернул
-арифметику в константу. Выяснилось, что он же меняет то, что мы меряем:
-`volatile`-обращения нельзя переставлять и объединять, поэтому `lcc`
-разносит их по одному в такт, а всё, что ими питается, наследует этот темп.
+All probes here were written with `volatile` to stop constant folding. It turned out `volatile` also alters what we observe: `volatile` accesses cannot be reordered or combined, so `lcc` paces them one per cycle and everything fed by them inherits that cadence.
 
-Проверено пересборкой тех же участков БЕЗ `volatile` (значения приходят по
-указателям в функцию с `__attribute__((noinline))` — свернуть нельзя, но и
-запрета на перестановку нет), тем же `lcc-1.29.16 -O3`:
+Re-tested by compiling the same kernels WITHOUT `volatile` (values passed by pointer into an `__attribute__((noinline))` function — prevents folding while allowing reordering) using the same `lcc-1.29.16 -O3`:
 
-| наблюдение | с `volatile` | без `volatile` |
+| observation | with `volatile` | without `volatile` |
 |---|---|---|
-| загрузок в одной широкой команде | 1 | **4** |
-| каналы загрузок | `,0 ,2` | **`,0 ,2 ,3 ,5`** |
-| умножений в одной широкой команде | 1 | **2** |
-| каналы умножений | 15 из 16 в `,0` | `,0 ,1 ,4` |
+| loads in one wide instruction | 1 | **4** |
+| load channels | `,0 ,2` | **`,0 ,2 ,3 ,5`** |
+| multiplies in one wide instruction | 1 | **2** |
+| multiply channels | 15 of 16 on `,0` | `,0 ,1 ,4` |
 
-То есть **упаковку** пробы показывали неверно: компилятор умеет заполнять
-широкую команду, ему просто не давали.
+So the `volatile` probes misrepresented **packing**: the compiler can pack wide instructions densely; `volatile` just prevented it from doing so.
 
-### Что при этом НЕ пострадало — темп приёма (occupancy)
+### What Was NOT Affected — Issue Rate (`occupancy`)
 
-Главный вопрос: не завышен ли `occupancy`, снятый с этих же потоков. Шаг
-между соседними выдачами ОДНОТИПНЫХ операций на ОДНОМ канале:
+The key question was whether `occupancy` measured from those streams was overstated. Spacing between consecutive issues of the SAME operation type on the SAME channel:
 
-| операция | с `volatile` | без `volatile` | в модели |
+| operation | with `volatile` | without `volatile` | in model |
 |---|---|---|---|
-| `sdivs` на `,5` | 2 такта | **2 такта** | `occupancy=2` ✔ |
-| `muls` на своём канале | 1 такт | **1 такт** | `occupancy=1` ✔ |
-| `ldw` на своём канале | 1 такт | **1 такт** | `occupancy=1` ✔ |
+| `sdivs` on `,5` | 2 cyc | **2 cyc** | `occupancy=2` ✔ |
+| `muls` on its channel | 1 cyc | **1 cyc** | `occupancy=1` ✔ |
+| `ldw` on its channel | 1 cyc | **1 cyc** | `occupancy=1` ✔ |
 
-Деление без `volatile` встало в такты 5, 7, 9, 11, 13, 15, 17, 19 — тот же
-шаг 2, что и в волатильной пробе (12, 14, …, 26). **Все параметры темпа
-подтверждены**, правило «делитель держит `,5` два такта» верно, менять в
-`model.py` нечего.
+Without `volatile`, divisions landed in cycles 5, 7, 9, 11, 13, 15, 17, 19 — the exact same stride of 2 as in the volatile probe (12, 14, …, 26). **All rate parameters are confirmed**: the rule "divider holds `,5` for two cycles" holds, and nothing in `model.py` needs to change.
 
-Единственное расхождение: `stw` в волатильной `div8.s` идёт с шагом 2, без
-`volatile` — с шагом 1. В модели у STORE и так `occupancy=1`, так что на
-числах это не сказалось.
+The sole difference: `stw` in volatile `div8.s` had stride 2, whereas without `volatile` it has stride 1. `STORE` already had `occupancy=1` in the model, so no numbers changed.
 
-### Мораль
+### Takeaway
 
-`volatile` защищает от свёртки, но искажает расписание. Для латентностей и
-темпа приёма он безвреден (они меряются по шагу между зависимыми либо
-однотипными операциями на одном порту), а для наблюдений об УПАКОВКЕ —
-непригоден. Это второй случай того же рода: сначала модель ошиблась, потому
-что четырёх операций не хватило жадному планировщику, теперь — потому что
-`volatile` запретил ему паковать. По выводу компилятора видно, что он
-захотел и что ему разрешили, а не что железо может.
+`volatile` prevents constant folding but distorts scheduling. For latencies and issue rates it is harmless (those depend on spacing between dependent ops or same-type ops on one port), but for observing **packing** it is invalid. This is a second instance of the same pitfall: first the model erred because four ops weren't enough for the greedy scheduler, then because `volatile` blocked packing. Compiler output shows what the compiler wanted and was allowed to do, not what the hardware can do.
 
-Исходники перепроверки: `mul8_novolatile.c`, `div8_nv.c`, `mulburst_nv.c`
-(в репозиторий пока не положены — см. TODO ниже).
+Re-check sources: `mul8_novolatile.c`, `div8_nv.c`, `mulburst_nv.c` (not yet committed to the repo — see TODO below).
 
-## Сочетания: второй класс ограничений, которого в модели нет
+## Combinations: A Second Class of Constraints Missing from the Model
 
-Матрица портов отвечает на вопрос «исполнима ли операция в этом канале» —
-по одной операции за раз. Оказалось, это не всё, что знает ассемблер. Тем же
-приёмом можно спросить и про **пары**: собрать широкую команду из двух
-операций, каждая из которых по отдельности законна в своём канале, и
-посмотреть, примет ли её ассемблер.
+The port matrix answers "can this op execute in this channel?" one operation at a time. That isn't everything the assembler enforces. Using the same technique, we can probe **pairs**: assemble a wide instruction with two individually valid operations and check if the assembler accepts it.
 
-Полный перебор пар (`tools/probe_matrix.py`, он же `python -m vliw verify`)
-находит ровно **два** запрета:
+Exhaustive pair probing (`tools/probe_matrix.py`, also `python -m vliw verify`) finds exactly **two** prohibitions:
 
 ```
 Error: the combination of STORE in ALC2 with LOAD in ALC3 is prohibited
 Error: the combination of STORE in ALC5 with LOAD in ALC0 is prohibited
 ```
 
-Остальные 117 сочетаний законны — включая `STORE,2 + LOAD,0`,
-`STORE,2 + LOAD,5`, `STORE,5 + LOAD,2` и `STORE,5 + LOAD,3`. То есть запрет
-не «запись плюс загрузка вообще», а именно эти две пары каналов.
+All other 117 combinations are valid — including `STORE,2 + LOAD,0`, `STORE,2 + LOAD,5`, `STORE,5 + LOAD,2`, and `STORE,5 + LOAD,3`. So the ban is not "store plus load in general", but specifically these two channel pairs.
 
-Каналы e2k делятся на два кластера: `,0 ,1 ,2` и `,3 ,4 ,5`. Запрещённые пары —
-`(2,3)` и `(5,0)` — это ровно «швы»: последний канал одного кластера с первым
-каналом соседнего (второй шов замыкается по кругу). **Кластерность машины
-существует и наблюдаема — но проявляется она здесь как структурный запрет в
-широкой команде, а не как межкластерная задержка.**
+`e2k` channels split into two clusters: `,0 ,1 ,2` and `,3 ,4 ,5`. The forbidden pairs — `(2,3)` and `(5,0)` — are the exact "seams": the last channel of one cluster paired with the first channel of the other (the second seam wraps around). **Machine clustering exists and is observable — here it shows up as a structural prohibition inside a wide instruction rather than an inter-cluster latency.**
 
-### Почему межкластерную ЗАДЕРЖКУ этим приёмом снять нельзя
+### Why Inter-Cluster LATENCY Cannot Be Measured This Way
 
-Напрашивается измерить кластеры так же, как латентности — цепочкой зависимых
-операций. Не выйдет, и вот почему (проверено, а не предположено):
+It is tempting to measure clusters the same way as latencies — with a dependent chain. That does not work, and here is why (verified, not assumed):
 
-1. **Ассемблер задержки не проверяет вообще.** У него есть флаг
-   `-no_strict_delay` («don't enforce implicit delay between instructions»),
-   и `lcc` даже ставит в свой вывод `.ignore strict_delay`. Но зависимая пара
-   в соседних тактах — `muls,0 … %g18` и следом `adds,1 %g18, …` — принимается
-   без единого возражения. Убрать `.ignore strict_delay` из настоящего вывода
-   `lcc` тоже ничего не меняет. Регистровых зависимостей ассемблер не
-   отслеживает, спрашивать его про латентность бессмысленно.
-2. **Компилятору нельзя приказать, в какой кластер класть операцию.** Из `.c`
-   каналы не выбираются — их назначает планировщик `lcc`. Чтобы увидеть
-   разницу между «зависимая пара внутри кластера» и «через границу», нужно
-   уметь ЗАКРЕПИТЬ обе операции за каналами, а из C такого рычага нет.
-   В снятых цепочках компилятор все зависимые `muls` уложил в один кластер
-   (каналы `,0` и `,1`), так что кросс-кластерной пары в данных просто нет.
+1. **The assembler does not check latencies at all.** It has a `-no_strict_delay` flag ("don't enforce implicit delay between instructions"), and `lcc` even emits `.ignore strict_delay`. Yet a dependent pair in adjacent cycles — `muls,0 … %g18` followed immediately by `adds,1 %g18, …` — assembles without complaint. Removing `.ignore strict_delay` from real `lcc` output changes nothing either. The assembler does not track register dependencies, so querying it for latency is pointless.
+2. **You cannot force the compiler to pick a cluster.** From `.c`, channels cannot be assigned — `lcc`'s scheduler picks them. To see a difference between an intra-cluster dependent pair and a cross-cluster one, you would need to PIN both operations to specific channels, and C provides no such lever. In the probed chains, the compiler placed all dependent `muls` inside one cluster (channels `,0` and `,1`), so cross-cluster pairs never appear in the data.
 
-Вывод: межкластерная задержка локальным тулчейном **не измеряется** — ни
-ассемблером (не проверяет), ни компилятором (не управляется). Ставить её в
-модель «по документации» значило бы повторить ровно ту ошибку, из-за которой
-пришлось заводить профиль `e2k-v6-firstprobe`.
+Conclusion: inter-cluster latency **cannot be measured** with the local toolchain — neither via the assembler (doesn't check) nor via the compiler (uncontrollable). Putting it into the model "from documentation" would repeat the exact mistake that forced the creation of `e2k-v6-firstprobe`.
 
-### Состояние: измерено, в модель не заведено
+### Status: Measured, Not Wired Into the Model
 
-`vliw/core/model.py` сейчас описывает ресурс машины как матрицу
-«порт → операции». Запретов на сочетания в нём **нет**, и ни один планировщик
-их не учитывает. Расхождение зафиксировано намеренно — `probe_matrix.py`
-печатает его при каждом прогоне, а `EXPECTED_COMBO_BANS` в том же файле
-сторожит, чтобы набор запретов не изменился молча.
+`vliw/core/model.py` currently represents machine resources as a "port → operations" matrix. Pair prohibitions are **not** in it, and no scheduler enforces them. This divergence is intentional and tracked: `probe_matrix.py` prints it on every run, and `EXPECTED_COMBO_BANS` in that file guards against silent changes in the prohibition set.
 
-Завести его в модель — отдельная работа, и не косметическая: точный поиск в
-`vliw/core/oracle.py` опирается на свойство «двудольное паросочетание
-существует ⟺ набор выдаваем в этом такте», а запрет на пары это свойство
-ломает. Чинится это конструктивно (записей в такте максимум две — по числу
-портов записи, — поэтому можно перебрать их раскладку и для каждой убрать
-запрещённый канал загрузки перед обычным паросочетанием), но менять придётся
-именно ядро доказательства оптимальности, и проверять — прогоном
-`/selfcheck` на новом профиле.
+Wiring it into the model is separate, non-trivial work: exact search in `vliw/core/oracle.py` relies on "a bipartite matching exists ⟺ the bundle is issuable in this cycle", and pair prohibitions break that property. It is constructively fixable (there are at most two stores per cycle — matching the two store ports — so you can enumerate store placements and mask out forbidden load channels before running standard matching), but it requires modifying the optimality proof core and re-verifying via `/selfcheck` on the new profile.

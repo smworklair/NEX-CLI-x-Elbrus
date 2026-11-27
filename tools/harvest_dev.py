@@ -1,13 +1,7 @@
-"""Набор трудных графов для DEV-отбора (валидация крошек).
+"""Harvest hard DEV DAGs for Tiny validation (disjoint seeds starting at 20300000).
 
-Отличается от /hard --harvest только потоком сидов: начинаем с 20300000,
-поэтому пересечения с eval_hard.jsonl (сиды 202608xx) нет по построению.
-Формат строк — тот же (prompt/completion/meta), эталон доказан оракулом.
-
-Использование:
+Usage:
     python tools/harvest_dev.py --n 120 --jobs 4 --out eval_hard_dev.jsonl
-
-Windows: нужен guard __main__ (spawn), он есть.
 """
 
 from __future__ import annotations
@@ -30,7 +24,7 @@ N_LO, N_HI = 16, 24
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Сбор DEV трудных графов")
+    ap = argparse.ArgumentParser(description="Harvest hard DEV graphs")
     ap.add_argument("--n", type=int, default=120)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out", default="eval_hard_dev.jsonl")
@@ -67,9 +61,9 @@ def main() -> None:
         for row in kept:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     dt = time.monotonic() - t0
-    print(f"найдено {len(kept)}/{a.n}, просмотрено {seen} "
-          f"({100 * len(kept) / max(seen, 1):.1f}% годных) за {dt:.0f} с")
-    print(f"записано в {out}")
+    print(f"found {len(kept)}/{a.n}, checked {seen} "
+          f"({100 * len(kept) / max(seen, 1):.1f}% hard) in {dt:.0f} s")
+    print(f"saved to {out}")
 
 
 if __name__ == "__main__":

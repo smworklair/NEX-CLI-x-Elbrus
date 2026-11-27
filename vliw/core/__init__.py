@@ -1,9 +1,8 @@
-"""Логика прототипа: модель машины, граф, планировщики, метрики, проверка.
+"""Core scheduling engine: machine model, DAG, schedulers, metrics, validation.
 
-Здесь НЕТ ничего про вывод: ни цвета, ни таблиц, ни print(). Всё это —
-структуры данных и алгоритмы. Форматированием занимается пакет `vliw.ui`,
-склейкой — `vliw.cli`. Такое разделение позволяет подставить будущую обученную
-модель (`vliw.learned`) без правок в отрисовке и CLI.
+Contains NO presentation logic (no colors, tables, or print() calls) — only
+data structures and algorithms. Formatting lives in `vliw.ui`, CLI wiring in
+`vliw.cli`, so learned schedulers (`vliw.learned`, `vliw.tiny`) plug in cleanly.
 """
 
 from .api import (

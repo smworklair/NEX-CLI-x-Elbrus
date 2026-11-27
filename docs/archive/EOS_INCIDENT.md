@@ -1,145 +1,146 @@
-# Модель не умела заканчивать ответ
+# The Model Did Not Know How to End Its Response
 
-Разбор одного бага: три четверти ошибок обученной модели оказались не
-ошибками планирования, а отсутствием одного токена в обучающих данных.
+Post-mortem of a single bug: three-quarters of the trained model's errors turned out
+not to be scheduling errors, but a single missing token in the training data.
 
-## Симптом
+## Symptom
 
-Замер адаптера `qwen-vliw-lora` на 50 примерах (`eval_kinds.jsonl`, 15.08 22:40)
-выглядел так:
+The evaluation of the `qwen-vliw-lora` adapter on 50 examples (`eval_kinds.jsonl`, 15.08 22:40)
+looked like this:
 
 ```
-валидно        18  (36%)
-галлюцинация   30  (60%)
-сдвиг           2  ( 4%)
+valid          18  (36%)
+hallucination  30  (60%)
+shift           2  ( 4%)
 ```
 
-Читалось это как «модель в 60% случаев несёт чушь» — то есть как проблема
-качества, которую лечат данными и эпохами. Под эту гипотезу и были
-сгенерированы дополнительные 20 000 примеров.
+This read as "the model outputs nonsense 60% of the time" — i.e., a quality problem
+to be fixed with more data and epochs. Under that hypothesis, an additional 20,000
+examples were generated.
 
-## Что оказалось на самом деле
+## What actually happened
 
-Ярлык «галлюцинация» означает дыры в настоящих id: модель не разместила
-инструкции, которые в графе есть. Но при пересчёте всех 30 записей выяснилось,
-что записей с ошибкой «не размещены» **ноль**. У 24 из 30 единственная
-претензия — строки с id, которых в графе нет:
+The "hallucination" label means holes in real IDs: the model failed to place
+instructions that exist in the graph. Yet recounting all 30 records revealed that
+there were **zero** records with a "not placed" error. For 24 of the 30, the sole
+complaint was lines with IDs that do not exist in the graph:
 
 ```
 n_graph=8, n_decoded=14
-errs=['несуществующие id инструкций в ответе модели: [8, 9, 10, 11, 12, 13]']
+errs=['non-existent instruction IDs in model response: [8, 9, 10, 11, 12, 13]']
 ```
 
-Граф из 8 инструкций расписан правильно и полностью. Дальше модель просто не
-остановилась и продолжила писать строки для несуществующих инструкций 8–13.
-Это не галлюцинация в содержательном смысле — это **неостановка**.
+The 8-instruction graph was scheduled correctly and completely. The model simply
+did not stop and kept writing lines for non-existent instructions 8–13.
+That is not hallucination in any substantive sense — it is **failure to stop**.
 
-Пересчёт всех 50 записей текущим классификатором:
+Recount of all 50 records with the current classifier:
 
-| категория | было в дампе | на самом деле |
+| category | in the dump | actual |
 |---|---|---|
-| валидно | 18 | 18 |
-| **хвост** (законный префикс, не остановилась) | 0 | **24** |
-| сдвиг | 2 | 5 |
-| ресурс | 0 | 3 |
-| галлюцинация | 30 | 0 |
+| valid | 18 | 18 |
+| **tail** (legal prefix, failed to stop) | 0 | **24** |
+| shift | 2 | 5 |
+| resource | 0 | 3 |
+| hallucination | 30 | 0 |
 
-**Законных префиксов 42 из 50 (84%).** Из 32 ошибок 24 — чистая неостановка,
-это 75%.
+**42 out of 50 (84%) have legal prefixes.** Out of 32 errors, 24 are pure failure to stop —
+that is 75%.
 
-## Почему дамп врал
+## Why the dump lied
 
-Классификатор `validate_kaggle.py` был переписан 15.08 в **22:51**. Дамп снят в
-**22:40** — на одиннадцать минут раньше. Прежняя версия считала ошибки по всему
-ответу целиком и не отделяла «хвост» от «галлюцинации»: любые лишние id
-отправляли пример в брак вместе с законным префиксом.
+The `validate_kaggle.py` classifier was rewritten on 15.08 at **22:51**. The dump was
+captured at **22:40** — eleven minutes earlier. The previous version counted errors across
+the entire response and did not separate "tail" from "hallucination": any extra IDs
+threw the example into the scrap heap along with its legal prefix.
 
-Это самостоятельная ловушка, и она чуть не испортила весь дальнейший замер:
-сравнение нового прогона со старой цифрой «36%» дало бы прирост, наполовину
-состоящий из смены ярлыков. Поэтому в `docs/RUNBOOK_EOS.md` шаг 0 — перезамер
-существующего адаптера текущим кодом, без обучения.
+That is a trap in its own right, and it nearly ruined all subsequent benchmarking:
+comparing a new run against the old "36%" number would have produced a gain half
+composed of relabeling. That is why step 0 in `docs/RUNBOOK_EOS.md` is re-evaluating
+the existing adapter with the current code, without training.
 
-## Корневая причина
+## Root cause
 
-Рядом с весами лежит архивная копия скрипта обучения —
-`training/checkpoints/train_qlora.py` (14.08 18:57), та самая, которой адаптер
-и обучался (`train_meta.json` рядом нет, его пишет только новая версия). В ней:
+Next to the weights sits an archived copy of the training script —
+`training/checkpoints/train_qlora.py` (14.08 18:57), the exact one used to train the
+adapter (there is no `train_meta.json` beside it; only the new version writes one). In it:
 
 ```python
 rows.append({"text": row["prompt"] + "\n" + row["completion"]})
 ```
 
-Конца последовательности нет вообще. Модель 20 000 раз увидела примеры, которые
-ничем не заканчиваются, и выучила ровно это: после последней инструкции надо
-продолжать. На коротких графах она дописывала строки до «привычной» длины
-12–14 — отсюда и `n_graph=8, n_decoded=14`.
+There is no end-of-sequence token at all. The model saw 20,000 examples that never
+ended with anything, and learned exactly that: after the last instruction, keep going.
+On short graphs it kept writing lines up to the "habitual" length of 12–14 — hence
+`n_graph=8, n_decoded=14`.
 
-Никакой ошибки при этом не возникало. Обучение шло, loss падал, метрики
-считались. Дефект был в данных, а не в коде, и проявлялся только на инференсе.
+No error was raised during training. Training ran, loss dropped, metrics were computed.
+The defect was in the data, not the code, and only surfaced at inference time.
 
-## Три места, где EOS теряется молча
+## Three places where EOS is silently lost
 
-Разбор дал не одну поломку, а класс поломок. Все три чинятся, и все три
-теперь проверяются.
+The investigation uncovered not one failure, but a class of failures. All three are
+fixed, and all three are now checked.
 
-**1. Не приклеен к тексту.** Собственно исходный баг. Текущая версия
-`training/train_qlora.py` EOS приклеивает — но эта версия ни разу не
-участвовала в реальном обучении, она написана 15.08 22:52, уже после того, как
-адаптер был обучен. То есть починка существовала на диске и не была применена:
-цифра 36% измеряет модель, которой фикс не достался.
+**1. Not appended to the text.** The original bug itself. The current version of
+`training/train_qlora.py` appends EOS — but that version had never participated in
+an actual training run; it was written on 15.08 at 22:52, after the adapter had already
+been trained. In other words, the fix existed on disk and had never been applied:
+the 36% figure measures a model that never received the fix.
 
-**2. Приклеен, но замаскирован в labels.** `DataCollatorForLanguageModeling(mlm=False)`
-ставит `-100` везде, где встретился `pad_token_id`. У Qwen2.5 `pad` =
-`<|endoftext|>` (151643), `eos` = `<|im_end|>` (151645) — разные, поэтому сейчас
-EOS в loss попадает. Но строкой выше стоит:
+**2. Appended, but masked out in labels.** `DataCollatorForLanguageModeling(mlm=False)`
+sets `-100` everywhere `pad_token_id` appears. In Qwen2.5, `pad` =
+`<|endoftext|>` (151643) and `eos` = `<|im_end|>` (151645) — they differ, so EOS currently
+enters the loss. However, one line above sits:
 
 ```python
 if tok.pad_token is None:
     tok.pad_token = tok.eos_token
 ```
 
-На базе, где pad не задан, pad станет равен eos — и коллатор замаскирует конец
-каждого примера. `--base` меняется одним ключом, в докстринге четыре кандидата.
-EOS в тексте при этом виден глазами, а градиента на остановку нет.
+On a base model where `pad` is unset, `pad` becomes equal to `eos` — and the collator
+masks out the end of every example. `--base` is switched with a single flag, with four
+candidates in the docstring. EOS is visible to the naked eye in the text, yet there is
+zero gradient for stopping.
 
-Заменено на `CausalCollator`: маска берётся из `attention_mask`, а не по
-совпадению id. Какой токен выбран паддингом, больше не имеет значения.
+Replaced with `CausalCollator`: the mask is taken from `attention_mask`, not by ID
+equality. Which token is chosen as padding no longer matters.
 
-**3. Съеден лишним переводом строки.** Обучающий текст склеивается как
-`prompt + "\n" + completion + eos`. Внешний генератор, которым сделаны
-дополнительные 20 000 примеров, ставил `\n` в конце и промпта, и ответа — на
-стыке получилось бы `расписание:\n\n0: такт=...`, а EOS оказался бы после
-пустой строки. Поймано при сверке формата до слияния датасетов, в обучение не
-попало.
+**3. Eaten by an extra newline.** The training text is concatenated as
+`prompt + "\n" + completion + eos`. The external generator used to build the extra
+20,000 examples placed a trailing `\n` at the end of both the prompt and the completion —
+at the boundary that would have produced `расписание:\n\n0: такт=...`, and EOS would have
+landed after a blank line. Caught during format verification before merging the datasets;
+never entered training.
 
-## Что теперь мешает этому повториться
+## What now prevents this from recurring
 
-| защита | где | что ловит |
+| guard | where | what it catches |
 |---|---|---|
-| `check_eos()` печатает последний токен и его метку в labels | `training/train_qlora.py`, первые строки лога | все три случая сразу, до начала обучения |
-| ядро прогона глушит обучение, если самопроверка не прошла | `tools/kaggle_prep.py` | сожжённую впустую квоту GPU |
-| тесты на отсутствие завершающего `\n` — в кодировщике и в самих файлах датасетов | `tests/test_encode.py` | случай 3 |
-| `report_runs.py` пересчитывает ярлыки, а не верит дампу | `tools/report_runs.py` | сравнение классификаторов вместо моделей |
-| шаг 0 в прогоне — baseline тем же кодом | `docs/RUNBOOK_EOS.md` | тот же риск с другой стороны |
+| `check_eos()` prints the last token and its label in `labels` | `training/train_qlora.py`, first log lines | all three cases at once, before training starts |
+| the run kernel aborts training if the self-check fails | `tools/kaggle_prep.py` | wasted GPU quota |
+| tests for no trailing `\n` — in the encoder and in the dataset files themselves | `tests/test_encode.py` | case 3 |
+| `report_runs.py` recomputes labels instead of trusting the dump | `tools/report_runs.py` | comparing classifiers instead of models |
+| step 0 in the run is a baseline with the same code | `docs/RUNBOOK_EOS.md` | the same risk from the other side |
 
-Ожидаемая строка в логе обучения:
+Expected lines in the training log:
 
 ```
-EOS в конце каждого примера: '<|im_end|>'
-  последний токен примера: 151645 '<|im_end|>' (eos_token_id=151645, pad_token_id=151643)
-  EOS попадает в loss (labels != -100) — ОК
+EOS at the end of each example: '<|im_end|>'
+  last token of example: 151645 '<|im_end|>' (eos_token_id=151645, pad_token_id=151643)
+  EOS enters loss (labels != -100) — OK
 ```
 
-## Чего этот разбор НЕ доказывает
+## What this analysis does NOT prove
 
-Что после починки будет 84%. Потолок в 84% — это доля законных префиксов
-сейчас; предполагать, что все 24 хвоста вылечатся полностью и без побочных
-эффектов, оснований нет. Доучивание может сдвинуть и «сдвиг» с «ресурсом», в
-любую сторону. Цифра берётся из замера, а не из этого документа.
+That after the fix it will reach 84%. The 84% ceiling is the share of legal prefixes
+right now; there is no basis to assume all 24 tails will heal completely and without
+side effects. Further training can move "shift" and "resource" as well, in either
+direction. The number comes from measurement, not from this document.
 
-## Мораль
+## Moral
 
-Категория ошибок в отчёте — это гипотеза классификатора, а не факт. Прежде чем
-лечить «модель несёт чушь» данными и эпохами, стоит открыть сами ошибки и
-посмотреть, что в них написано: здесь между «нужно ещё 20 000 примеров» и
-«не приклеен один токен» разницы в отчёте не было никакой.
+An error category in a report is a classifier's hypothesis, not a fact. Before treating
+"the model outputs nonsense" with more data and epochs, open the errors themselves and
+read what they actually say: here, there was zero difference in the report between
+"we need 20,000 more examples" and "one token wasn't appended".

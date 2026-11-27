@@ -1,7 +1,7 @@
-"""Фичи узла для крошки-1 (priority). Только stdlib.
+"""Node features for Tiny-1 (priority). Pure stdlib.
 
-Фичи берутся из vliw.core: граф + модель машины + метрики (asap/height).
-Никакого текста и токенизатора: порядок учим по числам, а не по строкам.
+Features come from vliw.core: DAG + machine model + metrics (asap/height).
+No text or tokenizer: ordering is learned from numbers, not strings.
 """
 
 from __future__ import annotations
@@ -9,38 +9,39 @@ from __future__ import annotations
 from ..core.dag import DAG, DagBuilder, compute_metrics
 from ..core.model import MachineModel
 
-# Операции синтетического генератора (tools/vliw_gen.py, random_dag):
-# именно они встречаются в train_merged/eval_hard. Остальное (FADD, PRED,
-# PACK, ...) маппим в корзину "OTHER", чтобы крошка не падала на реальном
-# коде, а деградировала к height.
+# Operations from the synthetic generator (tools/vliw_gen.py, random_dag):
+# these appear in train_merged/eval_hard. Everything else (FADD, PRED,
+# PACK, ...) maps to the "OTHER" bucket so Tiny does not fail on real
+# code and gracefully degrades to height.
 SYNTH_OPS: tuple[str, ...] = ("ADD", "SUB", "MUL", "DIV", "AND", "SHL", "LOAD", "STORE")
 
 FEATURE_NAMES: tuple[str, ...] = (
     *[f"op_{o}" for o in SYNTH_OPS],  # 8 one-hot
-    "height_n",    # остаточный критпуть / max
-    "asap_n",      # ранний старт / (max+1)
-    "lat_n",       # латентность / 11 (DIV — макс. синтетики)
-    "occ_extra",   # occupancy-1 (0/1): держит ли порт монопольно
-    "nchan_n",     # число допустимых каналов / 6
-    "indeg_n",     # число предков / 2
-    "outdeg_n",    # число потомков / n
-    "is_div",      # монополист ,5 — главная ловушка (slotclash)
-    "is_store",    # узкая запись ,2 ,5 — вторая ловушка (memstream)
+    "height_n",    # remaining critical path / max
+    "asap_n",      # earliest start (ASAP) / (max+1)
+    "lat_n",       # latency / 11 (DIV is synthetic max)
+    "occ_extra",   # occupancy-1 (0/1): holds port exclusively
+    "nchan_n",     # number of valid channels / 6
+    "indeg_n",     # predecessor count / 2
+    "outdeg_n",    # successor count / n
+    "is_div",      # exclusive port ,5 — main trap (slotclash)
+    "is_store",    # narrow store ,2 ,5 — second trap (memstream)
 )
 
 N_FEATURES = len(FEATURE_NAMES)  # 18
 
 
 def parse_graph_entries(prompt: str) -> list[tuple[int, str, tuple[int, ...]]]:
-    """Строки 'ID OP <- preds' из промпта -> (id, op, preds).
+    """Parse 'ID OP <- preds' lines from prompt -> (id, op, preds).
 
-    Формат из training/encode.encode_prompt: шапка 'профиль:' + 'граф:',
-    дальше по строке на инструкцию, в конце 'расписание:'.
+    Format from training/encode.encode_prompt: header + graph lines,
+    one line per instruction, ending with schedule marker.
     """
     out: list[tuple[int, str, tuple[int, ...]]] = []
     for line in prompt.splitlines():
         line = line.strip()
-        if not line or line.startswith("профиль:") or line in ("граф:", "расписание:"):
+        if (not line or line.startswith(("profile:", "\u043f\u0440\u043e\u0444\u0438\u043b\u044c:"))
+                or line in ("graph:", "schedule:", "\u0433\u0440\u0430\u0444:", "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435:")):
             continue
         parts = line.split()
         try:
@@ -58,10 +59,10 @@ def parse_graph_entries(prompt: str) -> list[tuple[int, str, tuple[int, ...]]]:
 
 
 def transitive_succs(succs: list[tuple[int, ...]], n: int) -> list[frozenset]:
-    """Транзитивные потомки каждого узла (мемоизированный DFS, DAG без циклов).
+    """Transitive descendants of each node (memoized DFS, acyclic DAG).
 
-    Вынесено отдельно от featurize: нужно и правилу монопольного порта
-    (`scheduler.rule_holds`), и разборам проигрышей.
+    Kept separate from featurize: used by both the exclusive-port rule
+    (`scheduler.rule_holds`) and loss analysis.
     """
     memo: dict[int, frozenset] = {}
 
@@ -83,33 +84,33 @@ def transitive_succs(succs: list[tuple[int, ...]], n: int) -> list[frozenset]:
 
 
 def build_dag(entries: list[tuple[int, str, tuple[int, ...]]], key: str = "tmp") -> DAG:
-    """Собрать DAG из распарсенных строк (id обязаны идти подряд)."""
+    """Build a DAG from parsed rows (IDs must be consecutive)."""
     b = DagBuilder(key, "", "")
     for idx, op, preds in entries:
-        assert idx == len(b._instrs), f"id не подряд: {idx}"
+        assert idx == len(b._instrs), f"non-consecutive id: {idx}"
         b.op(op, f"n{idx}", *preds)
     return b.build()
 
 
 def parse_placements(completion: str) -> dict[int, tuple[int, int]]:
-    """'i: такт=c канал=ch' -> {id: (cycle, channel)}. Тот же шаблон, что
-    training/encode.decode_completion, но без импорта training-пакета."""
+    """Parse completion 'i: cycle=c channel=ch' -> {id: (cycle, channel)}.
+    Matches training/encode.decode_completion without importing training."""
     import re
     out: dict[int, tuple[int, int]] = {}
-    for m in re.finditer(r"(\d+):\s*такт=(\d+)\s*канал=(\d+)", completion):
+    for m in re.finditer(r"(\d+):\s*(?:cycle|\u0442\u0430\u043a\u0442)=(\d+)\s*(?:channel|\u043a\u0430\u043d\u0430\u043b)=(\d+)", completion):
         i, c, ch = (int(x) for x in m.groups())
         out[i] = (c, ch)
     return out
 
 
 def oracle_order(placements: dict[int, tuple[int, int]], n: int) -> list[int]:
-    """Порядок оракула: сортировка по (такт, канал). Совпадает с ключом
-    vliw/learned/portfolio.order_from_model — учим ровно то, что ест CAB."""
+    """Oracle ordering: sorted by (cycle, channel). Matches the key in
+    vliw/learned/portfolio.order_from_model — trains exactly what CAB consumes."""
     return sorted(range(n), key=lambda i: (placements[i][0], placements[i][1], i))
 
 
 def featurize(dag: DAG, model: MachineModel) -> list[list[float]]:
-    """DAG + модель -> матрица (n x 18) float. Чистый Python."""
+    """DAG + machine model -> (n x 18) float matrix. Pure Python."""
     from ..core.dag import compute_metrics as _cm
     metrics = _cm(dag, model)
     n = len(dag)
@@ -123,7 +124,7 @@ def featurize(dag: DAG, model: MachineModel) -> list[list[float]]:
         try:
             row[SYNTH_OPS.index(ins.op)] = 1.0
         except ValueError:
-            pass  # OTHER: все нули в one-hot — честная деградация
+            pass  # OTHER: all zeros in one-hot — clean degradation
         row[8] = (metrics.height[i] / max_h) if max_h else 0.0
         row[9] = (metrics.asap[i] / (max_a + 1)) if n else 0.0
         row[10] = model.latency(ins.op) / 11.0

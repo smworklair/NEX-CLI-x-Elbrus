@@ -1,19 +1,16 @@
-"""РАЗБОР — расписание, которое можно потрогать.
+"""LAB — interactive VLIW schedule explorer.
 
-Раньше расписание было картинкой в ленте: его печатали и листали. Здесь оно
-стало решёткой «такты x каналы», по которой ходит курсор, а панель под ней
-на каждое движение отвечает на один вопрос — почему эта операция оказалась
-именно здесь. Это и есть главный инструмент режима: не «посмотреть отчёт»,
-а разобраться.
+Instead of printing static schedule tables to a scroll log, LAB renders an
+interactive `cycles x channels` grid with cursor navigation and a live "WHY
+HERE" pane explaining why each operation landed where it did.
 
-Раскладка:
-    слева   участок (чипы сценариев), решётка, «почему здесь», вывод команд
-    справа  числа, диагноз, машина
+Layout:
+    left    BLOCK (scenario chips), SCHEDULE grid, GIT (command output)
+    right   NUMBERS, NEURAL NETS, WHY HERE, DIAGNOSIS, MACHINE
 
-Клавиатура делится честно: пока курсор в строке ввода, все клавиши — текст.
-F2 отдаёт клавиатуру решётке и возвращает обратно, а любая печатная
-клавиша в решётке сама возвращает вас в ввод и начинает набор. Esc в этот
-обмен не вмешивается: он везде значит «шаг назад».
+Keyboard sharing: while the prompt has focus, all keys type text; F2 toggles
+focus between the grid and prompt, and any unbound printable key in the grid
+returns focus to the prompt. Esc always steps back one level.
 """
 
 from __future__ import annotations
@@ -32,22 +29,16 @@ from .base import ModeScreen
 
 CONT = "│"
 EMPTY = "·"
-VIEWS = {"baseline": "baseline", "oracle": "оракул", "model": "модель"}
+VIEWS = {"baseline": "baseline", "oracle": "oracle", "model": "model"}
 
 
 def _takt(n: int) -> str:
-    """такт / такта / тактов — по числу.
-
-    Мелочь, но заголовок решётки читают чаще любой другой строки в
-    инструменте, и «23 тактов» там мозолит глаза каждый запуск.
-    """
-    if 11 <= n % 100 <= 14:
-        return "тактов"
-    return {1: "такт", 2: "такта", 3: "такта", 4: "такта"}.get(n % 10, "тактов")
+    """Return 'cycle' or 'cycles' for count `n`."""
+    return "cycle" if n == 1 else "cycles"
 
 
 def _wrapped(text: str, width: int, indent: int) -> str:
-    """Перенос с висячим отступом: продолжение находки не липнет к краю."""
+    """Wrap text with a hanging indent."""
     import textwrap
 
     pad = " " * indent
@@ -56,24 +47,10 @@ def _wrapped(text: str, width: int, indent: int) -> str:
 
 
 class ScheduleGrid(DataTable):
-    """Решётка расписания.
+    """Interactive schedule grid with single-key navigation and layer toggles."""
 
-    Пока решётка в фокусе, ОДНА буква = инструмент (n/N находки, [/]
-    операции, c цепочка, v вид, z/x/p/w слои, o журнал) — полный список
-    в правой колонке разворота. Остальные печатные клавиши, как и раньше,
-    возвращают фокус строке ввода и начинают набор: команды никуда не делись.
-    """
-
-    #: Клавиша → действие панели инструментов экрана. Те же идентификаторы,
-    #: что были у кнопок: один путь исполнения, две точки входа.
+    #: Key -> screen panel_tool action ID.
     TOOL_KEYS = {
-        # Имена действий здесь ОБЯЗАНЫ совпадать с теми, что разбирает
-        # panel_tool(). Раньше тут стояли "find-next"/"find-prev" — их не
-        # ждал никто: `grep find-next vliw/` находил ровно эту строку, и
-        # только её. Клавиши были мертвы, хотя полоса подсказок внизу
-        # экрана и колонка «клавиши» в развёрнутой РЕШЁТКЕ обещали их при
-        # каждом запуске. Та же работа делалась кнопками ДИАГНОЗА и
-        # командой `/find next` — то есть ломались именно клавиши.
         "n": "diag-next", "N": "diag-prev",
         "]": "op-next", "[": "op-prev",
         "c": "chain-step",
@@ -102,13 +79,7 @@ class ScheduleGrid(DataTable):
 
 
 class FindingItem(Static):
-    """Строка находки в развёрнутом ДИАГНОЗЕ.
-
-    Разворот этой панели — не панель покрупнее, а ДРУГОЙ инструмент: полный
-    список находок (без потолка top-5 обычного вида) и клик по любой сразу
-    ставит курсор решётки на нужную клетку и открывает РЕШЁТКУ — переход к
-    месту, а не пересказ того же текста крупным шрифтом.
-    """
+    """Clickable finding row in maximized DIAGNOSIS; jumps grid cursor to it."""
 
     class Picked(Message):
         def __init__(self, index: int) -> None:
@@ -125,14 +96,7 @@ class FindingItem(Static):
 
 
 class GridLink(Static):
-    """Мостик под решёткой обратно к развёрнутому ДИАГНОЗУ.
-
-    Живёт только когда РЕШЁТКА развёрнута: показывает находку про клетку под
-    курсором и по клику уводит в полный список находок, на неё же. Без этого
-    разворот решётки был бы тупиком — читаешь находку в заголовке, а вернуться
-    к её разбору можно только вручную сворачивая и снова разворачивая другую
-    панель.
-    """
+    """Bridge bar under maximized SCHEDULE jumping to the active finding in DIAGNOSIS."""
 
     class Picked(Message):
         pass
@@ -148,14 +112,7 @@ class GridLink(Static):
 
 
 class InstrLink(Static):
-    """Ссылка на операцию: клик переводит курсор решётки на её клетку.
-
-    Появилась потому, что развёрнутые панели говорят про операции, а показать
-    их могут только словами: «звено критического пути», «её ждала dc». Ссылка
-    делает то же, что ссылка в тексте, — переводит взгляд, а не пересказывает.
-    Панели она не унифицирует: у ЧИСЕЛ это цепочка предела, у «ПОЧЕМУ ЗДЕСЬ» —
-    соседи по графу, у МАШИНЫ клик вообще по строке таблицы.
-    """
+    """Clickable operation link that jumps the schedule grid cursor to its cell."""
 
     class Picked(Message):
         def __init__(self, instr: int) -> None:
@@ -173,18 +130,15 @@ class InstrLink(Static):
 
 class LabScreen(ModeScreen):
     mode = "lab"
-    mode_title = "РАЗБОР"
-    mode_subtitle = "исследование"
-    placeholder = "команда или вопрос"
-    hint = "«/» каталог   ·   ↑ история"
+    mode_title = "LAB"
+    mode_subtitle = "analysis"
+    placeholder = "command or question"
+    hint = "'/' catalog   ·   ↑ history"
     SIDE_ID = "#lab-right"
     TIPS_ID = "#p-scen"
 
     BINDINGS = ModeScreen.BINDINGS + [
-        # Не Esc: Esc теперь везде значит «шаг назад» и ничего больше.
-        # Переключение фокуса — это шаг ВНУТРЬ, противоположное действие, и
-        # вешать его на ту же клавишу значило делать её непредсказуемой.
-        ("f2", "swap_focus", "решётка <> ввод"),
+        ("f2", "swap_focus", "grid <> input"),
     ]
 
     def __init__(self, **kw) -> None:
@@ -195,34 +149,24 @@ class LabScreen(ModeScreen):
         self.met = None
         self.diverged: set[int] = set()
         self._cells: dict[tuple[int, int], int] = {}
-        # Живой прогон обученной модели. Решётка заполняется по событиям, по
-        # ходу генерации, и держит СЫРОЙ ответ модели — с незаконными
-        # клетками. Починка отдельным действием (`/repair`): иначе ошибка
-        # модели молча превращается в её же заслугу.
+        # Live trained-model schedule run (keeps raw output with illegal slots
+        # until the user explicitly runs `/repair`).
         self.model_sched = None
         self.model_note = ""
         self.model_repairs: list[tuple[int, int, int]] = []
-        # Куда поставить курсор при следующей отрисовке решётки. Нужно
-        # потому, что после команды экран перерисовывается ЕЩЁ РАЗ
-        # (`after_command` → `recompute` → `_compute_done`), и без этого
-        # найденная незаконная клетка теряется: прокрутка уезжает наверх.
+        # Target (cycle, port) to restore after async grid rebuilds.
         self._want_cell: tuple[int, int] | None = None
-        # ИИ, подключённый к курсору. `_cell_ai_token` — номер текущего
-        # запроса: любое движение курсора его увеличивает, и работающий
-        # запрос, увидев чужой номер, бросает генерацию на полуслове.
+        # Cursor-driven AI explanation state.
         self._detail_base: Text | None = None
         self._cell_ai_token = 0
         self._cell_ai_text = ""
-        self._cell_ai_state = ""        # "" | "ждёт" | "готово" | текст ошибки
+        self._cell_ai_state = ""        # "" | "waiting" | "ready" | error text
         self._cell_ai_on = True
         self._cell_ai_facts: list[str] = []
-        # Строка решётки больше не равна такту: простои схлопнуты в одну.
+        # Grid row map: ("cycle", c) or ("gap", start, end).
         self._rows: list[tuple] = []
         self._expanded_gaps: set[tuple[int, int]] = set()
-        # Разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима одного экрана, не
-        # панель покрупнее (см. docstring FindingItem/GridLink). Флаги здесь,
-        # а не в CSS-классе панели: рисование зависит от режима, а не только
-        # от размера.
+        # Per-panel maximized mode flags.
         self._diag_expanded = False
         self._grid_expanded = False
         self._numbers_expanded = False
@@ -231,40 +175,27 @@ class LabScreen(ModeScreen):
         self._console_expanded = False
         self._scen_expanded = False
         self._matrix_ops: list[str] = []
-        # Матрица МАШИНЫ — настоящая аналитика: сортировка кликом по любому
-        # столбцу и живой текстовый фильтр по имени операции, а не готовая
-        # таблица, которую только читают.
+        # Sort/filter state for maximized MACHINE matrix.
         self._matrix_sort_key = "cnt"
         self._matrix_sort_rev = True
         self._matrix_filter = ""
-        # Каталог УЧАСТКА — та же аналитика: сортировка по столбцу (в т.ч.
-        # «семья» вместо прежней зашитой группировки) и живой фильтр.
+        # Sort/filter state for maximized BLOCK catalog.
         self._scen_sort_key = "family"
         self._scen_sort_rev = False
         self._scen_filter = ""
         self._scen_keys: list[str] = []
         self._diag_filter = "all"      # all | high | medium | low | limit
-        self._find_pos = -1            # позиция в отфильтрованном списке
-        # Тумблеры развёрнутой решётки. «Все такты» отменяет схлопывание
-        # простоев (такт в строку), «крит. путь» гасит подсветку цепочки,
-        # «широкие» раздвигает клетки, «зависимости» тушит всё, кроме
-        # соседей курсорной операции по графу — все меняют ОТРИСОВКУ,
-        # поэтому живут рядом с ней.
+        self._find_pos = -1
+        # Schedule grid display toggles (x, p, w, z).
         self._all_cycles = False
         self._crit_on = True
         self._wide_cells = False
         self._deps_on = False
 
-    # --- раскладка --------------------------------------------------------
+    # --- layout -----------------------------------------------------------
 
     def compose(self):
-        """Каркас РАЗБОРА — свой, без дока ввода.
-
-        Командная строка живёт ВНУТРИ GIT одной строкой (с палитрой и
-        историей — это тот же PromptBar, только компактный): большая
-        нижняя полоса отбирала у решётки три строки всегда, а нужна была
-        раз в сотню нажатий. Снизу остаётся только полоса подсказок.
-        """
+        """LAB scaffold: embedded prompt inside GIT instead of a bottom dock."""
         yield TopBar(self.mode, self.mode_title, self.mode_subtitle, id="topbar")
         yield from self.compose_body()
         yield HintBar(id="hints")
@@ -276,32 +207,21 @@ class LabScreen(ModeScreen):
                             Vertical(
                                 Static(id="scen-head"),
                                 Horizontal(
-                                    Static("фильтр", id="scen-filter-label"),
-                                    Input(placeholder="имя, семья или "
-                                                       "описание",
+                                    Static("filter", id="scen-filter-label"),
+                                    Input(placeholder="name, family, or "
+                                                       "description",
                                           id="scen-filter"),
                                     id="scen-filter-row"),
                                 DataTable(id="scen-table", cursor_type="row",
                                          zebra_stripes=False),
                                 Static(id="scen-foot"),
                                 id="scen-wide"),
-                            title="УЧАСТОК", id="p-scen", topic="scen")
+                            title="BLOCK", id="p-scen", topic="scen")
                 yield Panel(
-                    # Развёрнутая решётка управляется КЛАВИАТУРОЙ, а не
-                    # кнопками: строка «тегов» над расписанием — это шум,
-                    # который дублирует подсказки и режется по краям.
-                    # Клавиши перечислены в правой колонке (КЛАВИШИ) и в
-                    # нижней полосе подсказок. Мышью по-прежнему работают
-                    # чипы вида и клики по клеткам/находкам.
                     Horizontal(
                         Horizontal(id="view-chips"),
                         Static("", id="grid-hud"),
                         id="grid-head"),
-                    # Master-detail разворота: решётка слева, инспектор
-                    # справа. Колонка видна только в развороте (CSS), и это
-                    # не «та же решётка крупнее», а ответ на главный вопрос
-                    # полноэкранного режима — «на что я смотрю?» — рядом с
-                    # самим объектом, а не в панели за три экрана отсюда.
                     Horizontal(
                         ScheduleGrid(id="grid", cursor_type="cell",
                                      zebra_stripes=False),
@@ -313,21 +233,18 @@ class LabScreen(ModeScreen):
                             id="grid-side"),
                         id="grid-main"),
                     GridLink(id="grid-link"),
-                    title="РАСПИСАНИЕ", id="p-grid", topic="grid")
+                    title="SCHEDULE", id="p-grid", topic="grid")
                 yield Panel(
                     PanelToolbar(
-                        ("~ повторить", "journal-repeat",
-                         "прогнать выбранный запуск заново (^R)"),
-                        ("очистить", "journal-wipe",
-                         "стереть историю git (^L)"),
-                        ("решётка >", "open-grid",
-                          "развернуть РАСПИСАНИЕ"),
+                        ("~ repeat", "journal-repeat",
+                         "re-run selected history entry (^R)"),
+                        ("clear", "journal-wipe",
+                         "clear git history (^L)"),
+                        ("grid >", "open-grid",
+                         "maximize SCHEDULE"),
                     ),
                     Console(id="console",
                             runs=self.app.session.journal_runs),
-                    # Командная строка — здесь, внутри GIT, а не большой
-                    # полосой внизу экрана. В развёрнутом журнале прячется:
-                    # у терминала своя строка, две одинаковых рядом — шум.
                     PromptBar(self.mode, self.placeholder,
                               list(self.app.commands) + self.extra_commands(),
                               hint=self.hint, id="prompt"),
@@ -338,9 +255,9 @@ class LabScreen(ModeScreen):
             with Vertical(id="lab-right"):
                 yield Panel(
                     PanelToolbar(
-                        ("решётка >", "open-grid", "развернуть РАСПИСАНИЕ"),
-                        ("диагноз >", "open-diag",
-                         "развернуть ДИАГНОЗ — все находки"),
+                        ("grid >", "open-grid", "maximize SCHEDULE"),
+                        ("diagnosis >", "open-diag",
+                         "maximize DIAGNOSIS — all findings"),
                     ),
                     Static(id="numbers"),
                     VerticalScroll(
@@ -348,68 +265,61 @@ class LabScreen(ModeScreen):
                         Vertical(id="numbers-chain"),
                         Static(id="numbers-res"),
                         id="numbers-why"),
-                    title="ЧИСЛА",
+                    title="NUMBERS",
                     id="p-numbers", topic="numbers")
                 yield Panel(
                     VerticalScroll(Static(id="ai-body"), id="ai-scroll"),
-                    title="НЕЙРОСЕТИ",
+                    title="NEURAL NETS",
                     id="p-ai", topic="ai")
                 yield Panel(
                     PanelToolbar(
-                        ("< операция", "op-prev",
-                         "курсор на предыдущую операцию расписания"),
-                        ("операция >", "op-next",
-                         "курсор на следующую операцию расписания"),
-                        # Дальше — чипы, которые на тесном экране прячутся
-                        # (класс tb-spare): остаются пара навигации и всё,
-                        # что влезает в одну строку. Сами действия никуда
-                        # не деваются — чипы возвращаются на ширине от 100.
-                        ("по цепочке >", "chain-step",
-                         "следующее звено критического пути", "tb-spare"),
-                        ("решётка >", "open-grid",
-                         "развернуть РАСПИСАНИЕ", "tb-spare"),
+                        ("< op", "op-prev",
+                         "jump cursor to previous scheduled op"),
+                        ("op >", "op-next",
+                         "jump cursor to next scheduled op"),
+                        ("chain >", "chain-step",
+                         "next op on critical path", "tb-spare"),
+                        ("grid >", "open-grid",
+                         "maximize SCHEDULE", "tb-spare"),
                     ),
-                    # Прокручиваемый разбор: ответ ИИ и длинные объяснения
-                    # не должны распирать панель и уносить МАШИНУ за нижний
-                    # край — правая колонка обязана помещаться целиком.
                     VerticalScroll(Static(id="detail"), id="detail-scroll"),
                     Horizontal(
                         Vertical(id="detail-preds"),
                         Vertical(id="detail-succs"),
                         id="detail-graph"),
-                    title="ПОЧЕМУ ЗДЕСЬ",
+                    title="WHY HERE",
                     id="p-detail", topic="detail")
                 yield Panel(
                     PanelToolbar(
-                        ("< пред.", "diag-prev", "предыдущая находка"),
-                        ("след. >", "diag-next", "следующая находка"),
-                        ("сброс фильтра", "/find filter all",
-                         "показать находки всех серьёзностей", "tb-spare"),
-                        ("решётка >", "show-active",
-                         "курсор на клетку активной находки", "tb-spare"),
+                        ("< prev", "diag-prev", "previous finding"),
+                        ("next >", "diag-next", "next finding"),
+                        ("reset filter", "/find filter all",
+                         "show findings of all severities", "tb-spare"),
+                        ("grid >", "show-active",
+                         "jump cursor to active finding cell", "tb-spare"),
                     ),
                     Horizontal(id="diag-filter"),
                     VerticalScroll(id="diag-scroll"),
-                    title="ДИАГНОЗ", id="p-diag", topic="diag")
+                    title="DIAGNOSIS", id="p-diag", topic="diag")
                 yield Panel(
                     PanelToolbar(
-                        ("по числу", "matrix-sort-cnt",
-                         "сортировать по числу операций в участке"),
-                        ("по латентности", "matrix-sort-lat",
-                         "сортировать по ожиданию операции"),
-                        ("решётка >", "open-grid",
-                         "развернуть РАСПИСАНИЕ", "tb-spare"),
+                        ("by count", "matrix-sort-cnt",
+                         "sort by op count in current block"),
+                        ("by latency", "matrix-sort-lat",
+                         "sort by operation latency"),
+                        ("grid >", "open-grid",
+                         "maximize SCHEDULE", "tb-spare"),
                     ),
                     Static(id="machine"),
                     Horizontal(
-                        Static("фильтр", id="machine-filter-label"),
-                        Input(placeholder="имя операции — часть строки",
+                        Static("filter", id="machine-filter-label"),
+                        Input(placeholder="op name substring",
                               id="machine-filter"),
                         id="machine-filter-row"),
                     DataTable(id="machine-matrix", cursor_type="row",
                               zebra_stripes=False),
                     Static(id="machine-foot"),
-                    title="МАШИНА",
+                    title="MACHINE",
                     id="p-machine", topic="machine")
 
     def on_ready(self) -> None:
@@ -424,12 +334,12 @@ class LabScreen(ModeScreen):
             return
         dim = palette.role_hex("dim")
         accent = palette.role_hex("lab")
-        con.write(Text("отчёты команд приходят сюда", style=dim))
+        con.write(Text("command reports appear here", style=dim))
         for cmd, note in (
-            ("/compare", "baseline и оракул бок о бок"),
-            ("/doctor", "где именно теряются такты"),
-            ("/asm", "расписание как широкие команды e2k { … }"),
-            ("/load examples/probe.s", "разобрать настоящий .s от lcc"),
+            ("/compare", "baseline and oracle side by side"),
+            ("/doctor", "where cycles are lost"),
+            ("/asm", "schedule as e2k wide instructions { … }"),
+            ("/load examples/probe.s", "analyze real .s assembly from lcc"),
         ):
             row = Text()
             row.append("  " + cmd.ljust(24), style=accent)
@@ -437,46 +347,28 @@ class LabScreen(ModeScreen):
             con.write(row)
 
     def hint_pairs(self):
-        out = [("F2", "решётка <> ввод"), ("↑↓←→", "по тактам"),
-               ("Enter", "разбор такта"), ("Esc", "назад")]
-        # Клавиши развёрнутой решётки — в общей полосе, пока она развёрнута.
+        out = [("F2", "grid <> input"), ("↑↓←→", "cycles"),
+               ("Enter", "explain cycle"), ("Esc", "back")]
         if self._grid_expanded:
-            out += [("n/N", "находки"), ("[/]", "операции"),
-                    ("c", "цепочка"), ("v", "вид"), ("z", "соседи"),
-                    ("d", "диагноз")]
+            out += [("n/N", "findings"), ("[/]", "ops"),
+                    ("c", "chain"), ("v", "view"), ("z", "neighbors"),
+                    ("d", "diagnosis")]
         return out
 
-    # --- спящие режимы: вторая строка шапки ---------------------------------
-    #
-    # Три экрана-режима уже читают ОДНУ сессию, но увидеть чужое состояние
-    # можно было только физически перейдя в чужой режим. Строка под шапкой
-    # отвечает «что происходит в ЯДРЕ, у АГЕНТА, в КОДЕ» прямо здесь — по
-    # одному короткому факту на режим, клик открывает его. Пилот живёт
-    # только в РАЗБОРЕ: приживётся — переедет в остальные шапки.
+    # --- dormant mode facts in second header line -------------------------
 
     def sleep_facts(self) -> list[tuple[str, str, str]]:
-        """Факты спящих режимов: (метка, текст, режим-адресат).
-
-        Факту нечего показать (граф пуст, вопросов не было, буфер пуст или
-        уже разобран) — кусок не рисуется вовсе: ни пустого места, ни
-        прочерка.
-        """
+        """Return `(label, summary, mode)` for dormant modes with active state."""
         out = []
-        for label, mode in (("ЯДРО", "work"), ("АГЕНТ", "mind"),
-                            ("КОД", "code")):
+        for label, mode in (("CORE", "work"), ("AGENT", "mind"),
+                            ("CODE", "code")):
             body = getattr(self, f"_sleep_{mode}")()
             if body:
                 out.append((label, body, mode))
         return out
 
     def _sleep_work(self) -> str | None:
-        """Сколько операций накопил интерпретатор и уехал ли граф в разбор.
-
-        «Передан» — текущий граф сессии и есть накопленный граф ядра;
-        граф не пуст, но сессия смотрит на другой (сценарий, .s, буфер) —
-        «не отправлен». Рабочую область создаём только если она уже есть:
-        индикатор не должен заводить её одним своим существованием.
-        """
+        """Report interpreter graph size and whether it is the active LAB block."""
         s = self.app.session
         ws = s._workspace
         if ws is None or ws.empty():
@@ -484,26 +376,24 @@ class LabScreen(ModeScreen):
         snap = ws.snapshot()
         sent = (s.dag_obj is not None and s.dag_obj.key == snap.key
                 and len(s.dag_obj) == len(snap))
-        return f"граф {len(snap)} оп., " + ("передан" if sent else "не отправлен")
+        return f"graph {len(snap)} ops, " + ("sent" if sent else "not sent")
 
     def _sleep_mind(self) -> str | None:
-        """Число вопросов, заданных агенту за сессию. Пусто — диалога не было."""
+        """Report number of questions asked in AGENT this session."""
         ag = self.app.session._agent
         if ag is None or not ag.history:
             return None
         n = len(ag.history)
-        return f"{n} {plural(n, 'вопрос', 'вопроса', 'вопросов')}"
+        return f"{n} {plural(n, 'question', 'questions', 'questions')}"
 
     def _sleep_code(self) -> str | None:
-        """Буфер КОДА правился после последнего разбора (/code run, F5)."""
+        """Report if CODE buffer was edited since the last `/code run` / F5."""
         s = self.app.session
         if not s.code_text.strip() or s.code_text == s.code_run_text:
             return None
-        return "буфер изменён, не разобран"
+        return "buffer edited, not run"
 
     def on_sleep_chip_goto(self, event: SleepChip.Goto) -> None:
-        """Клик по факту — открыть тот режим. Тот же путь перехода, что у
-        кнопок мостика журнала: `app.open_mode`."""
         event.stop()
         self.app.open_mode(event.mode)
 
@@ -516,31 +406,28 @@ class LabScreen(ModeScreen):
             pass
 
     def on_nex_input_pasted(self, event) -> None:
-        """Вставка кладёт текст в буфер КОДА — факт про КОД устарел сразу."""
         super().on_nex_input_pasted(event)
         self.refresh_context()
 
     def _pp_done(self, seconds: float, acted: bool = False) -> None:
         super()._pp_done(seconds, acted)
-        # Вопрос из всплывающей строки панели тоже растит историю АГЕНТА,
-        # даже если агент ничего не делал — счётчик обязан это заметить.
         self.refresh_context()
 
-    # --- чипы -------------------------------------------------------------
+    # --- chips ------------------------------------------------------------
 
     def _fill_chips(self) -> None:
         row = self.query_one("#view-chips", Horizontal)
-        row.mount(Static("вид", classes="chip-label"))
+        row.mount(Static("view", classes="chip-label"))
         for key, label in VIEWS.items():
             chip = Chip(label, f"/view {key}", classes="chip chip-view",
                         id=f"view-{key}")
-            chip.tooltip = "какое расписание показывать в решётке"
+            chip.tooltip = "select which schedule to show in the grid"
             row.mount(chip)
         grid = self.query_one("#scenario-chips", ItemGrid)
         for key in sorted(SCENARIOS):
             chip = Chip(key, f"/run {key}", classes="chip chip-scen",
                         id=f"scen-{key}")
-            chip.tooltip = "прогнать этот участок"
+            chip.tooltip = "run this block"
             grid.mount(chip)
         self._mark_view()
 
@@ -559,17 +446,17 @@ class LabScreen(ModeScreen):
             except Exception:
                 pass
 
-    # --- ввод -------------------------------------------------------------
+    # --- input ------------------------------------------------------------
 
     def extra_commands(self) -> list[dict]:
         return [
             {"name": "view", "arg": "[baseline|oracle|model]",
-             "help": "какое расписание в решётке", "local": True},
+             "help": "which schedule to show in the grid", "local": True},
             {"name": "repair", "arg": "",
-             "help": "переназначить незаконные каналы в ответе модели",
+             "help": "reassign illegal channels in model output",
              "local": True},
             {"name": "find", "arg": "[next|prev|filter <severity>]",
-             "help": "по находкам доктора — курсор к следующей/предыдущей",
+             "help": "jump cursor to next/previous doctor finding",
              "local": True},
         ]
 
@@ -587,16 +474,10 @@ class LabScreen(ModeScreen):
             return
         self.run_core(line)
 
-    # --- инструменты развёрнутых панелей -----------------------------------
-    #
-    # Разворот — не «та же панель крупнее», а рабочее место: у каждого
-    # развёрнутого блока своя полоса инструментов (см. compose_body) и свой
-    # разбор действий здесь. Слэш-команды уходят в общий путь handle_line,
-    # остальное — навигация и тумблеры отрисовки, которых в командах нет.
+    # --- maximized panel tools --------------------------------------------
 
     def panel_tool(self, tool: str) -> None:
         if tool in ("@lab", "@agent", "@work", "@code"):
-            # мостик журнала — общий
             return super().panel_tool(tool)
         if tool.startswith("/"):
             self.handle_line(tool)
@@ -651,13 +532,10 @@ class LabScreen(ModeScreen):
                                                                          True)
                 self._draw_machine_matrix()
         else:
-            # Незнакомый инструмент — общий путь (мостик «вернуть»,
-            # слэш-команды): молча проглотить его значило бы сломать
-            # кнопку во всех панелях сразу.
             super().panel_tool(tool)
 
     def _cursor_to_row(self, row: int, grid: ScheduleGrid | None = None) -> None:
-        """Курсор решётки — на строку такта/простоя, разбор следует за ним."""
+        """Move grid cursor to a cycle/gap row and refresh dependent panes."""
         if not self._rows:
             return
         grid = grid or self.query_one("#grid", ScheduleGrid)
@@ -670,64 +548,37 @@ class LabScreen(ModeScreen):
         self._update_grid_hud()
 
     def _toggle_all_cycles(self) -> None:
-        """«Все такты» (x): схлопнутые простои разворачиваются в строки.
-
-        Схлопывание — инструмент обзора: 52% строк slotclash — простой. Но
-        иногда нужен ПОСЛЕДОВАТЕЛЬНЫЙ вид: сверить с чужим дампом или
-        посчитать такты руками. Тумблер даёт оба вида, не теряя первого.
-        """
+        """Toggle collapsing idle gaps (`x`)."""
         self._all_cycles = not self._all_cycles
         self._redraw_grid_keep_cursor()
         self._draw_side()
 
     def _toggle_crit(self) -> None:
-        """«Крит. путь» (p): подсветку цепочки можно погасить.
-
-        Жирные имена критического пути — самый громкий акцент решётки; когда
-        разбираешь ресурсные находки, он спорит с ними за взгляд.
-        """
+        """Toggle critical-path highlighting (`p`)."""
         self._crit_on = not self._crit_on
         self._redraw_grid_keep_cursor()
 
     def _toggle_wide_cells(self) -> None:
-        """«Широкие» (w): клетки 11 → 17 колонок, имена не режутся до 7.
-
-        Узкие клетки — компромисс обычного вида, где решётка делит экран с
-        шестью панелями. В развороте места достаточно; обрезать «probe_lo…»,
-        когда рядом полпустого экрана, — значит дразнить.
-        """
+        """Toggle wide cells (`w`): 11 -> 17 columns so longer names fit."""
         self._wide_cells = not self._wide_cells
         self._redraw_grid_keep_cursor()
 
     def _toggle_deps(self) -> None:
-        """«Соседи» (z): светятся только соседи курсорной операции.
-
-        Прямые предки (кого она ждала) и прямые потомки (кто ждёт её) —
-        остальное тушится. Это ответ решётки на вопрос панели «ПОЧЕМУ
-        ЗДЕСЬ», но глазами: не текст про зависимости, а они сами, на местах.
-        Пересчитывается на каждом движении курсора, пока тумблер включён.
-        """
+        """Toggle neighbor dimming (`z`): highlight direct preds/succs only."""
         self._deps_on = not self._deps_on
-        self._last_deps_instr = None     # форс-перерисовка на новом курсоре
+        self._last_deps_instr = None
         self._redraw_grid_keep_cursor()
 
     @property
     def _cell_w(self) -> int:
-        """Ширина рабочей клетки: обычная и развёрнутая («широкие»)."""
         return 17 if self._wide_cells else 11
 
     def _cycle_of_row(self, row: int) -> int:
-        """Такт строки решётки (для строки простоя — первый такт отрезка)."""
         if 0 <= row < len(self._rows):
             return self._rows[row][1]
         return 0
 
     def _redraw_grid_keep_cursor(self) -> None:
-        """Перерисовать решётку, вернув курсор на ту же клетку.
-
-        Пересборка сбрасывает курсор в (0,0); без возврата любой тумблер
-        уносил бы взгляд в начало расписания.
-        """
         grid = self.query_one("#grid", ScheduleGrid)
         cur = grid.cursor_coordinate
         if 0 <= cur.row < len(self._rows):
@@ -735,73 +586,49 @@ class LabScreen(ModeScreen):
         self._draw_grid()
 
     def _cursor_relatives(self) -> set[int]:
-        """Прямые предки и потомки операции под курсором; пусто — нет её."""
+        """Direct predecessors and successors of the op under the cursor."""
         target = self._cursor_target()
-        if not target or target[0] != "такт" or target[3] is None:
+        if not target or target[0] != "cycle" or target[3] is None:
             return set()
         dag = self.app.session.dag_obj
         ins = dag[target[3]]
         return {target[3], *ins.preds, *dag.succs[target[3]]}
 
     def _sync_grid_tools(self) -> None:
-        """Состояние тумблеров теперь видно в правой колонке (КЛАВИШИ)."""
         self._draw_side()
 
     def _step_op(self, delta: int) -> None:
-        """Курсор — к следующей/предыдущей операции по номеру.
-
-        Операции в решётке идут не по номерам: порядок выдачи диктуют
-        зависимости и порты. Шаг по списку размещений — способ листать
-        программу подряд, не выискивая клетки глазами.
-        """
+        """Move grid cursor to the next/previous op by instruction ID."""
         instrs = sorted(set(self._cells.values()))
         if not instrs:
             return
         target = self._cursor_target()
-        cur = target[3] if target and target[0] == "такт" else None
+        cur = target[3] if target and target[0] == "cycle" else None
         idx = instrs.index(cur) if cur in instrs else -1 if delta > 0 else 0
         nxt = instrs[(idx + delta) % len(instrs)]
         if not self._jump_to_instr(nxt):
             self.app.bell()
 
     def _step_chain(self) -> None:
-        """Курсор — к следующему звену критического пути (по кругу)."""
+        """Move grid cursor to the next op along the critical path."""
         chain = self._critical_chain()
         if not chain:
             return
         target = self._cursor_target()
-        cur = target[3] if target and target[0] == "такт" else None
+        cur = target[3] if target and target[0] == "cycle" else None
         idx = chain.index(cur) if cur in chain else -1
         if not self._jump_to_instr(chain[(idx + 1) % len(chain)]):
             self.app.bell()
 
     def _open_panel(self, panel_id: str, topic: str) -> None:
-        """Развернуть другую панель поверх экрана, не теряя режимов.
-
-        Развёрнутые панели РАЗБОРА — режимы отрисовки (флаги _*_expanded),
-        а не просто размеры. Здесь они переключаются ЦЕЛИКОМ: прежняя
-        панель возвращается в обычный вид, новая получает свою полосу и
-        свои слои. Так раньше делали переходы находка<>решётка; теперь тот
-        же путь у инструментов каждой панели.
-        """
+        """Switch maximized view cleanly to another LAB panel."""
         for t in ("scen", "grid", "detail", "console",
                   "numbers", "diag", "machine"):
             setattr(self, f"_{t}_expanded", t == topic)
         self.screen.minimize()
         panel = self.query_one(panel_id, Panel)
         self.screen.maximize(panel, container=False)
-        # Сообщить о развороте ОБЯЗАТЕЛЬНО, а не только развернуть. Двойной
-        # клик шлёт Panel.Expanded, а этот путь звал maximize() напрямую —
-        # `_expanded_panel` оставался None, и всё, что на него смотрит,
-        # считало, что развёрнутого ничего нет. Видно было по Tab: после
-        # 2xклика справочник ИИ открывался, после клавиши `d` — нет, при
-        # свободных четырнадцати строках внизу. Побочно съедалось одно
-        # нажатие Esc: выйти из панели, развёрнутой клавишей, требовалось
-        # дважды.
         self.post_message(Panel.Expanded(panel))
-        # Перерисовать всё, чей режим мог смениться: флаги выше управляют
-        # тем, ЧТО рисуют методы draw_*, а вызовы после maximize() нужны те
-        # же, что делает on_panel_collapsed при обратном свёртывании.
         self._draw_journal()
         self._draw_scen_catalog()
         self._draw_diag()
@@ -811,31 +638,26 @@ class LabScreen(ModeScreen):
         self._draw_detail()
 
     def _repair_model(self) -> None:
-        """Переназначить незаконные каналы. Такты модели не трогаются.
-
-        Отдельным действием, а не автоматически: сырой ответ модели и
-        починенный гибрид — разные вещи, и подменять первое вторым молча
-        значит записывать на счёт модели чужую работу.
-        """
+        """Reassign illegal channels in model output without changing cycles."""
         con = self.console
         if self.model_sched is None or not self.model_sched.placements:
             if con is not None:
-                con.note("  чинить нечего: модель ещё не запускалась", "warning")
+                con.note("  nothing to repair: model has not run yet", "warning")
             return
         if not self.model_repairs:
             if con is not None:
-                con.note("  чинить нечего: незаконных каналов нет", "dim")
+                con.note("  nothing to repair: no illegal channels", "dim")
             return
         was = len(self._model_illegal())
         for i, _frm, to in self.model_repairs:
             p = self.model_sched.placements.get(i)
             if p is not None:
                 self.model_sched.place(i, p.cycle, to)
-        self.model_note = f"гибрид: починено каналов {len(self.model_repairs)}"
+        self.model_note = f"hybrid: repaired {len(self.model_repairs)} channels"
         self.model_repairs = []
         if con is not None:
-            con.note(f"  починено каналов: {was}  ·  такты модели не тронуты, "
-                     f"makespan её же", "success")
+            con.note(f"  repaired channels: {was}  ·  model cycles untouched, "
+                     f"makespan unchanged", "success")
         self.view = "model"
         self._mark_view()
         self._draw_model_grid()
@@ -846,7 +668,7 @@ class LabScreen(ModeScreen):
                 "модель": "model", "learned": "model"}.get(view, view)
         if view not in VIEWS:
             if self.console is not None:
-                self.console.note("  вид бывает baseline, oracle или model",
+                self.console.note("  view must be baseline, oracle, or model",
                                   "warning")
             return
         self.view = view
@@ -855,10 +677,9 @@ class LabScreen(ModeScreen):
         self._draw_grid()
         self._draw_detail()
 
-    # --- живой прогон модели ----------------------------------------------
+    # --- live model stream ------------------------------------------------
 
     def on_scheduler_text(self, text: str) -> None:
-        """Строка ответа модели — в вывод команд, по мере генерации."""
         con = self.console
         if con is not None:
             con.note("  " + text.replace("[end of text]", "").rstrip(), "dim")
@@ -870,11 +691,11 @@ class LabScreen(ModeScreen):
         con = self.console
         if isinstance(ev, Started):
             if ev.who != "learned":
-                return          # baseline и оракул решётку не перехватывают
+                return
             self._want_cell = None
             self.model_sched = Schedule(self.app.session.dag_obj,
                                         self.app.session.model())
-            self.model_note = "пишет…"
+            self.model_note = "generating…"
             self.model_repairs = []
             self.view = "model"
             self._mark_view()
@@ -887,32 +708,25 @@ class LabScreen(ModeScreen):
         if self.model_sched is None:
             return
         if isinstance(ev, Placed):
-            # Ставим ровно то, что написала модель, включая незаконное: это
-            # её ответ, и прятать его до вердикта значит прятать главное.
             p = ev.placement
             self.model_sched.place(p.instr, p.cycle, p.channel)
-            # Курсор идёт за моделью: панель «почему здесь» разбирает ровно
-            # ту операцию, которую модель только что поставила. Иначе на
-            # экране заполняется решётка, а разбор молчит про пустую клетку,
-            # на которой курсор стоял с самого начала.
             self._want_cell = (p.cycle, p.channel)
             self._draw_model_grid()
             self._draw_detail()
             self._draw_numbers()
             return
         if isinstance(ev, Repaired):
-            # Копим, но НЕ применяем: решение показывать сырое — осознанное.
             self.model_repairs.append((ev.instr, ev.frm, ev.to))
             return
         if isinstance(ev, Failed):
-            self.model_note = "не запустилась"
+            self.model_note = "failed to start"
             self._draw_model_grid()
             return
         if isinstance(ev, Done):
             self._model_done(ev.result)
 
     def _first_illegal_cell(self) -> tuple[int, int] | None:
-        """Самая ранняя незаконная клетка — (такт, порт)."""
+        """Return `(cycle, port)` of the earliest illegal model placement."""
         illegal = self._model_illegal()
         if not illegal or self.model_sched is None:
             return None
@@ -925,46 +739,33 @@ class LabScreen(ModeScreen):
         placed = len(self.model_sched.placements) if self.model_sched else 0
         total = len(self.app.session.dag_obj)
         if placed < total:
-            self.model_note = f"не разместила {total - placed}"
+            self.model_note = f"unplaced {total - placed}"
         elif illegal:
-            self.model_note = ""      # счётчик незаконных уже в заголовке
+            self.model_note = ""      # illegal count is already in the title
         else:
-            self.model_note = f"законно, {self.model_sched.makespan} т."
+            self.model_note = f"legal, {self.model_sched.makespan} cyc"
         self._draw_model_grid()
 
-        # Курсор сам встаёт на первую незаконную клетку — иначе главное
-        # оказывается ниже видимой области. Найдено по факту: на slotclash
-        # модель ошибается со STORE в такте 22 из 23, то есть в самой
-        # последней строке решётки. Заголовок честно писал «незаконных 1», а
-        # чтобы это увидеть, надо было пролистать двадцать два такта.
         cell = self._first_illegal_cell()
         con = self.console
         if cell is not None:
             self._want_cell = cell
-            self._draw_model_grid()          # перерисовать уже с курсором
+            self._draw_model_grid()
             if con is not None:
                 machine = self.app.session.model()
-                con.note(f"  незаконных каналов: {len(illegal)}  ·  первый: "
-                         f"такт {cell[0]}, порт {machine.port_label(cell[1])}"
-                         f"  —  курсор уже там", "warning")
+                con.note(f"  illegal channels: {len(illegal)}  ·  first: "
+                         f"cycle {cell[0]}, port {machine.port_label(cell[1])}"
+                         f"  —  cursor moved there", "warning")
         self._draw_detail()
         if con is not None and self.model_repairs:
-            con.note("  починить каналы, не трогая такты:  /repair", "warning")
+            con.note("  repair channels without changing cycles:  /repair",
+                     "warning")
 
     def panel_facts(self, topic: str) -> list[str]:
-        """Факты развёрнутой панели — они и уходят в модель.
-
-        Колонки чата сбоку в РАЗБОРЕ по-прежнему нет: она отбирала треть
-        ширины у решётки. Есть строка снизу, и спрашивают в ней про ту
-        панель, которая сейчас открыта, — поэтому факты собираются по теме,
-        а не «всё про сессию».
-
-        Курсорный разбор при этом никуда не делся: в НЕразвёрнутом РАЗБОРЕ
-        по-прежнему нет поля ввода, там отвечает курсор.
-        """
+        """Collect grounded facts for the active maximized panel."""
         s = self.app.session
-        base = [f"Участок {s.scenario}, {len(s.dag_obj)} операций, "
-                f"машина {s.model().name}."]
+        base = [f"Block {s.scenario}, {len(s.dag_obj)} ops, "
+                f"machine {s.model().name}."]
         if topic == "grid":
             return base + self._grid_facts()
         if topic == "diag":
@@ -977,181 +778,178 @@ class LabScreen(ModeScreen):
             return base + self._detail_facts()
         if topic == "scen":
             return base + [
-                f"Доступно участков: {len(SCENARIOS)}.",
-                "Список: " + ", ".join(sorted(SCENARIOS)) + ".",
-                f"Сейчас открыт {s.scenario}: "
+                f"Available blocks: {len(SCENARIOS)}.",
+                "List: " + ", ".join(sorted(SCENARIOS)) + ".",
+                f"Currently open: {s.scenario}: "
                 + (SCENARIOS[s.scenario].lesson or SCENARIOS[s.scenario].note
                    or "")]
         if topic == "console":
             con = self.query_one("#console", Console)
-            return base + [f"Коммитов в git сессии: {len(con.runs)}."] + \
-                [f"Была команда {r['cmd']} ({len(r['lines'])} строк вывода)."
+            return base + [f"Session git commits: {len(con.runs)}."] + \
+                [f"Ran {r['cmd']} ({len(r['lines'])} output lines)."
                  for r in con.runs[-6:]]
         return base
 
     def panel_chips(self, topic: str) -> list[str]:
-        """Готовые вопросы — свои у каждой панели, про то, что в ней видно."""
+        """Suggested questions tailored to each LAB panel."""
         return {
-            "grid": ["почему тут простой?",
-                     "какая операция держит расписание?",
-                     "что стоит на монопольном порту?"],
-            "diag": ["с какой находки начать?",
-                     "что из этого вообще можно отыграть?",
-                     "почему это не предел машины?"],
-            "numbers": ["почему предел именно такой?",
-                        "что держит критический путь?",
-                        "ресурсы или зависимости?"],
-            "machine": ["чем этот профиль отличается от обычного?",
-                        "что значит монопольный порт?",
-                        "почему div такой дорогой?"],
-            "detail": ["почему её нельзя выдать раньше?",
-                       "кого она задерживает?",
-                       "что будет, если её убрать?"],
-            "scen": ["какой участок разобрать следующим?",
-                     "чем этот участок отличается от соседнего?",
-                     "что тут вообще ломается?"],
-            "console": ["перескажи последний отчёт",
-                        "чем /doctor отличается от /compare?",
-                        "какую команду дать следующей?"],
+            "grid": ["why is there an idle gap here?",
+                     "which op is holding up the schedule?",
+                     "what is running on the exclusive port?"],
+            "diag": ["which finding should I tackle first?",
+                     "how many cycles are actually recoverable?",
+                     "why is this not a hardware limit?"],
+            "numbers": ["why is the lower bound this value?",
+                        "what holds up the critical path?",
+                        "is this bound by resources or dependencies?"],
+            "machine": ["how does this profile differ from default?",
+                        "what does exclusive port mean?",
+                        "why is div so expensive?"],
+            "detail": ["why can't this op issue earlier?",
+                       "which ops depend on it?",
+                       "what happens if we remove it?"],
+            "scen": ["which block should I inspect next?",
+                     "how does this block differ from its neighbor?",
+                     "what breaks in this block?"],
+            "console": ["summarize the last report",
+                        "how does /doctor differ from /compare?",
+                        "what command should I run next?"],
         }.get(topic, [])
 
     def _diag_facts(self) -> list[str]:
         out = []
         for f in self._findings()[:6]:
-            out.append(f"Находка: {f.title} ({f.where}), теряется "
-                       f"{f.cycles_lost} т., "
-                       f"{'можно отыграть' if f.recoverable else 'предел машины'}.")
-        return out or ["Находок нет: baseline уложился в предел."]
+            out.append(f"Finding: {f.title} ({f.where}), loses "
+                       f"{f.cycles_lost} cyc, "
+                       f"{'recoverable' if f.recoverable else 'machine bound'}.")
+        return out or ["No findings: baseline hits the lower bound."]
 
     def _numbers_facts(self) -> list[str]:
         if self.base is None or self.met is None:
-            return ["Расписание ещё не посчитано."]
+            return ["Schedule not computed yet."]
         m = self.met
-        out = [f"baseline {self.base.schedule.makespan} т., "
-               f"оракул {self.orc.schedule.makespan} т., "
-               f"нижняя граница {m.lower_bound} т. ({m.binding}).",
-               f"Критический путь {m.critical_path_bound} т., "
-               f"ресурсная граница {m.resource_bound} т."]
+        out = [f"baseline {self.base.schedule.makespan} cyc, "
+               f"oracle {self.orc.schedule.makespan} cyc, "
+               f"lower bound {m.lower_bound} cyc ({m.binding}).",
+               f"Critical path {m.critical_path_bound} cyc, "
+               f"resource bound {m.resource_bound} cyc."]
         dag = self.app.session.dag_obj
         chain = self._critical_chain()
         if chain:
-            out.append("Критический путь проходит через: "
+            out.append("Critical path passes through: "
                        + ", ".join(dag[i].name for i in chain[:8]) + ".")
         return out
 
     def _machine_facts(self) -> list[str]:
         model = self.app.session.model()
-        out = [f"Профиль {model.name}: {model.width} портов. "
-               f"Источник матрицы: {model.matrix_source}."]
+        out = [f"Profile {model.name}: {model.width} ports. "
+               f"Matrix source: {model.matrix_source}."]
         for port, ops in sorted(model.sole_host_ops().items()):
-            out.append(f"Порт {model.port_label(port)} — единственный "
-                       f"исполнитель для {', '.join(ops)}.")
+            out.append(f"Port {model.port_label(port)} is the sole "
+                       f"executor for {', '.join(ops)}.")
         for name in sorted(model.ops):
             op = model.ops[name]
-            out.append(f"{name}: латентность {op.latency} т."
-                       + (f", держит порт {op.occupancy} т." if
+            out.append(f"{name}: latency {op.latency} cyc"
+                       + (f", occupies port {op.occupancy} cyc" if
                           op.blocks_channel() else "")
-                       + f" (источник: {op.latency_source}).")
+                       + f" (source: {op.latency_source}).")
         return out[:10]
 
     def _detail_facts(self) -> list[str]:
         target = self._cursor_target()
-        if target is None or target[0] != "такт" or target[3] is None:
-            return ["Курсор не стоит на операции."]
+        if target is None or target[0] != "cycle" or target[3] is None:
+            return ["Cursor is not on an operation."]
         instr = target[3]
         dag, model = self.app.session.dag_obj, self.app.session.model()
         ins = dag[instr]
-        out = [f"Операция {ins.name}: {ins.text}, класс {ins.op}, "
-               f"латентность {model.latency(ins.op)} т."]
+        out = [f"Op {ins.name}: {ins.text}, class {ins.op}, "
+               f"latency {model.latency(ins.op)} cyc."]
         if self.met is not None:
             alap = self.met.critical_path_bound - self.met.height[instr]
-            out.append(f"Раньше такта {self.met.asap[instr]} не могла "
-                       f"(зависимости), позже такта {alap} нельзя без "
-                       f"удлинения расписания.")
+            out.append(f"Earliest cycle {self.met.asap[instr]} "
+                       f"(dependencies), latest {alap} without "
+                       f"lengthening the schedule.")
         if self.base is not None:
             pl = self.base.schedule.placements.get(instr)
             if pl:
-                out.append(f"Стоит в такте {pl.cycle} на порту "
+                out.append(f"Placed at cycle {pl.cycle} on port "
                            f"{model.port_label(pl.channel)}.")
-        out.append("Ждала: " + (", ".join(dag[i].name for i in ins.preds)
-                                or "никого"))
-        out.append("Держит: " + (", ".join(dag[i].name
+        out.append("Waited for: " + (", ".join(dag[i].name for i in ins.preds)
+                                     or "none"))
+        out.append("Blocks: " + (", ".join(dag[i].name
                                            for i in dag.succs[instr])
-                                 or "никого"))
+                                 or "none"))
         return out
 
     def _grid_facts(self) -> list[str]:
         s = self.app.session
-        out = [f"В решётке показан вид «{VIEWS.get(self.view, self.view)}»: "
-               f"такты по вертикали, каналы (порты) по горизонтали."]
+        out = [f"Grid shows '{VIEWS.get(self.view, self.view)}' view: "
+               f"cycles vertically, channels (ports) horizontally."]
         if self.view == "model" and self.model_sched is not None:
             illegal = self._model_illegal()
-            out.append(f"Это СЫРОЙ ответ обученной модели, размещено "
-                       f"{len(self.model_sched.placements)} из {len(s.dag_obj)}.")
+            out.append(f"RAW trained-model output, placed "
+                       f"{len(self.model_sched.placements)} of {len(s.dag_obj)}.")
             if illegal:
                 dag, machine = s.dag_obj, s.model()
-                out.append(f"Незаконных размещений: {len(illegal)} "
-                           f"(канал не исполняет эту операцию).")
+                out.append(f"Illegal placements: {len(illegal)} "
+                           f"(channel does not support op).")
                 for i in sorted(illegal)[:4]:
                     p = self.model_sched.placements[i]
                     ok = ", ".join(machine.port_label(c)
                                    for c in machine.channels_for(dag[i].op))
-                    out.append(f"  {dag[i].op} #{i} поставлена на "
-                               f"{machine.port_label(p.channel)}, а исполняют "
-                               f"только {ok}.")
+                    out.append(f"  {dag[i].op} #{i} placed on "
+                               f"{machine.port_label(p.channel)}, valid ports: "
+                               f"{ok}.")
             else:
-                out.append("Незаконных размещений нет.")
+                out.append("No illegal placements.")
             return out
         res = self._result
         if res is None:
-            return out + ["Расписание ещё не посчитано — нужна команда /run."]
+            return out + ["Schedule not computed yet — run /run."]
         sch = res.schedule
-        out.append(f"Выдача занимает {sch.span_cycles} тактов, всё готово к "
-                   f"такту {sch.makespan}, слоты заняты на "
+        out.append(f"Issue spans {sch.span_cycles} cycles, completes at "
+                   f"cycle {sch.makespan}, slot utilization "
                    f"{sch.slot_utilization:.0%}.")
         empty = [c for c in range(sch.span_cycles)
                  if not any(p.cycle == c for p in sch.placements.values())]
         if empty:
-            out.append(f"Полностью пустых тактов: {len(empty)} "
-                       f"(например, {', '.join('т.' + str(c) for c in empty[:6])}).")
+            out.append(f"Completely empty cycles: {len(empty)} "
+                       f"(e.g., {', '.join('c' + str(c) for c in empty[:6])}).")
         return out
 
     def _cursor_facts(self) -> list[str]:
-        """Про клетку под курсором — то же, что видно в панели."""
+        """Collect concise facts about the cell or gap under the cursor."""
         s = self.app.session
         target = self._cursor_target()
         if target is None:
             return []
         machine, dag = s.model(), s.dag_obj
-        if target[0] == "простой":
+        if target[0] == "gap":
             f = self._gap_finding(target[1], target[2])
             if f is None:
                 return []
-            return [f"Простой {f.cycles_lost} т., {f.where}.", f.why, f.fix]
+            return [f"Idle gap {f.cycles_lost} cyc, {f.where}.", f.why, f.fix]
         _kind, cycle, port, instr = target
-        head = (f"Курсор стоит на такте {cycle}, порт "
-                f"{machine.port_label(port)} (вид «{VIEWS.get(self.view, self.view)}»).")
+        head = (f"Cursor at cycle {cycle}, port "
+                f"{machine.port_label(port)} ('{VIEWS.get(self.view, self.view)}' view).")
         if instr is None:
-            return [head, "В этой клетке ничего не выдано."]
+            return [head, "Nothing issued in this slot."]
         ins = dag[instr]
         allowed = ", ".join(machine.port_label(c)
                             for c in machine.channels_for(ins.op))
         out = [head,
-               f"Здесь операция {ins.op} «{ins.name}» (номер {instr}).",
-               f"{ins.op} исполняется на портах: {allowed}.",
-               f"Латентность {ins.op}: {machine.latency(ins.op)} т."]
+               f"Op {ins.op} '{ins.name}' (#{instr}).",
+               f"{ins.op} runs on ports: {allowed}.",
+               f"{ins.op} latency: {machine.latency(ins.op)} cyc."]
         if self.view == "model" and instr in self._model_illegal():
-            out.append("ЭТО РАЗМЕЩЕНИЕ НЕЗАКОННО: канал операцию не исполняет.")
+            out.append("ILLEGAL PLACEMENT: channel does not execute this op.")
         preds = list(dag[instr].preds)
         if preds:
-            out.append("Зависит от: "
-                       + ", ".join(f"{dag[p].op} «{dag[p].name}»" for p in preds[:5]))
+            out.append("Depends on: "
+                       + ", ".join(f"{dag[p].op} '{dag[p].name}'" for p in preds[:5]))
         return out
 
     def after_command(self) -> None:
-        # Журнал — раньше пересчёта: команда могла провалиться или ничего не
-        # менять в расписании (/doctor, /bounds), а её вывод в журнале должен
-        # появиться сразу, не дожидаясь recompute.
         self._draw_journal()
         self.recompute()
 
@@ -1177,12 +975,12 @@ class LabScreen(ModeScreen):
                 return
             grid.focus()
 
-    # --- счёт -------------------------------------------------------------
+    # --- scheduling worker ------------------------------------------------
 
     def recompute(self) -> None:
-        """Пересчитать расписания текущего участка (в отдельном потоке)."""
+        """Recompute schedules for the current block on a background thread."""
         self.set_busy(True)
-        self._blank_grid("считаю расписание…")
+        self._blank_grid("computing schedule…")
         self.run_worker(self._compute, thread=True, exclusive=True, group="lab")
 
     def _compute(self) -> None:
@@ -1200,7 +998,7 @@ class LabScreen(ModeScreen):
 
     def _compute_failed(self, msg: str) -> None:
         self.set_busy(False)
-        self._blank_grid(f"не посчиталось: {msg}")
+        self._blank_grid(f"failed: {msg}")
 
     def _compute_done(self, base, orc, met, hints=None) -> None:
         self.base, self.orc, self.met = base, orc, met
@@ -1222,19 +1020,19 @@ class LabScreen(ModeScreen):
         self._draw_grid_link()
         self.refresh_context()
 
-    # --- решётка ----------------------------------------------------------
+    # --- schedule grid ----------------------------------------------------
 
     @property
     def _result(self):
         if self.view == "model":
-            return None          # у живого прогона модели нет SchedulingResult
+            return None
         return self.orc if self.view == "oracle" else self.base
 
     def _blank_grid(self, note: str) -> None:
         grid = self.query_one("#grid", ScheduleGrid)
         grid.clear(columns=True)
         grid.add_column(note, width=40)
-        self.query_one("#p-grid", Panel).set_title("РАСПИСАНИЕ")
+        self.query_one("#p-grid", Panel).set_title("SCHEDULE")
         try:
             self.query_one("#grid-hud", Static).update(Text("", justify="right"))
         except Exception:
@@ -1250,27 +1048,18 @@ class LabScreen(ModeScreen):
             return
         sched = res.schedule
         span = max(sched.span_cycles, 1)
-        # Выдача и готовность — разные числа: последнее деление считается ещё
-        # долго после того, как его выдали. В решётке видна выдача, поэтому
-        # обе величины стоят в заголовке рядом, чтобы их не путать.
         if span == sched.makespan:
-            title = (f"РАСПИСАНИЕ   {VIEWS[self.view]}   "
+            title = (f"SCHEDULE   {VIEWS[self.view]}   "
                      f"{sched.makespan} {_takt(sched.makespan)}")
         else:
-            title = (f"РАСПИСАНИЕ   {VIEWS[self.view]}   выдача {span} т."
-                     f"   ·   всё готово к т.{sched.makespan}")
+            title = (f"SCHEDULE   {VIEWS[self.view]}   issue {span} cyc"
+                     f"   ·   ready at c{sched.makespan}")
         if self.view == "oracle" and res.optimal:
-            title += "   ·   оптимум доказан"
+            title += "   ·   optimum proven"
         self._render_grid(sched, title)
 
     def _model_illegal(self) -> frozenset[int]:
-        """Клетки, где канал не исполняет свою операцию.
-
-        Это НЕ придирка к оформлению: 85% ошибок «ресурс» у прогона 1 —
-        STORE, поставленный на канал `,0`, который его не исполняет
-        (см. docs/archive/ROADMAP.md). Красные клетки показывают это глазами, вместо
-        строчки «нарушений 3» в конце отчёта.
-        """
+        """Return instruction IDs placed on channels that cannot execute them."""
         sched = self.model_sched
         if sched is None:
             return frozenset()
@@ -1284,41 +1073,26 @@ class LabScreen(ModeScreen):
         sched = self.model_sched
         if sched is None or not sched.placements:
             self._blank_grid(self.model_note
-                             or "модель ещё не запускалась  —  /learned")
+                             or "model has not run yet  —  /learned")
             return
         dag = self.app.session.dag_obj
         illegal = self._model_illegal()
-        title = (f"РАСПИСАНИЕ   модель   "
-                 f"размещено {len(sched.placements)}/{len(dag)}")
+        title = (f"SCHEDULE   model   "
+                 f"placed {len(sched.placements)}/{len(dag)}")
         if illegal:
-            title += f"   ·   незаконных {len(illegal)}"
+            title += f"   ·   illegal {len(illegal)}"
         if self.model_note:
             title += f"   ·   {self.model_note}"
         if len(sched.placements) == len(dag) and not illegal and not self.model_note:
-            title += f"   ·   {sched.makespan} тактов"
+            title += f"   ·   {sched.makespan} {_takt(sched.makespan)}"
         self._render_grid(sched, title, illegal)
 
     MIN_GAP = 3
-    """Со скольких подряд пустых тактов простой схлопывается в одну строку.
-
-    Три — не круглое число, а порог доктора: короче трёх он простой находкой
-    и не считает (`_rule_idle_stretches`). Пороги должны совпадать, иначе
-    решётка схлопывает то, чего диагноз не объясняет.
-    """
+    """Minimum consecutive empty cycles collapsed into one gap row (matches
+    doctor's `_rule_idle_stretches` threshold)."""
 
     def _gaps(self, sched) -> list[tuple[int, int]]:
-        """Отрезки тактов без единой выдачи: [(первый, последний), …].
-
-        ЗАЧЕМ ЭТО ВООБЩЕ. Замерено по всем сценариям: пустые такты занимают
-        от 23% до 69% строк решётки (simple4 — 69%, ptrchase — 62%,
-        slotclash — 52%). До сих пор через них приходилось скроллить, а
-        объяснение простоя лежало в панели ДИАГНОЗ, то есть в другом месте
-        экрана и другими словами.
-
-        При этом простой — не пустое место, а ГЛАВНОЕ, что показывает
-        инструмент: именно там теряются такты. Двенадцать одинаковых пустых
-        строк прячут находку ровно тем, что показывают её слишком подробно.
-        """
+        """Return contiguous idle stretches `[(start, end), ...]` >= MIN_GAP."""
         used = {p.cycle for p in sched.placements.values()}
         out: list[tuple[int, int]] = []
         span = max(sched.span_cycles, 1)
@@ -1335,9 +1109,10 @@ class LabScreen(ModeScreen):
         return out
 
     def _gap_finding(self, start: int, end: int):
-        """Находка доктора про этот простой — источник объяснения."""
+        """Return the doctor idle-stall finding matching `[start, end]`."""
         for f in self._findings():
-            if f.code == "idle-stall" and f.where == f"такты {start}–{end}":
+            if f.code == "idle-stall" and f.where in (
+                    f"такты {start}–{end}", f"cycles {start}–{end}", f"cycles {start}-{end}"):
                 return f
         return None
 
@@ -1355,7 +1130,6 @@ class LabScreen(ModeScreen):
     SEVERITIES = ("all", "high", "medium", "low", "limit")
 
     def _filtered_findings(self):
-        """Находки по текущему фильтру — тот же порядок, что отдал доктор."""
         findings = self._findings()
         if self._diag_filter == "all":
             return findings
@@ -1365,19 +1139,14 @@ class LabScreen(ModeScreen):
                 if f.kind != "limit" and f.severity == self._diag_filter]
 
     def _cmd_find(self, arg: str) -> None:
-        """`/find` — курсор к следующей находке, `filter` — сузить список.
-
-        Работает независимо от того, развёрнут ли ДИАГНОЗ: находка та же, что
-        подсвечена под курсором в решётке, только двигает её сама команда, а
-        не мышь.
-        """
+        """`/find` — jump to next/prev finding, or `filter <severity>`."""
         parts = arg.split()
         con = self.console
         if parts and parts[0] == "filter":
             sev = parts[1] if len(parts) > 1 else "all"
             if sev not in self.SEVERITIES:
                 if con is not None:
-                    con.note(f"  фильтр: {', '.join(self.SEVERITIES)}", "warning")
+                    con.note(f"  filter: {', '.join(self.SEVERITIES)}", "warning")
                 return
             self._diag_filter = sev
             self._find_pos = -1
@@ -1386,21 +1155,17 @@ class LabScreen(ModeScreen):
         findings = self._filtered_findings()
         if not findings:
             if con is not None:
-                con.note("  находок нет — /find filter all", "dim")
+                con.note("  no findings — /find filter all", "dim")
             return
         delta = -1 if parts and parts[0] == "prev" else 1
         self._find_pos = (self._find_pos + delta) % len(findings)
         self._jump_to_finding(findings[self._find_pos])
 
     def _jump_to_finding(self, f) -> None:
-        """Ставит курсор решётки на клетку (или простой), к которой находка.
-
-        Единственное место, которое переводит находку доктора в координаты
-        решётки — им пользуются и `/find`, и клик по строке в развёрнутом
-        ДИАГНОЗЕ, и обратная ссылка из развёрнутой РЕШЁТКИ.
-        """
+        """Move the grid cursor to the cell or gap referenced by finding `f`."""
         if f.code == "idle-stall":
-            start = int(f.where.replace("такты ", "").split("–")[0])
+            raw = f.where.replace("такты ", "").replace("cycles ", "")
+            start = int(raw.replace("–", "-").split("-")[0])
             row, col = self._row_of_cycle(start), 0
         elif f.instrs:
             pos = next((rc for rc, i in self._cells.items() if i == f.instrs[0]),
@@ -1425,11 +1190,6 @@ class LabScreen(ModeScreen):
         grid = self.query_one("#grid", ScheduleGrid)
         grid.clear(columns=True)
         busy = sched.busy_map()
-        # Порты, на которые за всё расписание не встало ни одной операции.
-        # На slotclash таких три из шести: они занимали половину ширины
-        # решётки и не несли ничего, кроме точек. Сужаем до метки — простой
-        # порта остаётся видимым (это те же 9% занятости слотов, только по
-        # горизонтали), но перестаёт отбирать место у рабочих колонок.
         used_ports = {p.channel for p in sched.placements.values()}
         cw = self._cell_w
         for p in range(model.width):
@@ -1439,18 +1199,11 @@ class LabScreen(ModeScreen):
             grid.add_column(label, width=4 if idle else cw, key=str(p))
 
         crit = self._critical_set() if self._crit_on else set()
-        # «Соседи» (z): пока тумблер включён, всё, что не курсор и не его
-        # прямые предки/потомки, рисуется притушенным. None — слой выключен.
         rels = self._cursor_relatives() if self._deps_on else None
         self._cells = {}
-        # Строка решётки больше НЕ равна такту: простои схлопнуты. Список
-        # переводит номер строки обратно — ("такт", n) или ("простой", a, b).
         self._rows = []
         span = max(sched.span_cycles, 1)
         if self._all_cycles:
-            # «Все такты»: схлопывание отменено, простой — просто пустой
-            # такт. Порог MIN_GAP здесь не работает: тумблер и есть способ
-            # увидеть то, что он прячет.
             gaps = {}
         else:
             gaps = {a: b for a, b in self._gaps(sched)
@@ -1462,7 +1215,7 @@ class LabScreen(ModeScreen):
                 end = gaps[cycle]
                 grid.add_row(*self._gap_cells(cycle, end, model.width),
                              label=self._gap_label(cycle, end))
-                self._rows.append(("простой", cycle, end))
+                self._rows.append(("gap", cycle, end))
                 cycle = end + 1
                 continue
             row = len(self._rows)
@@ -1486,7 +1239,7 @@ class LabScreen(ModeScreen):
                 cells.append(self._cell_text(dag, instr, crit,
                                              instr in illegal, related=rel))
             grid.add_row(*cells, label=self._row_label(cycle, issued, model.width))
-            self._rows.append(("такт", cycle))
+            self._rows.append(("cycle", cycle))
             cycle += 1
 
         self.query_one("#p-grid", Panel).set_title(title)
@@ -1498,12 +1251,7 @@ class LabScreen(ModeScreen):
         self._draw_side()
 
     def _update_grid_hud(self) -> None:
-        """Живой счёт справа от переключателя вида.
-
-        Решётка — главный блок экрана, и её состояние должно читаться, не
-        открывая ЧИСЛА: сколько тактов занимает выдача, как заняты слоты и
-        где стоит курсор. Пустая строка — когда считать ещё нечего.
-        """
+        """Live makespan, slot utilization, and cursor coordinate readout."""
         try:
             hud = self.query_one("#grid-hud", Static)
         except Exception:
@@ -1516,35 +1264,29 @@ class LabScreen(ModeScreen):
                 and self.model_sched.placements:
             dag = self.app.session.dag_obj
             illegal = self._model_illegal()
-            t.append(f"{len(self.model_sched.placements)}/{len(dag)} оп.",
+            t.append(f"{len(self.model_sched.placements)}/{len(dag)} ops",
                      style=dim)
             if illegal:
-                t.append(f"   незаконных {len(illegal)}",
+                t.append(f"   illegal {len(illegal)}",
                          style=palette.role_hex("error"))
         elif self.base is not None:
             sched = (self.orc if self.view == "oracle" else self.base).schedule
             util = sched.slot_utilization
             t.append(f"{sched.makespan} {_takt(sched.makespan)}"
-                     f"   ·   слоты {util:.0%}", style=dim)
+                     f"   ·   slots {util:.0%}", style=dim)
         target = self._cursor_target()
-        if target is not None and target[0] == "такт":
-            machine = self.app.session.model()
-            cell = f"т.{target[1]} ,{target[2]}"
+        if target is not None and target[0] == "cycle":
+            cell = f"c{target[1]} ,{target[2]}"
             name = self.app.session.dag_obj[target[3]].name \
                 if target[3] is not None else ""
             t.append(f"   ·   {cell}"
                      + (f"  {name}" if name else ""),
                      style=warn if name else faint)
         elif self.view == "model":
-            t.append("   ·   модель не запускалась — /learned", style=faint)
+            t.append("   ·   model not run — /learned", style=faint)
         hud.update(t)
 
-    # --- правая колонка разворота ------------------------------------------
-    #
-    # Разворот решётки — не «та же решётка крупнее»: справа появляется
-    # инспектор, который отвечает на вопрос «на что я смотрю?» без хождения
-    # по свёрнутым панелям. Четыре блока: состояние слоёв и курсор, находка,
-    # занятость каналов, легенда с клавишами.
+    # --- maximized grid right-side inspector ------------------------------
 
     def _draw_side(self) -> None:
         try:
@@ -1560,22 +1302,22 @@ class LabScreen(ModeScreen):
         accent = palette.role_hex("accent")
 
         def mark(on: bool) -> Text:
-            return Text("вкл" if on else "выкл",
+            return Text("on" if on else "off",
                         style=palette.role_hex("success" if on else "faint"))
 
-        # --- слои + курсор -------------------------------------------------
+        # --- layers + cursor ---
         t = Text()
-        t.append_text(self._section("курсор"))
+        t.append_text(self._section("cursor"))
         t.append("\n")
-        t.append("z соседи ", style=dim); t.append_text(mark(self._deps_on))
-        t.append("  ·  x такты ", style=dim); t.append_text(mark(self._all_cycles))
+        t.append("z deps   ", style=dim); t.append_text(mark(self._deps_on))
+        t.append("  ·  x cycles ", style=dim); t.append_text(mark(self._all_cycles))
         t.append("\n")
-        t.append("p путь   ", style=dim); t.append_text(mark(self._crit_on))
-        t.append("  ·  w широко ", style=dim); t.append_text(mark(self._wide_cells))
+        t.append("p path   ", style=dim); t.append_text(mark(self._crit_on))
+        t.append("  ·  w wide   ", style=dim); t.append_text(mark(self._wide_cells))
         t.append("\n\n")
         facts = self._cursor_facts()
         if not facts:
-            t.append("решётка ещё пуста", style=faint)
+            t.append("grid is empty", style=faint)
         for i, line in enumerate(facts):
             if i:
                 t.append("\n")
@@ -1584,16 +1326,16 @@ class LabScreen(ModeScreen):
                      else dim)
         cursor.update(t)
 
-        # --- находка -------------------------------------------------------
+        # --- finding ---
         f = self._active_finding()
         tf = Text()
-        tf.append_text(self._section("находка",
-                                     "" if f is not None else "чисто"))
+        tf.append_text(self._section("finding",
+                                     "" if f is not None else "clean"))
         tf.append("\n\n")
         if f is None:
-            tf.append("под курсором нет проблем доктора", style=faint)
+            tf.append("no doctor findings under cursor", style=faint)
         else:
-            head = f"-{f.cycles_lost} т. "
+            head = f"-{f.cycles_lost} cyc "
             tf.append(head, style=palette.role_hex(
                 "dim" if f.kind == "limit" else "error"))
             tf.append(_wrapped(f.title, 36, len(head)),
@@ -1606,14 +1348,14 @@ class LabScreen(ModeScreen):
                           style=palette.role_hex("success"))
         finding.update(tf)
 
-        # --- занятость каналов ----------------------------------------------
+        # --- channel utilization ---
         tp = Text()
-        tp.append_text(self._section("каналы"))
+        tp.append_text(self._section("channels"))
         tp.append("\n\n")
         model = self.app.session.model()
         res = None if self.view == "model" else self._result
         if res is None:
-            tp.append("вид «модель» — счёт по завершении прогона", style=faint)
+            tp.append("model view — computed after run finishes", style=faint)
         else:
             busy = res.schedule.busy_map()
             span = max(res.schedule.makespan, 1)
@@ -1631,73 +1373,60 @@ class LabScreen(ModeScreen):
                 tp.append("·" * (14 - bar_w), style=faint)
                 tp.append(f" {held:>3}", style=title if held else faint)
                 if held == worst and held:
-                    tp.append(" держит", style=accent)
+                    tp.append(" bottle", style=accent)
                 tp.append("\n")
         ports.update(tp)
 
-        # --- клавиши + легенда -----------------------------------------------
+        # --- keys + legend ---
         tl = Text()
-        tl.append_text(self._section("клавиши"))
+        tl.append_text(self._section("keys"))
         tl.append("\n\n")
         for key, what in (
-                ("n / N", "находка вперёд / назад"),
-                ("[ / ]", "операция вперёд / назад"),
-                ("c", "звено критического пути"),
-                ("v", "вид: baseline <> оракул"),
-                ("z x p w", "слои — как помечено выше"),
-                ("d", "диагноз: все находки списком"),
-                ("o", "развернуть git сессии"),
+                ("n / N", "next / prev finding"),
+                ("[ / ]", "prev / next op"),
+                ("c", "next critical-path op"),
+                ("v", "view: baseline <> oracle"),
+                ("z x p w", "layers — toggled above"),
+                ("d", "diagnosis: full findings list"),
+                ("o", "maximize session git"),
         ):
             tl.append("  ")
             tl.append(key.ljust(8), style=f"{accent} bold")
             tl.append(what, style=dim)
             tl.append("\n")
         tl.append("\n")
-        tl.append_text(self._section("метки"))
+        tl.append_text(self._section("marks"))
         tl.append("\n\n")
-        tl.append("  > разошлась с оракулом\n", style=palette.role_hex("diverge"))
-        tl.append("  жирное имя — критический путь\n",
+        tl.append("  > differs from oracle\n", style=palette.role_hex("diverge"))
+        tl.append("  bold name — critical path\n",
                   style=f"{title} bold")
-        tl.append("  - канал не исполняет операцию\n",
+        tl.append("  - channel cannot run op\n",
                   style=palette.role_hex("error"))
-        tl.append("  ─── простой >= 3 тактов\n", style=faint)
-        tl.append("  _▄█ загрузка строки такта", style=dim)
+        tl.append("  ─── idle gap >= 3 cycles\n", style=faint)
+        tl.append("  _▄█ cycle slot load", style=dim)
         legend.update(tl)
 
     def _row_of_cycle(self, cycle: int) -> int:
-        """Номер строки, в которой виден этот такт (или его простой)."""
+        """Return grid row index displaying `cycle` (or its collapsed gap)."""
         for i, r in enumerate(self._rows):
-            if r[0] == "такт" and r[1] == cycle:
+            if r[0] == "cycle" and r[1] == cycle:
                 return i
-            if r[0] == "простой" and r[1] <= cycle <= r[2]:
+            if r[0] == "gap" and r[1] <= cycle <= r[2]:
                 return i
         return 0
 
     def _gap_cells(self, start: int, end: int, width: int) -> list[Text]:
-        """Строка простоя: сплошная черта вместо точек «слот пуст».
-
-        Разница видна боковым зрением и означает ровно то, что произошло:
-        не «здесь ничего не выдали в этот такт», а «здесь не выдавали
-        несколько тактов подряд». Длина — по текущей ширине клетки.
-        """
+        """Collapsed idle-gap row: solid rule instead of empty-slot dots."""
         style = palette.role_hex("faint")
         line = " " + "─" * (self._cell_w - 2)
         return [Text(line, style=style) for _ in range(width)]
 
     def _active_finding(self):
-        """Находка доктора, к которой относится клетка под курсором.
-
-        Связь, которой не было: ДИАГНОЗ говорит «монопольный порт ,5 занят
-        менее срочной z0», в решётке есть та самая z0 — а понять, что это
-        одно и то же, было нельзя. Теперь наведение на клетку подсвечивает
-        находку про неё, и наоборот: читая находку, видно, о какой клетке
-        речь. Ткнуть по находке мышью в терминале нельзя, зато курсор уже
-        ходит — используем то, что есть.
-        """
+        """Return the doctor finding associated with the cell under cursor."""
         target = self._cursor_target()
         if target is None:
             return None
-        if target[0] == "простой":
+        if target[0] == "gap":
             return self._gap_finding(target[1], target[2])
         instr = target[3]
         if instr is None:
@@ -1709,28 +1438,18 @@ class LabScreen(ModeScreen):
 
     def _gap_label(self, start: int, end: int) -> Text:
         f = self._gap_finding(start, end)
-        # Потеря или предел машины — разные вещи, и цвет здесь единственное
-        # место, где это видно до наведения курсора.
         role = "error" if (f is not None and f.recoverable) else "dim"
         t = Text()
-        t.append(f"т.{start}–{end}", style=palette.role_hex(role))
+        t.append(f"c{start}–{end}", style=palette.role_hex(role))
         t.append(f" v{end - start + 1}", style=palette.role_hex("faint"))
         return t
 
     def _cell_text(self, dag, instr: int, crit: set[int],
                    illegal: bool = False, related: bool | None = None) -> Text:
-        """Клетка операции.
-
-        related — слой «соседей» (z): True операция подсвечена как предок/
-        потомок курсорной, False притушена, None слой выключен. Незаконная
-        клетка не тушится никогда — ошибка модели важнее любого слоя.
-        """
+        """Format a single scheduled operation cell."""
         ins = dag[instr]
         t = Text()
         if illegal:
-            # Значком, а не только цветом: цвет теряется на 256-цветном
-            # терминале и у людей с нарушением цветовосприятия, а именно эти
-            # клетки — главное, что показывает прогон модели.
             t.append("-", style=palette.role_hex("error") + " bold")
         else:
             moved = instr in self.diverged
@@ -1741,7 +1460,6 @@ class LabScreen(ModeScreen):
         if related is False:
             op_style = palette.role_hex("faint")
         t.append(ins.op.lower()[:3].ljust(4), style=op_style)
-        # Имя: 7 знаков в обычной клетке (как и было), до 12 — в широкой.
         name_w = 12 if self._wide_cells else 7
         if illegal:
             style = palette.role_hex("error") + " bold"
@@ -1755,11 +1473,7 @@ class LabScreen(ModeScreen):
         return t
 
     def _row_label(self, cycle: int, issued: int, width: int) -> Text:
-        """Метка такта + сколько слотов широкой команды занято.
-
-        Значки одноширинные намеренно: эмодзи в терминале занимает две
-        клетки и разъезжает вся колонка.
-        """
+        """Cycle label plus single-width slot occupancy glyph."""
         t = Text()
         if issued == 0:
             role, mark = "error", "_"
@@ -1767,7 +1481,7 @@ class LabScreen(ModeScreen):
             role, mark = "success", "█"
         else:
             role, mark = "dim", "▄"
-        t.append(f"т.{cycle:<3}", style=palette.role_hex(role))
+        t.append(f"c{cycle:<3}", style=palette.role_hex(role))
         t.append(mark, style=palette.role_hex(role))
         return t
 
@@ -1778,33 +1492,24 @@ class LabScreen(ModeScreen):
 
         return critical_set(self.app.session.dag_obj, self.met)
 
-    # --- «почему здесь» ---------------------------------------------------
+    # --- WHY HERE ---------------------------------------------------------
 
     def on_data_table_cell_highlighted(self, event) -> None:
         event.stop()
-        # Слой «соседей» (z) пересчитывается на движении курсора: если под
-        # курсором новая операция — решётка перерисовывается с новой
-        # подсветкой. _last_deps_instr рвёт петлю: перерисовка сама снова
-        # зажигает highlight уже для той же клетки.
         target = self._cursor_target()
-        instr = target[3] if target and target[0] == "такт" else None
+        instr = target[3] if target and target[0] == "cycle" else None
         if self._deps_on and instr != self._last_deps_instr:
             self._last_deps_instr = instr
             self._redraw_grid_keep_cursor()
-            return                   # отрисовка уже обновила всё остальное
+            return
         self._draw_detail()
-        self._draw_diag()          # подсветить находку про эту клетку
-        self._draw_grid_link()     # то же для мостика под развёрнутой решёткой
-        self._update_grid_hud()    # счёт в строке над решёткой
-        self._draw_side()          # инспектор в правой колонке разворота
+        self._draw_diag()
+        self._draw_grid_link()
+        self._update_grid_hud()
+        self._draw_side()
         self._cell_ai_restart()
 
-    # --- разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима, не общий чат -----
-    #
-    # У остальных панелей экрана чата сбоку нет вовсе (см. panel_facts выше).
-    # Эти две панели при развороте получают КАЖДАЯ СВОЁ: ДИАГНОЗ — список
-    # находок целиком с фильтром, РЕШЁТКА — мостик к находке под курсором.
-    # Переход между ними двусторонний: находка → клетка, клетка → находка.
+    # --- panel maximize/collapse ------------------------------------------
 
     def on_panel_expanded(self, event) -> None:
         event.stop()
@@ -1815,7 +1520,7 @@ class LabScreen(ModeScreen):
             self._draw_diag()
         elif topic == "grid":
             self._grid_expanded = True
-            self._draw_side()   # инспектор разворота — сразу с содержимым
+            self._draw_side()
             self.refresh_hints()
             self._draw_grid_link()
         elif topic == "numbers":
@@ -1851,16 +1556,13 @@ class LabScreen(ModeScreen):
         self._draw_machine()
         self._draw_detail()
 
-    # Заголовок столбца каталога → чем сортировать. "семья" сортировкой
-    # воспроизводит прежнюю группировку по семействам, только интерактивно —
-    # кликом, а не раз навсегда зашитым порядком.
     SCEN_SORT_DEFAULT_REV = {"key": False, "family": False, "binding": False}
 
     def _scen_sort_value(self, key: str, sort_key: str, dag, met):
         if sort_key == "key":
             return key
         if sort_key == "family":
-            return (dag.family or "прочее", key)
+            return (dag.family or "other", key)
         if sort_key == "ops":
             return len(dag)
         if sort_key == "lb":
@@ -1902,20 +1604,12 @@ class LabScreen(ModeScreen):
                 self.run_core(f"/run {key}")
 
     def _draw_scen_catalog(self) -> None:
-        """Развёрнутый УЧАСТОК — каталог, которым управляют, а не читают.
-
-        Чипы отвечают на «переключить», но не на «на что переключить»: имена
-        вроде divstrength или wide_ilp ничего не говорят, пока не запустишь.
-        Каталог считает то, что считается мгновенно (метрики графа — это не
-        планирование) и показывает сразу все участки: сколько операций, чем
-        связан участок и что он разбирает — сортируемо кликом по заголовку и
-        фильтруемо на лету, а строка переключает участок по-настоящему.
-        """
+        """Maximized BLOCK panel: sortable, filterable scenario catalog."""
         wide = self._scen_expanded
         self.query_one("#scen-wide").display = wide
         panel = self.query_one("#p-scen", Panel)
         if not wide:
-            panel.set_title("УЧАСТОК")
+            panel.set_title("BLOCK")
             return
         from ...core.dag import compute_metrics
 
@@ -1926,11 +1620,11 @@ class LabScreen(ModeScreen):
         cur = self.app.session.scenario
         dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
         title, accent = palette.role_hex("title"), palette.role_hex("accent")
-        panel.set_title(f"УЧАСТОК   ·   каталог   ·   {len(SCENARIOS)} участков")
+        panel.set_title(f"BLOCK   ·   catalog   ·   {len(SCENARIOS)} blocks")
 
         h = Text()
-        h.append_text(self._section("что можно разобрать",
-                                    "· — текущий · клик — переключить"))
+        h.append_text(self._section("available blocks",
+                                    "> current · click to switch"))
         head.update(h)
 
         def col(label: str, key: str) -> Text:
@@ -1941,13 +1635,13 @@ class LabScreen(ModeScreen):
             return t
 
         table.clear(columns=True)
-        table.add_column(col("участок", "key"), width=14, key="key")
-        table.add_column(col("оп.", "ops"), width=5, key="ops")
-        table.add_column(col("предел", "lb"), width=9, key="lb")
-        table.add_column(col("связан", "binding"), width=20, key="binding")
-        table.add_column(col("семья", "family"), width=16, key="family")
+        table.add_column(col("block", "key"), width=14, key="key")
+        table.add_column(col("ops", "ops"), width=5, key="ops")
+        table.add_column(col("bound", "lb"), width=9, key="lb")
+        table.add_column(col("bound by", "binding"), width=20, key="binding")
+        table.add_column(col("family", "family"), width=16, key="family")
         width = max(24, self.app.size.width - 78)
-        table.add_column(Text("что разбирает", style=dim), width=width,
+        table.add_column(Text("what it tests", style=dim), width=width,
                          key="lesson")
 
         metrics: dict[str, tuple] = {}
@@ -1969,7 +1663,7 @@ class LabScreen(ModeScreen):
             reverse=self._scen_sort_rev)
 
         if not self._scen_keys:
-            foot.update(Text(f"    ничего не совпало с «{self._scen_filter}»",
+            foot.update(Text(f"    no matches for '{self._scen_filter}'",
                              style=faint))
             table.clear()
             return
@@ -1982,32 +1676,30 @@ class LabScreen(ModeScreen):
             row = [
                 Text(("> " if here else "  ") + key, style=row_style),
                 Text(str(len(dag)), style=dim),
-                Text(f"{lb} т.", style=title if here else dim),
+                Text(f"{lb} cyc", style=title if here else dim),
                 Text(binding, style=palette.role_hex("warning")
-                     if binding == "ресурсы" else faint),
-                Text(dag.family or "прочее", style=faint),
+                     if binding in ("ресурсы", "resources") else faint),
+                Text(dag.family or "other", style=faint),
                 Text((dag.lesson or dag.note or dag.title)[:width],
                      style=faint),
             ]
             table.add_row(*row)
 
         f = Text()
-        f.append_text(self._section("как читать"))
+        f.append_text(self._section("how to read"))
         f.append("\n\n")
-        f.append("    «предел» — сколько тактов участок не может пройти "
-                 "быстрее ни одним\n    планировщиком. «связан» — чем именно: "
-                 "длиной цепочки зависимостей\n    (критический путь) или "
-                 "нехваткой портов (ресурсы). Второе лечится\n    машиной, "
-                 "первое — только переписыванием кода.", style=faint)
+        f.append("    'bound' is the fewest cycles any scheduler can achieve.\n"
+                 "    'bound by' shows whether the limit is dependency depth\n"
+                 "    (critical path) or port scarcity (resources). Wider\n"
+                 "    hardware fixes resources; only code rewrites fix depth.",
+                 style=faint)
         foot.update(f)
 
     def _draw_journal(self) -> None:
-        """Развёрнутый GIT — история сессии, а не лента подлиннее."""
+        """Maximized GIT panel: full session history and command catalog."""
         journal = self.query_one("#journal", ConsoleJournal)
         con = self.query_one("#console", Console)
         panel = self.query_one("#p-console", Panel)
-        # Одна командная строка, а не две: у развёрнутого терминала своя,
-        # компактная строка панели в этот момент только путает.
         self.query_one("#prompt", PromptBar).display = not self._console_expanded
         journal.display = self._console_expanded
         con.display = not self._console_expanded
@@ -2015,19 +1707,13 @@ class LabScreen(ModeScreen):
             panel.set_title("GIT")
             return
         n = len(con.runs)
-        panel.set_title(f"GIT   ·   история сессии   ·   "
-                        f"{n} {plural(n, 'запуск', 'запуска', 'запусков')}")
+        panel.set_title(f"GIT   ·   session history   ·   "
+                        f"{n} {plural(n, 'run', 'runs', 'runs')}")
         journal.load(con.runs, self.mode, list(self.app.commands),
                      self.app.session.journal_events)
 
     def _jump_to_instr(self, instr: int) -> bool:
-        """Курсор решётки — на клетку этой операции. False, если её там нет.
-
-        Общий низ для всех ссылок между панелями: цепочка предела в ЧИСЛАХ,
-        соседи по графу в «ПОЧЕМУ ЗДЕСЬ», строка операции в МАШИНЕ. Панели
-        разные, а «показать это место» у них одно и то же — и оно обязано
-        быть одним, иначе развёрнутые блоки перестают быть одним экраном.
-        """
+        """Move grid cursor to `instr`. Return False if not placed."""
         pos = next((rc for rc, i in self._cells.items() if i == instr), None)
         if pos is None:
             return False
@@ -2039,11 +1725,6 @@ class LabScreen(ModeScreen):
         return True
 
     def _show_instr(self, instr: int) -> None:
-        """Перейти к операции и развернуть РЕШЁТКУ — там, где место видно.
-
-        Ссылка обещала показать место; оставить развёрнутой исходную панель
-        значило бы обещание не сдержать — курсор уехал бы за кадром.
-        """
         if not self._jump_to_instr(instr):
             return
         self._open_panel("#p-grid", "grid")
@@ -2065,16 +1746,16 @@ class LabScreen(ModeScreen):
         f = self._active_finding()
         if f is None:
             link.active = False
-            link.tooltip = "строка подсказки: курсор и /find работают всегда"
-            link.update(Text("курсор — по клеткам   ·   /find — по находкам",
+            link.tooltip = "hint bar: cursor and /find work at any time"
+            link.update(Text("cursor — move cells   ·   /find — step findings",
                              style=palette.role_hex("faint")))
             return
         link.active = True
-        link.tooltip = (f"{f.title}\n{f.why}\nклик — полный список в ДИАГНОЗЕ")
+        link.tooltip = (f"{f.title}\n{f.why}\nclick — full list in DIAGNOSIS")
         t = Text()
         t.append("> ", style=palette.role_hex("accent"))
         t.append(f.title, style=palette.role_hex("title") + " bold")
-        t.append("   ·   клик — все находки в ДИАГНОЗЕ",
+        t.append("   ·   click — all findings in DIAGNOSIS",
                  style=palette.role_hex("accent_soft"))
         link.update(t)
 
@@ -2100,38 +1781,13 @@ class LabScreen(ModeScreen):
         self._open_panel("#p-diag", "diag")
         self._draw_diag()
 
-    # --- ИИ по курсору -----------------------------------------------------
-    #
-    # ЗАЧЕМ ИМЕННО ТАК. У этого экрана уже есть способ спросить — курсор.
-    # Человек показывает на клетку, «ПОЧЕМУ ЗДЕСЬ» отвечает точно и мгновенно.
-    # ИИ дописывает к этому одну фразу обычным языком — и тоже без вопроса,
-    # по тому же движению курсора.
-    #
-    # ПОЧЕМУ С ЗАДЕРЖКОЙ. Ответ на этой машине идёт секунды, а курсор ходит
-    # быстрее. Запуск на каждое нажатие стрелки означал бы очередь из
-    # брошенных запросов и шесть занятых потоков впустую. Ждём, пока курсор
-    # ОСТАНОВИТСЯ: остановился — значит на эту клетку и смотрят.
-    #
-    # ПОЧЕМУ ИИ НИЧЕГО НЕ РЕШАЕТ. В подсказку уходит ровно то, что уже
-    # написано в панели, и задача ставится как пересказ, а не разбор. Числа
-    # он не считает и добавлять их ему запрещено — считает ядро. На 3B это
-    # единственный режим, в котором ему можно верить: он ошибается, когда
-    # надо связать несколько чисел, и не ошибается, когда надо переформулировать
-    # одно готовое утверждение.
+    # --- cursor-triggered AI summary --------------------------------------
 
     CELL_AI_DELAY = 1.5
 
-    CELL_AI_QUESTION = "Скажи это одной фразой обычным языком."
-    """Переформулировать, а не рассуждать.
-
-    Пробовали спрашивать «почему эта операция оказалась здесь» — вопрос сам по
-    себе требует ПРИЧИНЫ, и 3B её выдаёт всегда, даже когда причины нет: на
-    клетке такта 0 сочинила ожидание предыдущих операций, которых не было.
-    Причину считает ядро и уже написало её выше; модели остаются слова.
-    """
+    CELL_AI_QUESTION = "Rephrase this in one plain-language sentence."
 
     def _cell_ai_restart(self) -> None:
-        """Курсор двинулся: прежний ответ недействителен, новый — не сразу."""
         self._cell_ai_token += 1
         self._cell_ai_text = ""
         self._cell_ai_state = ""
@@ -2144,49 +1800,28 @@ class LabScreen(ModeScreen):
         self.set_timer(self.CELL_AI_DELAY, lambda: self._cell_ai_start(tok))
 
     def _cell_has_a_story(self) -> bool:
-        """Есть ли про эту клетку что рассказывать. Если нет — ИИ молчит.
-
-        Это не оптимизация, а защита от выдумки, и она нужна именно этой
-        модели. Проверено вживую: на клетке «DIV z0, такт 0» — где ничего не
-        предшествует и ждать нечего — 3B сочинила «пришлось ждать завершения
-        предыдущих операций». Она не умеет ответить «здесь всё обычно»: на
-        прямой вопрос «почему здесь» она ОБЯЗАНА выдать причину и берёт её
-        откуда придётся.
-
-        Поэтому решаем МЫ, а не она. Рассказывать есть что, когда:
-          · размещение незаконно — модель ошиблась каналом;
-          · baseline и точный поиск разошлись — здесь и потерян такт;
-          · операция на критическом пути — она задаёт длину всего участка;
-          · клетка пуста — почему простаивает порт, вопрос не праздный.
-        Во всех остальных клетках операция просто стоит где стоит, и честный
-        ответ — молчание. Заодно это совпадает с ощущением: инструмент не
-        бубнит над ухом, а подаёт голос там, где есть находка.
-        """
+        """Only invoke cursor AI on noteworthy cells (gaps, empty slots,
+        illegal placements, oracle divergences, or critical-path ops)."""
         target = self._cursor_target()
         if target is None:
             return False
-        if target[0] == "простой":
-            return True                       # потерянные такты — всегда тема
+        if target[0] == "gap":
+            return True
         instr = target[3]
         if instr is None:
-            return True                       # пустой слот — тоже вопрос
+            return True
         if self.view == "model":
             return instr in self._model_illegal()
         return instr in self.diverged or instr in self._critical_set()
 
     def _cell_ai_start(self, tok: int) -> None:
         if tok != self._cell_ai_token:
-            return                      # курсор уже ушёл, пока ждали
-        # Источник — ТЕКСТ САМОЙ ПАНЕЛИ, а не отдельно собранный список.
-        # Во-первых, в панели лежит настоящее рассуждение («готова в т.1,
-        # выдана только в т.2»), а плоский список свойств модель просто
-        # зачитывала обратно. Во-вторых, так ИИ и панель физически не могут
-        # разойтись: у них один и тот же текст.
+            return
         base = self._detail_base
         facts = [l for l in (base.plain.split("\n") if base else []) if l.strip()]
         if len(facts) < 2:
             return
-        self._cell_ai_state = "ждёт"
+        self._cell_ai_state = "waiting"
         self._cell_ai_facts = facts
         self._render_detail()
         self._cell_ai_worker(tok, facts)
@@ -2200,13 +1835,11 @@ class LabScreen(ModeScreen):
         try:
             for piece in gen:
                 if tok != self._cell_ai_token:
-                    break               # курсор ушёл — бросаем на полуслове
+                    break
                 self.app.call_from_thread(self._cell_ai_piece, tok, piece)
         except Exception as e:
             self.app.call_from_thread(self._cell_ai_failed, tok, str(e))
         finally:
-            # Закрываем в СВОЁМ потоке: генератор рвёт соединение, сервер
-            # снимает задачу и остаётся жив для следующей клетки.
             closer = getattr(gen, "close", None)
             if closer is not None:
                 closer()
@@ -2215,41 +1848,35 @@ class LabScreen(ModeScreen):
     def _cell_ai_piece(self, tok: int, piece: str) -> None:
         if tok != self._cell_ai_token:
             return
-        self._cell_ai_state = "готово"
+        self._cell_ai_state = "ready"
         self._cell_ai_text += piece
         self._render_detail()
 
     def _cell_ai_done(self, tok: int) -> None:
         if tok != self._cell_ai_token:
             return
-        if self._cell_ai_state == "ждёт":
+        if self._cell_ai_state == "waiting":
             self._cell_ai_state = ""
             self._render_detail()
             return
-        # Сторож на выдуманные числа. Ответ уже показан по частям — если он
-        # не прошёл проверку, убираем его целиком: пустое место честнее
-        # уверенной ошибки, а разбор ядра над ним никуда не делся.
         from ...agent import context
 
         if not context.cell_answer_is_grounded(self._cell_ai_text,
                                                self._cell_ai_facts):
             self._cell_ai_text = ""
-            self._cell_ai_state = "NEX сочинил числа — ответ убран"
+            self._cell_ai_state = "NEX invented numbers — reply hidden"
             self._render_detail()
 
     def _cell_ai_failed(self, tok: int, msg: str) -> None:
         if tok != self._cell_ai_token:
             return
-        self._cell_ai_state = "нет модели"
+        self._cell_ai_state = "no model"
         self._render_detail()
 
     def on_data_table_cell_selected(self, event) -> None:
         event.stop()
         target = self._cursor_target()
-        if target is not None and target[0] == "простой":
-            # Схлопнутое всегда можно раскрыть: инструмент ничего не прячет,
-            # он лишь не показывает двенадцать одинаковых пустых строк, пока
-            # их не попросили.
+        if target is not None and target[0] == "gap":
             key = (target[1], target[2])
             if key in self._expanded_gaps:
                 self._expanded_gaps.discard(key)
@@ -2263,44 +1890,28 @@ class LabScreen(ModeScreen):
             self.run_core(f"/explain {target[1]}")
 
     def _cursor_target(self):
-        """На чём стоит курсор: («такт», такт, порт, инстр) или («простой», a, b).
-
-        Единственное место, которое знает про схлопывание. Всё остальное
-        (разбор, факты для ИИ, Enter) спрашивает здесь и про строки решётки
-        больше не думает.
-        """
+        """Return `("cycle", cycle, port, instr)` or `("gap", start, end)`."""
         grid = self.query_one("#grid", ScheduleGrid)
         coord = grid.cursor_coordinate
         row, port = coord.row, coord.column
         if not (0 <= row < len(self._rows)):
             return None
         r = self._rows[row]
-        if r[0] == "простой":
-            return ("простой", r[1], r[2])
-        return ("такт", r[1], port, self._cells.get((row, port)))
+        if r[0] == "gap":
+            return ("gap", r[1], r[2])
+        return ("cycle", r[1], port, self._cells.get((row, port)))
 
     def _render_detail(self) -> None:
-        """Точный разбор + фраза ИИ под ним, разделённые чертой.
-
-        Порядок принципиален: сверху то, что посчитано, снизу то, что
-        пересказано. Не наоборот — иначе человек читает сперва пересказ и
-        принимает его за источник.
-        """
-        # Панели может не быть в дереве: в развёрнутом виде экран показывает
-        # одну панель, остальные сняты. Ответ ИИ приходит из фонового
-        # работника и не знает, что за это время развернули другое, — без
-        # проверки он падал NoMatches прямо в работнике. Разбор при этом не
-        # теряется: он лежит в `_detail_base` и отрисуется, когда панель
-        # вернётся.
+        """Render exact core analysis followed by optional AI paraphrase."""
         target = self.query("#detail").first(Static) if self.query("#detail") else None
         base = self._detail_base
         if target is None or base is None:
             return
         t = base.copy()
         faint = palette.role_hex("faint")
-        if self._cell_ai_state == "ждёт":
-            t.append("\n\n" + "─" * 3 + " NEX разбирает…", style=faint)
-        elif self._cell_ai_state == "готово":
+        if self._cell_ai_state == "waiting":
+            t.append("\n\n" + "─" * 3 + " NEX analyzing…", style=faint)
+        elif self._cell_ai_state == "ready":
             t.append("\n\n" + "─" * 3 + " NEX\n", style=faint)
             t.append(self._cell_ai_text.strip(), style=palette.role_hex("dim"))
         elif self._cell_ai_state:
@@ -2311,14 +1922,7 @@ class LabScreen(ModeScreen):
         self._detail_base = text
         self._render_detail()
 
-    # --- ПОЧЕМУ ЗДЕСЬ развёрнутое: паспорт операции и ходьба по графу -------
-    #
-    # Свёрнутая панель отвечает про одну клетку и замолкает. Развёрнутая
-    # добавляет то, чего в решётке нет вообще: окно, в котором операция могла
-    # бы стоять (раньше всех зависимостей — позже без удлинения расписания),
-    # запас до критического пути, и обе стороны графа списком. Соседи —
-    # ссылки: по ним ходят. Получается не «панель с текстом», а обход
-    # зависимостей, ради которого раньше приходилось читать /explain подряд.
+    # --- maximized WHY HERE: scheduling window and dependency cones -------
 
     def _draw_detail_graph(self) -> None:
         preds_box = self.query_one("#detail-preds", Vertical)
@@ -2333,9 +1937,9 @@ class LabScreen(ModeScreen):
         faint = palette.role_hex("faint")
         title = palette.role_hex("title")
         target = self._cursor_target()
-        instr = target[3] if (target and target[0] == "такт") else None
+        instr = target[3] if (target and target[0] == "cycle") else None
         if instr is None:
-            preds_box.mount(Static(Text("наведите курсор на операцию",
+            preds_box.mount(Static(Text("move cursor onto an operation",
                                         style=faint)))
             return
         dag = self.app.session.dag_obj
@@ -2343,13 +1947,7 @@ class LabScreen(ModeScreen):
         model = self.app.session.model()
 
         def cone(seed: int, step) -> dict[int, int]:
-            """Все, до кого дотягивается зависимость, с глубиной обхода.
-
-            Прямых соседей мало (у dc в slotclash по одному с каждой стороны),
-            и панель из двух строк не стоила разворота. Смысл же в конусе:
-            операцию держит не сосед, а вся цепь за ним — её и показываем,
-            отступом по глубине.
-            """
+            """Collect all reachable dependency nodes with shortest depth."""
             out: dict[int, int] = {}
             frontier = [(seed, 0)]
             while frontier:
@@ -2365,13 +1963,13 @@ class LabScreen(ModeScreen):
                    phrase) -> None:
             h = Text()
             h.append(head + "   ", style=palette.role_hex("accent"))
-            h.append(f"{direct} напрямую", style=title)
+            h.append(f"{direct} direct", style=title)
             if len(cone_map) > direct:
-                h.append(f",  {len(cone_map)} всего по цепи", style=dim)
+                h.append(f",  {len(cone_map)} total in chain", style=dim)
             h.append("\n", style=dim)
             box.mount(Static(h))
             if not cone_map:
-                box.mount(Static(Text("   никого — край участка\n",
+                box.mount(Static(Text("   none — block boundary\n",
                                       style=faint)))
                 return
             for i, depth in sorted(cone_map.items(),
@@ -2379,23 +1977,18 @@ class LabScreen(ModeScreen):
                                                    if kv[0] in placed else 0)):
                 ins = dag[i]
                 row = Text()
-                # Отступ по глубине: прямые соседи у края, дальняя родня
-                # правее. Форма сразу показывает, длинная цепь или широкая.
                 row.append("  " + "· " * (depth - 1), style=faint)
                 row.append(ins.name[:5].ljust(6), style=title if depth == 1
                            else dim)
                 row.append(ins.op.lower()[:3].ljust(4),
                            style=palette.op_style(ins.op))
                 pl = placed.get(i)
-                row.append((f"т.{pl.cycle}" if pl else "—").rjust(5), style=dim)
+                row.append((f"c{pl.cycle}" if pl else "—").rjust(5), style=dim)
                 row.append("  " + phrase(i, depth), style=faint)
                 link = InstrLink(i, row, classes="instr-link")
-                # Подсказка объясняет, что клик не просто так: строка —
-                # ссылка, и куда она ведёт, должно быть видно до клика.
                 pl = placed.get(i)
-                link.tooltip = (f"строка решётки: {ins.name} "
-                                f"(т.{pl.cycle})"
-                                if pl else f"операция {ins.name} — в решётку")
+                link.tooltip = (f"grid cell: {ins.name} (c{pl.cycle})"
+                                if pl else f"op {ins.name} — jump to grid")
                 box.mount(link)
 
         up = cone(instr, lambda n: dag[n].preds)
@@ -2409,24 +2002,19 @@ class LabScreen(ModeScreen):
                 return ""
             ready = pl.cycle + model.latency(dag[i].op)
             if depth > 1:
-                return f"готова к т.{ready}"
-            return f"готова к т.{ready} — с неё и начался отсчёт"
+                return f"ready at c{ready}"
+            return f"ready at c{ready} — earliest start"
 
         def down_note(i: int, depth: int) -> str:
             if depth > 1 or own_ready is None:
                 return ""
-            return f"не могла раньше т.{own_ready}"
+            return f"cannot start before c{own_ready}"
 
-        column(preds_box, "ЖДАЛА", up, len(dag[instr].preds), up_note)
-        column(succs_box, "ДЕРЖИТ", down, len(dag.succs[instr]), down_note)
+        column(preds_box, "WAITED FOR", up, len(dag[instr].preds), up_note)
+        column(succs_box, "BLOCKS", down, len(dag.succs[instr]), down_note)
 
     def _detail_window(self, instr: int) -> Text:
-        """Окно операции: раньше всех зависимостей, позже без удлинения.
-
-        Именно этого не хватало, чтобы понять «а могла ли она стоять иначе»:
-        решётка показывает один такт и молчит о том, был ли выбор. Запас 0
-        значит, что операция на критическом пути и двигать её некуда.
-        """
+        """Render ASAP..ALAP scheduling window and slack for `instr`."""
         met, dag = self.met, self.app.session.dag_obj
         t = Text()
         if met is None or self.base is None:
@@ -2438,43 +2026,43 @@ class LabScreen(ModeScreen):
         pl = self.base.schedule.placements.get(instr)
         slack = alap - asap
         t.append("\n\n")
-        t.append("окно  ", style=dim)
-        t.append(f"т.{asap}", style=title)
+        t.append("window  ", style=dim)
+        t.append(f"c{asap}", style=title)
         t.append(" … ", style=dim)
-        t.append(f"т.{alap}", style=title)
-        t.append("      стоит  ", style=dim)
-        t.append(f"т.{pl.cycle}" if pl else "—", style=title)
-        t.append("      запас  ", style=dim)
+        t.append(f"c{alap}", style=title)
+        t.append("      placed  ", style=dim)
+        t.append(f"c{pl.cycle}" if pl else "—", style=title)
+        t.append("      slack  ", style=dim)
         if slack <= 0:
-            t.append("0 — на критическом пути",
+            t.append("0 — on critical path",
                      style=palette.role_hex("error"))
         else:
-            t.append(f"{slack} т.", style=palette.role_hex("success"))
+            t.append(f"{slack} cyc", style=palette.role_hex("success"))
         return t
 
     def _draw_detail(self) -> None:
         panel = self.query_one("#p-detail", Panel)
         if self._detail_expanded:
             target = self._cursor_target()
-            instr = target[3] if (target and target[0] == "такт") else None
+            instr = target[3] if (target and target[0] == "cycle") else None
             dag = self.app.session.dag_obj
             name = dag[instr].name if instr is not None else "—"
-            panel.set_title(f"ПОЧЕМУ ЗДЕСЬ   ·   {name}   ·   обход графа")
+            panel.set_title(f"WHY HERE   ·   {name}   ·   graph walk")
         else:
-            panel.set_title("ПОЧЕМУ ЗДЕСЬ")
+            panel.set_title("WHY HERE")
         self._draw_detail_graph()
         if self.view == "model":
             self._set_detail(self._detail_model())
             return
         res = self._result
         if res is None:
-            self._set_detail(Text("расписание ещё не посчитано",
+            self._set_detail(Text("schedule not computed yet",
                                   style=palette.role_hex("faint")))
             return
         target = self._cursor_target()
         if target is None:
             return
-        if target[0] == "простой":
+        if target[0] == "gap":
             self._set_detail(self._detail_gap(target[1], target[2]))
             return
         _kind, cycle, port, instr = target
@@ -2488,17 +2076,11 @@ class LabScreen(ModeScreen):
             self._set_detail(t)
 
     def _detail_model(self) -> Text:
-        """Почему клетка красная — на месте, а не строчкой в отчёте.
-
-        Главная находка прогона 1 (docs/archive/ROADMAP.md): 85% ошибок «ресурс» —
-        это STORE на канале `,0`, который его не исполняет. В отчёте это
-        одна строка «нарушений 3». Здесь на неё можно навести курсор и
-        увидеть, какие каналы операцию исполняют и откуда это известно.
-        """
+        """Explain legality of a model-placed cell under the cursor."""
         faint = palette.role_hex("faint")
         sched = self.model_sched
         if sched is None or not sched.placements:
-            return Text("модель ещё не запускалась  —  /learned", style=faint)
+            return Text("model has not run yet  —  /learned", style=faint)
 
         grid = self.query_one("#grid", ScheduleGrid)
         coord = grid.cursor_coordinate
@@ -2508,10 +2090,10 @@ class LabScreen(ModeScreen):
 
         t = Text()
         if instr is None:
-            t.append("такт ", style=faint)
+            t.append("cycle ", style=faint)
             t.append(f"{cycle}", style=palette.role_hex("title"))
-            t.append(f", порт {machine.port_label(port)} — ", style=faint)
-            t.append("модель сюда ничего не поставила", style=faint)
+            t.append(f", port {machine.port_label(port)} — ", style=faint)
+            t.append("model placed nothing here", style=faint)
             return t
 
         ins = dag[instr]
@@ -2519,83 +2101,78 @@ class LabScreen(ModeScreen):
         ok = port in allowed
         t.append(f"{ins.op.lower()} {ins.name}", style=palette.op_style(ins.op))
         t.append(f"  #{instr}\n", style=faint)
-        t.append("модель поставила: ", style=faint)
-        t.append(f"такт {cycle}, порт {machine.port_label(port)}\n",
+        t.append("model placed: ", style=faint)
+        t.append(f"cycle {cycle}, port {machine.port_label(port)}\n",
                  style=palette.role_hex("title"))
 
         if ok:
-            t.append("канал операцию исполняет — размещение законно",
+            t.append("channel supports op — legal placement",
                      style=palette.role_hex("success"))
             return t
 
-        labels = ", ".join(machine.port_label(c) for c in allowed) or "нет таких"
-        t.append("- этот канал операцию НЕ исполняет\n",
+        labels = ", ".join(machine.port_label(c) for c in allowed) or "none"
+        t.append("- this channel does NOT execute this op\n",
                  style=palette.role_hex("error") + " bold")
-        t.append(f"{ins.op} исполняют только: ", style=faint)
+        t.append(f"{ins.op} runs only on: ", style=faint)
         t.append(f"{labels}\n", style=palette.role_hex("success"))
-        t.append(f"источник матрицы портов: {machine.matrix_source}\n",
+        t.append(f"port matrix source: {machine.matrix_source}\n",
                  style=faint)
         if self.model_repairs:
-            t.append("починить каналы, не трогая такты:  /repair",
+            t.append("repair channels without changing cycles:  /repair",
                      style=palette.role_hex("warning"))
         return t
 
     def _detail_gap(self, start: int, end: int) -> Text:
-        """Простой как объект: сколько потеряно, почему и можно ли отыграть.
-
-        Текст берётся у доктора, а не пишется заново: в панели ДИАГНОЗ он уже
-        есть, и две формулировки одного простоя разошлись бы на первой же
-        правке.
-        """
+        """Explain a collapsed idle gap using doctor's finding."""
         dim, title = palette.role_hex("dim"), palette.role_hex("title")
         t = Text()
-        t.append(f"простой {end - start + 1} т.", style=f"{title} bold")
-        t.append(f"   такты {start}–{end}\n", style=dim)
+        t.append(f"idle gap {end - start + 1} cyc", style=f"{title} bold")
+        t.append(f"   cycles {start}–{end}\n", style=dim)
         f = self._gap_finding(start, end)
         if f is None:
-            t.append("короткий разрыв — доктор его находкой не считает",
+            t.append("short gap — below doctor finding threshold",
                      style=palette.role_hex("faint"))
             return t
         if f.recoverable:
-            t.append(f"-{f.cycles_lost} т. можно отыграть\n",
+            t.append(f"-{f.cycles_lost} cyc recoverable\n",
                      style=palette.role_hex("error") + " bold")
         else:
-            t.append("предел участка, а не просчёт\n",
+            t.append("block bound, not a scheduling miss\n",
                      style=palette.role_hex("success"))
         t.append(_wrapped(f.why, 70, 0) + "\n", style=dim)
         t.append(_wrapped(f.fix, 70, 0) + "\n", style=palette.role_hex("faint"))
-        t.append("\nEnter — развернуть такты по одному",
+        t.append("\nEnter — expand cycles individually",
                  style=palette.role_hex("faint"))
         return t
 
     def _detail_empty(self, cycle: int, port: int) -> Text:
-        """Пустой слот — это тоже ответ: важно, ПОЧЕМУ он пуст."""
+        """Explain why an empty slot was left unused."""
         s = self.app.session
         model, dag = s.model(), s.dag_obj
         sched = self._result.schedule
         dim = palette.role_hex("dim")
         t = Text()
-        t.append(f"такт {cycle}", style=f"{palette.role_hex('lab')} bold")
-        t.append(f"   канал {model.port_label(port)}", style=dim)
-        t.append("   слот пуст\n", style=palette.role_hex("faint"))
+        t.append(f"cycle {cycle}", style=f"{palette.role_hex('lab')} bold")
+        t.append(f"   channel {model.port_label(port)}", style=dim)
+        t.append("   slot empty\n", style=palette.role_hex("faint"))
 
         ops = [op for op in sorted({i.op for i in dag})
                if port in model.channels_for(op)]
-        t.append("канал принимает: ", style=dim)
+        t.append("channel accepts: ", style=dim)
         if ops:
             for i, op in enumerate(ops):
                 if i:
                     t.append("  ", style=dim)
                 t.append(op, style=palette.op_style(op))
         else:
-            t.append("ничего из этого участка", style=palette.role_hex("warning"))
+            t.append("nothing in this block", style=palette.role_hex("warning"))
         t.append("\n\n")
 
-        # Кто ещё не выдан и чего он ждёт — это и есть причина пустоты.
         pending = [i for i in range(len(dag))
                    if i in sched.placements and sched.cycle_of(i) > cycle]
         if not pending:
-            t.append("всё уже выдано — участок дорабатывает начатое", style=dim)
+            t.append("all ops already issued — draining in-flight latencies",
+                     style=dim)
             return t
         ready_at = {i: max((sched.ready_at(p) for p in dag[i].preds), default=0)
                     for i in pending}
@@ -2603,28 +2180,28 @@ class LabScreen(ModeScreen):
                 and port in model.channels_for(dag[i].op)]
         if able:
             i = min(able, key=lambda k: sched.cycle_of(k))
-            t.append("операнды готовы у ", style=dim)
+            t.append("operands ready for ", style=dim)
             t.append(dag[i].name, style=palette.op_style(dag[i].op))
-            t.append(", но планировщик выдал её в т.", style=dim)
+            t.append(", but scheduler issued it at c", style=dim)
             t.append(str(sched.cycle_of(i)), style=palette.role_hex("warning"))
-            t.append("\nэто потерянный такт — сравните с оракулом",
+            t.append("\nlost cycle — compare with oracle",
                      style=palette.role_hex("warning"))
             return t
         soonest = min(pending, key=lambda k: ready_at[k])
-        t.append("ждём операндов: ближайшая ", style=dim)
+        t.append("waiting for operands: next ", style=dim)
         t.append(dag[soonest].name, style=palette.op_style(dag[soonest].op))
-        t.append(" готова к т.", style=dim)
+        t.append(" ready at c", style=dim)
         t.append(str(ready_at[soonest]), style=palette.role_hex("title"))
         blockers = sorted(
             {p for p in dag[soonest].preds if sched.ready_at(p) == ready_at[soonest]})
         if blockers:
-            t.append("\nдержит: ", style=dim)
+            t.append("\nblocked by: ", style=dim)
             for k, p in enumerate(blockers):
                 if k:
                     t.append(", ", style=dim)
                 t.append(dag[p].name, style=palette.op_style(dag[p].op))
-                t.append(f" ({dag[p].op}, латентность {model.latency(dag[p].op)},"
-                         f" выдана в т.{sched.cycle_of(p)})", style=dim)
+                t.append(f" ({dag[p].op}, lat {model.latency(dag[p].op)},"
+                         f" issued c{sched.cycle_of(p)})", style=dim)
         return t
 
     def _detail_instr(self, cycle: int, port: int, instr: int) -> Text:
@@ -2640,72 +2217,57 @@ class LabScreen(ModeScreen):
         t.append("   ")
         t.append(ins.op, style=palette.op_style(ins.op))
         t.append(f"   {ins.text}", style=dim)
-        t.append(f"     канал {model.port_label(port)}\n", style=dim)
+        t.append(f"     channel {model.port_label(port)}\n", style=dim)
 
         lat = model.latency(ins.op)
         occ = model.occupancy(ins.op)
         place = sched.placements[instr]
-        t.append("выдана в такте ", style=dim)
+        t.append("issued at c", style=dim)
         t.append(str(place.cycle), style=title)
-        t.append(", результат готов к ", style=dim)
+        t.append(", ready at c", style=dim)
         t.append(str(place.cycle + lat), style=title)
-        t.append(f"   латентность {lat}", style=dim)
+        t.append(f"   latency {lat}", style=dim)
         if occ > 1:
-            t.append(f", держит канал {occ} т.", style=palette.role_hex("warning"))
+            t.append(f", holds channel {occ} cyc", style=palette.role_hex("warning"))
         t.append("\n")
 
         if ins.preds:
-            t.append("ждала операндов: ", style=dim)
+            t.append("waited for: ", style=dim)
             for k, p in enumerate(ins.preds):
                 if k:
                     t.append(", ", style=dim)
                 t.append(dag[p].name, style=palette.op_style(dag[p].op))
-                t.append(f" готов к т.{sched.ready_at(p)}", style=dim)
+                t.append(f" ready c{sched.ready_at(p)}", style=dim)
             t.append("\n")
         else:
-            t.append("операндов не ждёт — может идти с первого такта\n", style=dim)
+            t.append("no operand dependencies — eligible from c0\n", style=dim)
 
         if self.met is not None:
-            t.append("раньше т.", style=dim)
+            t.append("earliest c", style=dim)
             t.append(str(self.met.asap[instr]), style=title)
-            t.append(" не могла; до конца участка отсюда ", style=dim)
+            t.append("; remaining height ", style=dim)
             t.append(str(self.met.height[instr]), style=title)
-            t.append(" т.", style=dim)
+            t.append(" cyc", style=dim)
             if self.met.asap[instr] + self.met.height[instr] == self.met.critical_path_bound:
-                t.append("   на критическом пути", style=palette.role_hex("crit"))
+                t.append("   on critical path", style=palette.role_hex("crit"))
             t.append("\n")
 
         other = self.orc if self.view == "baseline" else self.base
-        who = "оракул" if self.view == "baseline" else "baseline"
+        who = "oracle" if self.view == "baseline" else "baseline"
         if other is not None and instr in other.schedule.placements:
             oc = other.schedule.placements[instr].cycle
             if oc != place.cycle:
-                t.append(f"{who} ставит её в такт ", style=palette.role_hex("diverge"))
+                t.append(f"{who} places it at c", style=palette.role_hex("diverge"))
                 t.append(str(oc), style=f"{palette.role_hex('diverge')} bold")
                 t.append(f"  ({oc - place.cycle:+d})", style=dim)
             else:
-                t.append(f"{who} ставит её туда же", style=palette.role_hex("success"))
+                t.append(f"{who} places it identically", style=palette.role_hex("success"))
         return t
 
-    # --- правая колонка ---------------------------------------------------
-
-    # --- ЧИСЛА развёрнутые: откуда взялся предел ---------------------------
-    #
-    # Свёрнутая панель отвечает «сколько». Развёрнутая — «почему столько»:
-    # предел это max(критический путь, ресурсы), и обе половины показаны так,
-    # что их видно, а не сказано словом. Критический путь — цепочкой операций
-    # со ссылками в решётку; ресурсная граница — делением «операций на порты».
-    # Это не список находок (ДИАГНОЗ) и не матрица (МАШИНА): это вывод числа.
+    # --- maximized NUMBERS: lower-bound derivation ------------------------
 
     def _critical_chain(self) -> list[int]:
-        """Цепочка операций, из которой и складывается критический путь.
-
-        «Предел 22» сам по себе не объясняет ничего: непонятно, какие именно
-        операции его держат. Цепочка восстанавливается по метрикам: операция
-        лежит на критическом пути, если asap+height равно границе, а следующее
-        звено — тот её потомок, что начинается ровно тогда, когда предыдущее
-        звено готово.
-        """
+        """Reconstruct one critical-path chain from ASAP/height metrics."""
         met = self.met
         if met is None:
             return []
@@ -2732,13 +2294,7 @@ class LabScreen(ModeScreen):
         return chain
 
     def _resource_groups(self):
-        """Из чего сложена ресурсная граница: (порты, операции, слотов, тактов).
-
-        Повторяет группировку `compute_metrics`: операции, исполнимые лишь на
-        части портов, упираются в эту часть раньше, чем машина упрётся в свою
-        ширину. Именно это и надо показать — иначе «ресурсы 4» выглядит числом
-        с потолка.
-        """
+        """Break down the resource bound into `(ports, ops, slots, cycles)`."""
         dag = self.app.session.dag_obj
         model = self.app.session.model()
         groups: dict[tuple[int, ...], int] = {}
@@ -2760,17 +2316,10 @@ class LabScreen(ModeScreen):
         return out
 
     SCALE_LEFT = 22
-    """Ширина подписи слева от шкалы: имя, операция, такт выдачи."""
+    """Left label width for timeline charts: name, op, issue cycle."""
 
     def _section(self, label: str, note: str = "") -> Text:
-        """Заголовок раздела: строчными, и тонкая линейка до правого края.
-
-        Так подписаны разделы в построчном выводе инструмента (`render_model_view`
-        и соседи): жирным и строчными, без цвета. Цвет в этом интерфейсе уже
-        занят операциями и режимом — заголовок, выкрашенный в акцент, начинает
-        спорить с ними и кричать. Линейка делает то же, что делала бы пустая
-        строка, только не тратит её.
-        """
+        """Section rule: lowercase label with horizontal line to the edge."""
         width = max(40, self.app.size.width - 8)
         t = Text()
         t.append("  " + label + "  ", style=palette.role_hex("title") + " bold")
@@ -2782,36 +2331,24 @@ class LabScreen(ModeScreen):
         return t
 
     def _scale(self) -> tuple[int, int]:
-        """Сколько символов на такт. Один такт — одна ширина везде.
-
-        Разворот даёт 150 колонок, и тратить их на колонку цифр — то же
-        расточительство, что и в свёрнутом виде. Масштаб общий для всех
-        полос, иначе диаграмма врёт про длительность.
-        """
-        # Ширину берём у экрана, а не у панели: рисуем в тот же кадр, в
-        # котором панель разворачивают, и её собственный size.width ещё
-        # старый — 42 колонки правой колонки. Масштаб схлопывался в один
-        # символ на такт, то есть диаграмма выходила вчетверо мельче, чем
-        # позволяет экран. Развёрнутая панель занимает его целиком, так что
-        # ширина экрана и есть её ширина.
+        """Return `(chars_per_cycle, left_margin)` scaled to screen width."""
         w = max(60, self.app.size.width - 6)
         span = max(self.base.schedule.makespan, 1) if self.base else 1
         room = max(20, w - self.SCALE_LEFT - 18)
         return max(1, room // span), self.SCALE_LEFT
 
     def _ruler(self, cpc: int) -> Text:
-        """Линейка тактов над диаграммой — иначе длина ни к чему не привязана."""
-        faint = palette.role_hex("faint")
+        """Cycle ruler above the critical-path Gantt chart."""
         span = max(self.base.schedule.makespan, 1) if self.base else 1
         step = 5 if cpc * 5 >= 6 else 10
         line = ""
         for c in range(0, span + 1, step):
-            mark = f"т.{c}" if c == 0 else str(c)
+            mark = f"c{c}" if c == 0 else str(c)
             pad = c * cpc - len(line)
             if pad < 0:
                 continue
             line += " " * pad + mark
-        return Text("    такт".ljust(self.SCALE_LEFT) + line,
+        return Text("    cycle".ljust(self.SCALE_LEFT) + line,
                     style=palette.role_hex("faint"))
 
     def _draw_numbers_why(self) -> None:
@@ -2820,7 +2357,7 @@ class LabScreen(ModeScreen):
         res = self.query_one("#numbers-res", Static)
         chain_box.remove_children()
         if self.base is None or self.met is None:
-            head.update(Text("расписание ещё не посчитано",
+            head.update(Text("schedule not computed yet",
                              style=palette.role_hex("faint")))
             res.update("")
             return
@@ -2830,58 +2367,48 @@ class LabScreen(ModeScreen):
         dim = palette.role_hex("dim")
         faint = palette.role_hex("faint")
         title = palette.role_hex("title")
-        accent = palette.role_hex("accent")
         b = self.base.schedule.makespan
         o = self.orc.schedule.makespan
         lb = met.lower_bound
         cp, rb = met.critical_path_bound, met.resource_bound
         cpc, left = self._scale()
 
-        # Три полосы по ТОЙ ЖЕ шкале, что и диаграмма ниже: такт везде одной
-        # ширины, поэтому «на 1 т. длиннее предела» — видимый хвост, а не
-        # цифра, которую надо вычитать в уме.
         t = Text()
-        t.append_text(self._section("сколько получилось"))
+        t.append_text(self._section("results"))
         t.append("\n\n")
-        top_w = max(b, o, lb) * cpc     # общая колонка под числа справа
+        top_w = max(b, o, lb) * cpc
         for name, val, style in (
                 ("baseline", b, title),
-                ("оракул", o, palette.role_hex("success")),
-                ("предел", lb, dim),
+                ("oracle", o, palette.role_hex("success")),
+                ("bound", lb, dim),
         ):
             t.append(("    " + name).ljust(left), style=dim)
-            # Тонкая линия, а не блок: `█` в этом инструменте встречается
-            # только в логотипе, всё остальное нарисовано `─` и `·`. Полоса
-            # из блоков читается как чужая деталь и перетягивает взгляд с
-            # чисел, ради которых панель и открыли.
             body = min(val, lb) * cpc
             tail = max(0, val - lb) * cpc
             t.append("─" * body, style=style)
             if tail:
-                # Хвост сверх предела — пунктиром: он не такой же, как тело
-                # полосы, он и есть то единственное, что можно отыграть.
                 t.append("─" * tail, style=palette.role_hex("error"))
             t.append(" " * (top_w - body - tail), style=faint)
             t.append(f"{val:>4}", style=style)
             if tail:
-                t.append(f"   +{val - lb} т. сверх предела",
+                t.append(f"   +{val - lb} cyc over bound",
                          style=palette.role_hex("error"))
-            elif name == "предел":
+            elif name == "bound":
                 t.append(f"   {met.binding}", style=faint)
             t.append("\n")
         head.update(t)
 
         chain = self._critical_chain()
         placed = self.base.schedule.placements
-        note = f"{cp} т."
+        note = f"{cp} cyc"
         if cp >= rb:
-            note += "  ·  он и держит предел"
+            note += "  ·  sets the bound"
         hdr = Text("\n")
-        hdr.append_text(self._section("критический путь", note))
+        hdr.append_text(self._section("critical path", note))
         chain_box.mount(Static(hdr))
         chain_box.mount(Static(self._ruler(cpc)))
         if not chain:
-            chain_box.mount(Static(Text("  цепочка не восстановилась",
+            chain_box.mount(Static(Text("  chain could not be reconstructed",
                                         style=faint)))
         else:
             for i in chain:
@@ -2889,51 +2416,43 @@ class LabScreen(ModeScreen):
                 lat = model.latency(ins.op)
                 pl = placed.get(i)
                 row = Text()
-                # Префикс ровно SCALE_LEFT символов: 2+6+4+6+4. Линейка тактов
-                # отбивается тем же числом, и стоит разойтись на символ — вся
-                # диаграмма начинает врать про такты.
                 row.append("    ")
                 row.append(ins.name[:5].ljust(4), style=title)
                 row.append(ins.op.lower()[:3].ljust(4),
                            style=palette.op_style(ins.op))
-                row.append((f"т.{pl.cycle}" if pl else "—").rjust(6) + "    ",
+                row.append((f"c{pl.cycle}" if pl else "—").rjust(6) + "    ",
                            style=dim)
-                # Отрезок стоит на самом раннем возможном такте и длиной ровно
-                # в латентность: видно, из чего сложились эти такты.
                 row.append(" " * (met.asap[i] * cpc))
                 row.append("─" * max(1, lat * cpc),
                            style=palette.op_style(ins.op))
                 row.append(f" {lat}", style=faint)
                 link = InstrLink(i, row, classes="instr-link")
-                # Подсказка дублирует подпись снизу ровно потому, что её
-                # там уже прочитали: у строки пути она должна быть под
-                # рукой, а не через абзац.
-                link.tooltip = f"{ins.name}: латентность {lat} т. — в решётку"
+                link.tooltip = f"{ins.name}: latency {lat} cyc — jump to grid"
                 chain_box.mount(link)
 
-        note = f"{rb} т."
+        note = f"{rb} cyc"
         if rb > cp:
-            note += "  ·  он и держит предел"
+            note += "  ·  sets the bound"
         r = Text("\n")
-        r.append_text(self._section("ресурсы", note))
+        r.append_text(self._section("resources", note))
         r.append("\n\n")
         for chans, ops, slots, need in self._resource_groups():
             label = " ".join(model.port_label(c) for c in chans)
             r.append("    " + label.ljust(22)[:22], style=dim)
             r.append(f"{slots:>3}", style=title)
-            r.append(" слот.  / ", style=faint)
+            r.append(" slots / ", style=faint)
             r.append(f"{len(chans)}", style=title)
-            r.append(" порт.  = ", style=faint)
-            r.append(f"{need:>2} т.", style=title)
+            r.append(" ports = ", style=faint)
+            r.append(f"{need:>2} cyc", style=title)
             r.append("   " + "/".join(o.lower() for o in ops)[:26],
                      style=palette.op_style(ops[0]) if ops else dim)
             r.append("\n")
-        r.append("\n    строка пути — ссылка: ведёт к этой операции "
-                 "в решётке", style=faint)
+        r.append("\n    click any path row to jump to that op in the grid",
+                 style=faint)
         res.update(r)
 
     def _draw_ai(self) -> None:
-        """НЕЙРОСЕТИ: что сделал TINY Flash. Считается само, без команд."""
+        """NEURAL NETS: TINY Flash schedule results (computed automatically)."""
         body = self.query_one("#ai-body", Static)
         h = getattr(self, "hints", None)
         dim = palette.role_hex("dim")
@@ -2942,29 +2461,29 @@ class LabScreen(ModeScreen):
         accent = palette.role_hex("accent")
         t = Text()
         if h is None or h.tiny is None:
-            t.append("крошки не ответили (нет весов?) — инструмент работает и без них",
+            t.append("TINY unavailable (missing weights?) — tool works fine without it",
                      style=faint)
             body.update(t)
             return
         tn = h.tiny
         t.append("TINY Flash", style=accent)
-        t.append("  строит расписание", style=dim)
+        t.append("  schedules", style=dim)
         if tn.через_ядро:
-            t.append("  · блок «планировщик», ядро NEX", style=faint)
+            t.append("  · scheduler block, NEX core", style=faint)
         t.append("\n")
         gain = tn.baseline - tn.tiny
-        t.append(f"  baseline {tn.baseline} → крошки {tn.tiny} т.", style=title)
+        t.append(f"  baseline {tn.baseline} → TINY {tn.tiny} cyc", style=title)
         if gain > 0:
             t.append(f"  (-{gain})", style=palette.role_hex("success"))
         elif gain == 0:
-            t.append("  (вровень)", style=dim)
-        t.append(f"\n  {tn.winner} · {tn.ms:.0f} мс", style=faint)
+            t.append("  (tied)", style=dim)
+        t.append(f"\n  {tn.winner} · {tn.ms:.0f} ms", style=faint)
         if tn.oracle is not None:
             t.append(f" · oracle {tn.oracle}", style=faint)
         t.append("\n")
         if h.blocks:
-            t.append("\nБЛОКИ ФАЙЛА", style=accent)
-            t.append(f"  {len(h.blocks)} из {h.blocks_total}\n", style=dim)
+            t.append("\nFILE BLOCKS", style=accent)
+            t.append(f"  {len(h.blocks)} of {h.blocks_total}\n", style=dim)
             for r in h.blocks:
                 t.append(f"  #{r.index:<3} n={r.n:<4} ", style=dim)
                 t.append(f"{r.baseline}→{r.tiny}", style=title)
@@ -2974,17 +2493,16 @@ class LabScreen(ModeScreen):
         body.update(t)
 
     def _draw_numbers(self) -> None:
-        # Развёрнутая панель — другой инструмент, а не тот же текст крупнее.
         why = self.query_one("#numbers-why", VerticalScroll)
         short = self.query_one("#numbers", Static)
         why.display = self._numbers_expanded
         short.display = not self._numbers_expanded
         panel = self.query_one("#p-numbers", Panel)
         if self._numbers_expanded:
-            panel.set_title("ЧИСЛА   ·   откуда взялся предел")
+            panel.set_title("NUMBERS   ·   bound breakdown")
             self._draw_numbers_why()
             return
-        panel.set_title("ЧИСЛА")
+        panel.set_title("NUMBERS")
         target = self.query_one("#numbers", Static)
         if self.base is None:
             return
@@ -3003,35 +2521,24 @@ class LabScreen(ModeScreen):
             t.append("\n")
 
         row("baseline", str(b), title)
-        row("оракул", str(o), f"{palette.role_hex('success')} bold")
+        row("oracle", str(o), f"{palette.role_hex('success')} bold")
         self._row_model(row, b, o)
-        row("предел", str(lb), title, self.met.binding)
+        row("bound", str(lb), title, self.met.binding)
         gap = b - o
-        row("выигрыш", f"-{gap}" if gap else "нет",
+        row("gain", f"-{gap}" if gap else "none",
             palette.role_hex("success") if gap else dim,
             f"{100 * gap // b}%" if gap and b else "")
         t.append("\n")
-        t.append("оптимум доказан" if self.orc.optimal else "оптимум не доказан",
+        t.append("optimum proven" if self.orc.optimal else "optimum not proven",
                  style=palette.role_hex("success") if self.orc.optimal
                  else palette.role_hex("warning"))
         t.append("\n")
         util = self.base.schedule.slot_utilization
-        t.append(f"слоты baseline заняты на {util:.0%}", style=dim)
+        t.append(f"baseline slots used {util:.0%}", style=dim)
         target.update(t)
 
     def _row_model(self, row, base_t: int, orc_t: int) -> None:
-        """Число модели — рядом с двумя другими, а не в отдельном отчёте.
-
-        Решение по интерфейсу: модель — это ещё один планировщик, и судить её
-        надо в той же таблице и по тем же тактам. Пока она не запускалась,
-        строки нет: пустая строка «модель —» выглядела бы как результат.
-
-        Незаконное расписание числом НЕ подписывается. Такты у незаконного
-        расписания посчитать можно, но сравнивать их с baseline нельзя: это
-        число получено нарушением правил машины, и поставить его в один
-        столбик с честными значило бы засчитать модели то, чего она не
-        добилась.
-        """
+        """Render the trained model's makespan alongside baseline and oracle."""
         sched = self.model_sched
         if sched is None or not sched.placements:
             return
@@ -3039,29 +2546,29 @@ class LabScreen(ModeScreen):
         total = len(self.app.session.dag_obj)
         illegal = self._model_illegal()
         if len(sched.placements) < total:
-            row("модель", f"{len(sched.placements)}/{total}", dim, "пишет…")
+            row("model", f"{len(sched.placements)}/{total}", dim, "generating…")
             return
         if illegal:
-            row("модель", "—", palette.role_hex("error"),
-                f"незаконно: каналов {len(illegal)}")
+            row("model", "—", palette.role_hex("error"),
+                f"illegal: {len(illegal)} ch")
             return
         m = sched.makespan
         if m < orc_t:
-            note = "ниже оракула — проверить"
+            note = "below oracle — verify"
             style = palette.role_hex("warning")
         elif m == orc_t:
-            note = "оптимум"
+            note = "optimal"
             style = f"{palette.role_hex('success')} bold"
         elif m < base_t:
-            note = "обыграла эвристику"
+            note = "beats baseline"
             style = palette.role_hex("success")
         elif m == base_t:
-            note = "вровень с эвристикой"
+            note = "ties baseline"
             style = palette.role_hex("title")
         else:
-            note = "хуже эвристики"
+            note = "worse than baseline"
             style = palette.role_hex("warning")
-        row("модель", str(m), style, note)
+        row("model", str(m), style, note)
 
     _SEV_MARKS = {"high": ("!!", "error"), "medium": ("!", "warning"),
                   "low": ("·", "dim")}
@@ -3077,12 +2584,6 @@ class LabScreen(ModeScreen):
         if self._diag_expanded:
             self._draw_diag_full(scroll)
             return
-        # Свёрнутая панель — СВОДКА одной строкой, а не топ-список.
-        # Подробности давно живут там, где глаз уже смотрит: простой —
-        # строкой в решётке, находка под курсором — в инспекторе разворота,
-        # переходы — клавишами n/N. Панель оставляет себе единственное, чего
-        # нет больше нигде: сколько проблем всего и какая хуже — видно до
-        # того, как тронул хоть одну клавишу. Полный список — d / 2xклик.
         self.query_one("#diag-filter", Horizontal).remove_children()
         scroll.remove_children()
         from ...core.doctor import diagnose
@@ -3095,22 +2596,22 @@ class LabScreen(ModeScreen):
             return
         t = Text()
         if diag.clean:
-            t.append("находок нет — baseline уложился в предел",
+            t.append("no findings — baseline hits the bound",
                      style=palette.role_hex("success"))
             scroll.mount(Static(t))
             return
         worst = diag.top[0]
         n = len(diag.top)
         t.append(f"{n} ", style=palette.role_hex("title") + " bold")
-        t.append(plural(n, "находка", "находки", "находок") + "  ·  худшая ",
+        t.append(plural(n, "finding", "findings", "findings") + "  ·  worst ",
                  style=palette.role_hex("dim"))
-        t.append(f"-{worst.cycles_lost} т.", style=palette.role_hex("error"))
+        t.append(f"-{worst.cycles_lost} cyc", style=palette.role_hex("error"))
         t.append(" ")
         width = max(20, self.query_one("#p-diag", Panel).size.width - 4)
         t.append(_wrapped(worst.title, width - 24, 0)[:width],
                  style=palette.role_hex("text"))
         t.append("\n")
-        t.append("d или 2xклик — все находки и переход по ним",
+        t.append("d or 2xclick — all findings & jump",
                  style=palette.role_hex("accent_soft"))
         scroll.mount(Static(t))
 
@@ -3120,8 +2621,8 @@ class LabScreen(ModeScreen):
         for f in self._findings():
             counts["all"] += 1
             counts["limit" if f.kind == "limit" else f.severity] += 1
-        labels = {"all": "все", "high": "критично", "medium": "средне",
-                  "low": "мелко", "limit": "предел"}
+        labels = {"all": "all", "high": "high", "medium": "medium",
+                  "low": "low", "limit": "bound"}
         for key in self.SEVERITIES:
             n = counts.get(key, 0)
             chip = Chip(f"{labels[key]} {n}", f"/find filter {key}",
@@ -3130,27 +2631,16 @@ class LabScreen(ModeScreen):
             row.mount(chip)
 
     def _draw_diag_full(self, scroll: VerticalScroll) -> None:
-        """Развёрнутый ДИАГНОЗ: не топ-5, а все находки целиком, с фильтром.
-
-        Каждая строка кликабельна: клик ставит курсор решётки на нужную
-        клетку и сразу открывает РЕШЁТКУ — «посмотреть, где именно» не
-        требует ни другой команды, ни выхода из режима находок.
-        """
+        """Maximized DIAGNOSIS: full filterable list of clickable findings."""
         self._fill_diag_filter(self.query_one("#diag-filter", Horizontal))
         scroll.remove_children()
         findings = self._filtered_findings()
         if not findings:
-            scroll.mount(Static(Text("для этого фильтра находок нет",
+            scroll.mount(Static(Text("no findings match this filter",
                                      style=palette.role_hex("faint"))))
             return
         active = self._active_finding()
         dim = palette.role_hex("dim")
-        # Ширина — от панели, а не от пол-экрана: в развороте панель во всё
-        # окно, и завёрнутый на половину текст оставлял пустую правую половину.
-        # Размер панели в момент разворота ещё старый (maximize() только что
-        # вызван, раскладка не пересчитана), поэтому у развёрнутой берём
-        # ширину экрана. Потолок 120 — читаемость: строка на 200+ символов
-        # глазами не идёт.
         panel = self.query_one("#p-diag", Panel)
         if self.maximized is panel:
             width = max(30, min(self.app.size.width - 8, 120))
@@ -3160,7 +2650,7 @@ class LabScreen(ModeScreen):
             here = active is not None and f == active
             mark, role = self._finding_mark(f)
             t = Text()
-            head = f"{'>' if here else mark:<3}-{f.cycles_lost} т. "
+            head = f"{'>' if here else mark:<3}-{f.cycles_lost} cyc "
             t.append(head, style=palette.role_hex("accent" if here else role))
             t.append(_wrapped(f.title, width, len(head)),
                      style=(palette.role_hex("title") + " bold") if here
@@ -3169,25 +2659,12 @@ class LabScreen(ModeScreen):
                      style=palette.role_hex("accent_soft") if here else dim)
             t.append("\n     " + _wrapped(f.why, width, 5), style=dim)
             row = FindingItem(i, t, classes="finding-row" + (" here" if here else ""))
-            # Полный «почему» — в подсказке: строка находки уже несёт
-            # заголовок и место, но совет разворачивается только наведением.
             row.tooltip = (f"{f.title}\n{f.where}\n{f.why}\n"
-                           "клик — курсор решётки на эту клетку")
+                           "click — jump grid cursor to this cell")
             scroll.mount(row)
 
-    # --- МАШИНА развёрнутая: матрица возможностей ---------------------------
-    #
-    # Свёрнутая панель — справка в три строки. Развёрнутая — сама матрица:
-    # какая операция на каком порту исполнима, сколько её ждать и сколько
-    # таких операций в этом участке. Это не список и не вывод числа, это
-    # таблица, и строка в ней кликабельна: строка → первая такая операция в
-    # решётке. Ровно тот вопрос, который возникает над матрицей: «а где это
-    # у меня?»
+    # --- maximized MACHINE: port capability matrix ------------------------
 
-    # Заголовок колонки → чем сортировать и в каком направлении по умолчанию
-    # при первом клике (числовые — сперва по убыванию, «операция» — по
-    # алфавиту). Клик по тому же столбцу второй раз переворачивает; клик по
-    # другому — берёт направление отсюда.
     MATRIX_SORT_DEFAULT_REV = {"op": False}
 
     def _matrix_sort_value(self, name: str, key: str, model, counts):
@@ -3240,9 +2717,6 @@ class LabScreen(ModeScreen):
         title = palette.role_hex("title")
         accent = palette.role_hex("accent")
 
-        # Стрелка в заголовке — единственное, что показывает, чем СЕЙЧАС
-        # отсортирована таблица: без неё пересортировка кликом читалась бы
-        # как случайность, а не как манипуляция данными.
         def head(label: str, key: str) -> Text:
             t = Text(label, style=dim)
             if key == self._matrix_sort_key:
@@ -3251,13 +2725,13 @@ class LabScreen(ModeScreen):
             return t
 
         table.clear(columns=True)
-        table.add_column(head("операция", "op"), width=10, key="op")
+        table.add_column(head("op", "op"), width=10, key="op")
         for port in model.ports:
             table.add_column(head(port.label, f"p{port.index}"), width=4,
                              key=f"p{port.index}")
-        table.add_column(head("ждать", "lat"), width=7, key="lat")
-        table.add_column(head("держит порт", "occ"), width=13, key="occ")
-        table.add_column(head("в участке", "cnt"), width=11, key="cnt")
+        table.add_column(head("lat", "lat"), width=7, key="lat")
+        table.add_column(head("holds port", "occ"), width=13, key="occ")
+        table.add_column(head("in block", "cnt"), width=11, key="cnt")
 
         pool = [n for n in model.ops
                 if not self._matrix_filter or self._matrix_filter in n.lower()]
@@ -3267,7 +2741,7 @@ class LabScreen(ModeScreen):
                                                   model, counts),
             reverse=self._matrix_sort_rev)
         if not self._matrix_ops:
-            foot.update(Text(f"    ничего не совпало с «{self._matrix_filter}»",
+            foot.update(Text(f"    no matches for '{self._matrix_filter}'",
                              style=faint))
             return
         for name in self._matrix_ops:
@@ -3279,14 +2753,12 @@ class LabScreen(ModeScreen):
                 if name not in port.ops:
                     row.append(Text("  ·", style=faint))
                 elif name in mono:
-                    # Единственный исполнитель — то самое место, где расписание
-                    # чаще всего и упирается. Помечено формой, не только цветом.
                     row.append(Text("  *", style=accent))
                 else:
                     row.append(Text("  *", style=palette.op_style(name)))
-            row.append(Text(f"{op.latency} т.".rjust(6),
+            row.append(Text(f"{op.latency} cyc".rjust(6),
                             style=title if n else faint))
-            row.append(Text((f"{op.occupancy} т." if op.blocks_channel()
+            row.append(Text((f"{op.occupancy} cyc" if op.blocks_channel()
                              else "—").rjust(11),
                             style=palette.role_hex("warning")
                             if op.blocks_channel() else faint))
@@ -3294,10 +2766,6 @@ class LabScreen(ModeScreen):
                             style=title if n else faint))
             table.add_row(*row)
 
-        # Занятость портов ЭТИМ участком. Матрица говорит, что порт умеет;
-        # без второй половины непонятно, при чём тут расписание. На slotclash
-        # ,5 занят 11 т. из 23 — это и есть узкое место, видимое длиной
-        # полосы, а не выводимое из чисел в трёх разных панелях.
         t = Text()
         if self.base is not None:
             busy = self.base.schedule.busy_map()
@@ -3307,40 +2775,32 @@ class LabScreen(ModeScreen):
                 per[port] = per.get(port, 0) + 1
             worst = max(per.values(), default=0)
             t.append("\n")
-            t.append_text(self._section("занятость портов",
-                                        f"участок укладывается в {span} т."))
+            t.append_text(self._section("port utilization",
+                                        f"block runs in {span} cyc"))
             t.append("\n\n")
             for port in model.ports:
                 held = per.get(port.index, 0)
                 t.append("    " + port.label.ljust(5), style=dim)
                 bar_w = max(0, min(44, round(44 * held / span)))
-                # Тем же `─`, что и остальные шкалы инструмента. Акцент —
-                # только у самого загруженного порта: он один здесь что-то
-                # значит, остальные пять покрашенных полос значили бы лишь
-                # «тут тоже есть цвет».
                 t.append("─" * bar_w, style=accent if held == worst and held
                          else palette.role_hex("success"))
                 t.append("·" * (44 - bar_w), style=faint)
-                t.append(f"  {held:>3} т.", style=title if held else faint)
+                t.append(f"  {held:>3} cyc", style=title if held else faint)
                 t.append(f"{held * 100 // span:>5}%", style=dim if held
                          else faint)
                 if held == worst and held:
-                    t.append("   держит участок", style=accent)
+                    t.append("   bottleneck", style=accent)
                 elif not held:
-                    t.append("   не занят ни разу", style=faint)
+                    t.append("   unused", style=faint)
                 t.append("\n")
             t.append("\n")
         t.append("    * ", style=accent)
-        t.append("единственный исполнитель", style=dim)
-        t.append("      * исполним      · нет\n", style=faint)
-        # Откуда цифры. Проект держится на том, что измеренное отделено от
-        # предположенного, и в матрице это должно быть видно, а не в отчёте.
+        t.append("sole executor", style=dim)
+        t.append("      * supported      · no\n", style=faint)
         srcs = {model.matrix_source}
         srcs |= {o.latency_source for o in model.ops.values()}
-        t.append("    источник: " + ", ".join(sorted(srcs)) + "\n", style=faint)
-        # Одной строкой и коротко: подсказка, уехавшая на второй ряд, читается
-        # как ещё один раздел, хотя это сноска.
-        t.append("    строка таблицы — ссылка: ведёт к этой операции в решётке",
+        t.append("    source: " + ", ".join(sorted(srcs)) + "\n", style=faint)
+        t.append("    click any table row to jump to that op in the grid",
                  style=faint)
         foot.update(t)
 
@@ -3356,24 +2816,24 @@ class LabScreen(ModeScreen):
         short.display = not self._machine_expanded
         if self._machine_expanded:
             model = self.app.session.model()
-            panel.set_title(f"МАШИНА   ·   {model.name}   ·   "
-                            f"{model.width} портов   ·   что где исполнимо")
+            panel.set_title(f"MACHINE   ·   {model.name}   ·   "
+                            f"{model.width} ports   ·   capability matrix")
             self._draw_machine_matrix()
             return
-        panel.set_title("МАШИНА")
+        panel.set_title("MACHINE")
         target = self.query_one("#machine", Static)
         model = self.app.session.model()
         dim = palette.role_hex("dim")
         t = Text()
-        t.append("профиль".ljust(11), style=dim)
+        t.append("profile".ljust(11), style=dim)
         t.append(model.name, style=palette.role_hex("text"))
         t.append("\n")
-        t.append("каналов".ljust(11), style=dim)
+        t.append("channels".ljust(11), style=dim)
         t.append(str(model.width), style=palette.role_hex("text"))
         t.append("\n")
         for port, ops in sorted(model.sole_host_ops().items()):
             t.append("  " + "/".join(ops), style=palette.op_style(ops[0]))
-            t.append(f" → только {model.port_label(port)}", style=dim)
+            t.append(f" → only {model.port_label(port)}", style=dim)
             t.append("\n")
-        t.append("/model — матрица целиком", style=palette.role_hex("accent_soft"))
+        t.append("/model — full matrix", style=palette.role_hex("accent_soft"))
         target.update(t)

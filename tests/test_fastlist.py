@@ -1,9 +1,8 @@
-"""Быстрый движок списочного планирования == baseline.list_schedule, поразрядно.
+"""Fast list-scheduling engine must match `baseline.list_schedule` bit-for-bit.
 
-Сравнивается всё расписание целиком: для каждой инструкции тот же такт и канал,
-тот же порядок выдачи и тот же makespan. Приоритеты берутся с множеством ничьих
-(они проверяют разрешение ничьих по номеру), держки — случайные, машины —
-все профили, разной ширины и с искажёнными латентностями.
+Compares the entire schedule: exact cycle, issue port, issue order, and makespan
+for every op across tied priorities, random defer_until floors, all machine
+profiles, narrowed widths, and perturbed latencies.
 """
 
 import random
@@ -33,8 +32,8 @@ def _priorities(dag, model, rnd):
     n = len(dag)
     h = [float(v) for v in compute_metrics(dag, model).height]
     yield h
-    yield [float(rnd.randint(0, 3)) for _ in range(n)]      # много ничьих
-    yield [1.0] * n                                          # одни ничьи
+    yield [float(rnd.randint(0, 3)) for _ in range(n)]      # heavy tie pressure
+    yield [1.0] * n                                          # all ties
     yield [rnd.random() for _ in range(n)]
     yield [float(-i) for i in range(n)]
 
@@ -45,7 +44,7 @@ def _defers(dag, ms, rnd):
     if n:
         yield {rnd.randrange(n): rnd.randint(1, max(2, ms)) for _ in range(max(1, n // 5))}
         yield {i: rnd.randint(0, max(2, ms)) for i in range(n) if rnd.random() < 0.5}
-        yield {rnd.randrange(n): ms + rnd.randint(1, 40)}      # далёкая держка: прыжок по тактам
+        yield {rnd.randrange(n): ms + rnd.randint(1, 40)}      # distant defer_until: tests cycle skipping
 
 
 class TestFastList(unittest.TestCase):
@@ -55,7 +54,7 @@ class TestFastList(unittest.TestCase):
         raw = plan.run(prio, defer)
         new = plan.to_schedule(raw)
         self.assertEqual(ref.placements, new.placements)
-        self.assertEqual(list(ref.placements), list(new.placements), "порядок выдачи")
+        self.assertEqual(list(ref.placements), list(new.placements), "issue order")
         self.assertEqual(ref.makespan, raw.makespan)
         self.assertEqual(new.makespan, raw.makespan)
 
@@ -93,8 +92,7 @@ class TestFastList(unittest.TestCase):
                         self.check_graph(random_dag(seed, n=40), model, rnd)
 
     def test_alternating_models_do_not_mix_cached_tables(self):
-        """Таблица каналов кэшируется по модели: чередование моделей не должно
-        подсовывать чужую таблицу."""
+        """Port mask table is cached per machine model and must not leak across models."""
         rnd = random.Random(4)
         dag = random_dag(5, n=30)
         models = [get_profile("e2k-v6-measured"), get_profile("naive_homogeneous"),
@@ -115,7 +113,7 @@ class TestFastList(unittest.TestCase):
         self.assertSame(one, model, [1.0], {0: 7})
 
     def test_duplicate_predecessor(self):
-        """Операнд читается дважды (preds=(a, a)) — счётчик готовности не ломается."""
+        """Duplicate operand edges (preds=(a, a)) must not break readiness reference counting."""
         model = get_profile("e2k-v6-measured")
         b = DagBuilder("dup", "dup")
         a = b.op("LOAD", "a")
@@ -136,9 +134,7 @@ class TestFastList(unittest.TestCase):
                 self.assertEqual(s.validate(), [])
 
     def test_unexecutable_op_raises_like_reference(self):
-        """Операция без исполнимого порта: как и у оригинала — RuntimeError, а не
-        зависание. (Оригинал доходит до этого после 100000 пустых тактов, здесь
-        — сразу.)"""
+        """An op with no capable functional unit raises RuntimeError immediately instead of hanging."""
         model = get_profile("e2k-v6-measured")
         ports = tuple(Port(p.index, p.label, p.ops - {"DIV"}) for p in model.ports)
         broken = replace(model, ports=ports, name="no-div")

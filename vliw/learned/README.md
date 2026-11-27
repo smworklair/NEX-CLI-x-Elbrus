@@ -1,26 +1,24 @@
-# vliw/learned: обученная LLM как планировщик
+# `vliw/learned`: Learned LLM as a Scheduler
 
-LoRA-адаптер поверх Qwen2.5-3B, реализующий протокол `Scheduler`. Трек исторический:
-в проекте он заменён крошками TINY AI. Пользовательская инструкция — [`docs/LEARNED.md`](../../docs/LEARNED.md).
+LoRA adapter on top of Qwen2.5-3B implementing the `Scheduler` protocol. This is a historical track superseded by TINY AI. User guide: [`docs/LEARNED.md`](../../docs/LEARNED.md).
 
-## Зачем отдельная папка
+## Why a Separate Package
 
 ```text
 vliw/
-  core/     модель машины, граф, планировщики, метрики
-  ui/       цвет, рамки, таблицы, логотип
-  learned/  обученная модель (здесь)
-  cli.py    склейка: команда → core → ui → печать
+  core/     machine model, graph, schedulers, metrics
+  ui/       colors, borders, tables, logo
+  learned/  learned model (here)
+  cli.py    glue: command → core → ui → output
 ```
 
-`core/`, `ui/` и `cli.py` не знают, откуда взялось расписание. Им важен только контракт `Scheduler`.
-Поэтому модель можно вставить здесь, ничего не трогая снаружи.
+`core/`, `ui/`, and `cli.py` do not know where a schedule came from. They only depend on the `Scheduler` contract, so a model can be plugged in here without touching anything outside.
 
-## Контракт
+## Contract
 
 ```python
 class LearnedScheduler:
-    name = "ИИ-планировщик (обученная модель)"
+    name = "AI Scheduler (learned model)"
     kind = "learned"      # baseline=heuristic, oracle=exact
     short = "learned"
 
@@ -28,27 +26,21 @@ class LearnedScheduler:
         ...
 ```
 
-Вход — `DAG` и `MachineModel`. Выход — тот же `SchedulingResult`, что у жадного и точного поиска,
-с необязательными `trace` и `notes`.
+Input: `DAG` and `MachineModel`. Output: the same `SchedulingResult` returned by greedy and exact search, with optional `trace` and `notes`.
 
-## Что сделано
+## What Was Built
 
-1. Обучены и опубликованы три адаптера на [Hugging Face](https://huggingface.co/Shmonika/nex-vliw-lora).
-2. `schedule()` кодирует граф в промпт, генерирует продолжение и собирает `Schedule`.
-   Невалидный ответ откатывается на жадный, а не выдаётся за рабочее расписание.
-3. `trace` заполняется, поэтому `/explain` и `/compare` показывают решения модели.
+1. Trained and published three adapters on [Hugging Face](https://huggingface.co/Shmonika/nex-vliw-lora).
+2. `schedule()` encodes the graph into a prompt, generates a completion, and constructs a `Schedule`. Invalid outputs fall back to greedy instead of masquerading as valid schedules.
+3. Populates `trace`, so `/explain` and `/compare` display the model's decisions.
 
-## Результат
+## Result
 
-На синтетике внутри распределения обучения модель иногда обгоняет жадный.
-На **настоящем коде** после `lcc` она не обошла случайный перебор ни на одном из 13 графов,
-суммарно +0 тактов. Методика и сырые данные —
-[`real_candidates_100_400/model_eval/REPORT.md`](../../real_candidates_100_400/model_eval/REPORT.md).
+On in-distribution synthetic graphs, the model occasionally beats greedy.
+On **real code** from `lcc`, it failed to beat random search on any of the 13 graphs (+0 cycles total). Methodology and raw data: [`real_candidates_100_400/model_eval/REPORT.md`](../../real_candidates_100_400/model_eval/REPORT.md).
 
-Обе цифры настоящие: они измерены в разных условиях.
+Both numbers are real: they were simply measured under different conditions.
 
-## Обучение своей версии
+## Training Your Own Version
 
-Полный порядок — генерация датасета, QLoRA-дообучение Qwen на бесплатном GPU, проверка —
-в [`training/README.md`](../../training/README.md). `training/` — отдельный пакет и не тянет
-ML-зависимости в основной `vliw`.
+Full procedure — dataset generation, QLoRA fine-tuning of Qwen on free GPUs, and validation — is in [`training/README.md`](../../training/README.md). `training/` is a separate package and does not pull ML dependencies into core `vliw`.

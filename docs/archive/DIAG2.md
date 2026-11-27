@@ -1,80 +1,78 @@
-# Почему обвалился прогон 2 — разбор дампа
+# Why Run 2 Collapsed — Dump Analysis
 
-Диагностика `vliw-diag2` **запускалась** (статус COMPLETE), дампы лежат в
-`training/checkpoints/diag2_free.jsonl` и `diag2_constrained.jsonl`. В более
-ранней рабочей записке было записано, что она не запускалась, — это
-устарело.
+The `vliw-diag2` diagnostic **did run** (status COMPLETE); its dumps are stored in
+`training/checkpoints/diag2_free.jsonl` and `diag2_constrained.jsonl`. An earlier
+working note stated that it had not been run — that is outdated.
 
-Замер: адаптер прогона 2, 20 примеров из `eval.jsonl` (узкий эвал, графы
-6..14 операций) — тот самый, где прогон 2 дал 17.7% против 97.7% у
-прогона 1. Каждый пример прогнан дважды: обычной генерацией и
-ограниченной.
+Measurement: Run 2 adapter, 20 examples from `eval.jsonl` (narrow eval, graphs of
+6..14 operations) — the exact benchmark where Run 2 scored 17.7% vs. Run 1's 97.7%.
+Each example was run twice: with free generation and with constrained generation.
 
-## Результат
+## Result
 
-| режим | валидно | разрыв до оптимума |
+| mode | valid | gap to optimum |
 |---|---|---|
-| обычная генерация | 3/20 (15%) | — |
-| ограниченная | **20/20 (100%)** | **0.00 такта, точно оптимальны все 20** |
+| free generation | 3/20 (15%) | — |
+| constrained | **20/20 (100%)** | **0.00 cycles, all 20 strictly optimal** |
 
-Состав провалов в обычном режиме: галлюцинация 9, мусор 7, хвост 1.
+Failure breakdown in free mode: hallucination 9, garbage 7, tail 1.
 
-## Причина: теряется ведущее `\n0: `
+## Cause: the leading `\n0: ` is dropped
 
-Во **всех 20** ответах обычного режима отсутствует метка первой инструкции.
-Модель принимает завершающее двоеточие промпта за метку и продолжает его
-как строку расписания:
+In **all 20** free-mode responses, the label for the first instruction is missing.
+The model treats the prompt's trailing colon as the label and continues it
+as a schedule line:
 
 ```
-промпт кончается:  ...5 ADD <- 3 4\nрасписание:
-ждём:              \n0: такт=0 канал=0\n1: такт=5 канал=1
-получаем:           такт=0 канал=0\n1: такт=5 канал=1
+prompt ends with:  ...5 ADD <- 3 4\nрасписание:
+expected:          \n0: такт=0 канал=0\n1: такт=5 канал=1
+actual:             такт=0 канал=0\n1: такт=5 канал=1
 ```
 
-Дальше всё рассыпается по-разному: где-то теряется только инструкция 0
-(«галлюцинация» — дыра в id), где-то модель заодно роняет двоеточия в
-остальных строках («мусор» — ни одной разобранной строки), где-то
-скатывается в пересказ графа из промпта.
+From there, things fall apart in different ways: sometimes only instruction 0 is lost
+("hallucination" — a hole in the IDs), sometimes the model also drops colons on
+the remaining lines ("garbage" — zero parsed lines), and sometimes it slips into
+paraphrasing the graph from the prompt.
 
-**План при этом верен.** У 5 примеров из 20 ответ обычного режима
-совпадает с ограниченным ПОБАЙТОВО, стоит вернуть потерянное `\n0: `.
-Остальные расходятся дальше по строке только потому, что ограниченный
-режим попутно не даёт выбрать незаконный канал.
+**The schedule itself is correct.** In 5 out of 20 examples, the free-mode response
+matches the constrained one BYTE-FOR-BYTE once the missing `\n0: ` is restored.
+The rest diverge later in the line only because constrained mode also prevents
+picking an illegal channel.
 
-## Чего причиной НЕ является
+## What is NOT the cause
 
-**Не стык токенов.** Проверено на настоящем токенизаторе Qwen2.5-3B:
-`расписание:` токенизируется одинаково и отдельно, и в склейке с ответом
-(`':'` и `'0'` — разные токены, слияния нет). Гипотеза о смещении границы
-промпта не подтвердилась.
+**Not a token boundary issue.** Verified on the actual Qwen2.5-3B tokenizer:
+`расписание:` tokenizes identically both in isolation and concatenated with the response
+(`':'` and `'0'` are separate tokens, with no merging). The prompt-boundary shift
+hypothesis was not confirmed.
 
-**Не формат данных.** `dataset.jsonl`, `train_merged.jsonl` и
-`vliw_train_extra_fixed.jsonl` кодируют ответ одинаково: `0: такт=N
-канал=M`, стык `расписание:0: такт=` во всех трёх.
+**Not the data format.** `dataset.jsonl`, `train_merged.jsonl`, and
+`vliw_train_extra_fixed.jsonl` all encode the response the same way: `0: такт=N
+канал=M`, with the boundary `расписание:0: такт=` in all three.
 
-Что остаётся подозревать: сам стык `расписание:0:` — промпт кончается
-двоеточием, ответ начинается меткой с двоеточием, разделителя между ними
-нет. Структура двусмысленная, и прогон с нуля на большем объёме сел в
-другой локальный оптимум, чем прогон 1, который дообучался поверх
-прогона 0. Это гипотеза, а не установленный факт: проверяется дешёвым
-прогоном на данных с `расписание:\n0: ...`.
+What remains suspect is the `расписание:0:` boundary itself — the prompt ends with
+a colon, the response starts with a colon-terminated label, and there is no separator
+between them. The structure is ambiguous, and training from scratch on a larger dataset
+settled into a different local optimum than Run 1, which fine-tuned on top of Run 0.
+This is a hypothesis, not an established fact: it can be tested with a cheap run
+on data formatted as `расписание:\n0: ...`.
 
-## Что это меняет для прогона 3
+## What this changes for Run 3
 
-Адаптер прогона 2 **не плох в планировании**. На узком эвале под
-ограниченной генерацией он даёт 100% валидных и 100% точных оптимумов —
-то есть не хуже прогона 1 (97.7%), а по разрыву до оптимума лучше.
-Провал 17.7% — это провал ВЫДАЧИ ФОРМАТА, а не планирования.
+The Run 2 adapter is **not bad at scheduling**. On the narrow eval under
+constrained generation, it achieves 100% validity and 100% exact optima —
+that is, no worse than Run 1 (97.7%), and better in terms of optimality gap.
+The 17.7% failure is a FORMAT EMISSION failure, not a scheduling failure.
 
-Отсюда: вопрос «нужен ли ещё один прогон обучения» стоит иначе, чем
-считалось. Прежде чем учить заново, стоит проверить два дешёвых хода:
+Hence, the question "do we need another training run" stands differently than
+previously thought. Before retraining, two cheap moves are worth testing:
 
-1. **Ограниченная генерация как режим по умолчанию** для адаптера прогона
-   2. Стоит минуты GPU на замер по широкому эвалу — здесь измерен только
-   узкий, 20 примеров.
-2. **Разделитель в данных** (`расписание:\n0: ...`) и короткий прогон, чтобы
-   проверить гипотезу о стыке.
+1. **Constrained generation as the default mode** for the Run 2 adapter.
+   Measuring it on the wide eval costs minutes of GPU time — only the narrow eval
+   (20 examples) was measured here.
+2. **A separator in the data** (`расписание:\n0: ...`) and a short run to test
+   the boundary hypothesis.
 
-Оговорка: 20 примеров, узкий эвал. Для `eval_wide` то же самое не
-измерено, и класс ошибок STORE (см. `docs/ROADMAP.md`) здесь не
-проверяется в принципе — в `eval.jsonl` операций STORE ноль.
+Caveat: 20 examples, narrow eval. The same has not been measured on `eval_wide`,
+and the STORE error class (see `docs/ROADMAP.md`) is not tested here at all —
+`eval.jsonl` contains zero STORE operations.

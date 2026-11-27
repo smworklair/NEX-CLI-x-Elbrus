@@ -1,4 +1,4 @@
-"""nnl_vliw: язык графов, два ядра NNL, обучение, загрузка через Матплату, перекрёстная проверка."""
+"""nnl_vliw tests: DAG graph language, dual NNL cores, training, motherboard loading, and cross-check."""
 
 import json
 import shutil
@@ -13,19 +13,19 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nnl_vliw import данные as Д  # noqa: E402
-from nnl_vliw import обучить as О  # noqa: E402
-from nnl_vliw import оценка as Оц  # noqa: E402
-from nnl_vliw import ядра as Я  # noqa: E402
-from nnl_vliw.NNL import линтер as Л  # noqa: E402
+from nnl_vliw import данные as D  # noqa: E402
+from nnl_vliw import обучить as TR  # noqa: E402
+from nnl_vliw import оценка as EV  # noqa: E402
+from nnl_vliw import ядра as CORES  # noqa: E402
+from nnl_vliw.NNL import линтер as LINTER  # noqa: E402
 from nnl_vliw.NNL.матплата import Матплата  # noqa: E402
 from nnl_vliw.NNL.процессор import Процессор  # noqa: E402
-from nnl_vliw.обучение import сеть as С  # noqa: E402
+from nnl_vliw.обучение import сеть as NET  # noqa: E402
 from nnl_vliw.язык import ВСЕ_ПОНЯТИЯ, ЯзыкГрафов, корзина, понятия_графа  # noqa: E402
 from tools import portfolio_labels as PL  # noqa: E402
 
 EVAL = ROOT / "eval_hard.jsonl"
-АРХ = ROOT / "nnl_vliw" / "архитектуры"
+ARCH_DIR = ROOT / "nnl_vliw" / "архитектуры"
 
 
 def prompts(n):
@@ -38,29 +38,29 @@ def prompts(n):
     return out
 
 
-class TestЯзык(unittest.TestCase):
+class TestGraphLanguage(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.я = ЯзыкГрафов()
+        cls.lang = ЯзыкГрафов()
         cls.p = prompts(30)
 
     def test_buckets_are_monotone_and_exact_when_small(self):
         v = [корзина(x) for x in range(0, 300)]
         self.assertEqual(v, sorted(v))
         self.assertEqual([корзина(x) for x in range(0, 17)], list(range(17)))
-        self.assertGreaterEqual(min(корзина(x) - x for x in range(17, 300)), 0)   # корзина не меньше значения
+        self.assertGreaterEqual(min(корзина(x) - x for x in range(17, 300)), 0)   # bucket >= value
         self.assertLessEqual(max(корзина(x) - x for x in range(17, 300)), 7)
 
     def test_translate_is_deterministic_and_nonempty(self):
-        a = self.я.перевести(self.p[0])
-        b = self.я.перевести(self.p[0])
+        a = self.lang.перевести(self.p[0])
+        b = self.lang.перевести(self.p[0])
         self.assertEqual(a, b)
         self.assertGreater(len(a["токены"]), 10)
         self.assertIn("n:", "".join(a["токены"]))
 
     def test_each_partition_has_exactly_one_side(self):
         for p in self.p:
-            c = self.я.перевести(p)["понятия"]
+            c = self.lang.перевести(p)["понятия"]
             self.assertEqual(set(c), set(ВСЕ_ПОНЯТИЯ))
             self.assertEqual(c["деления:есть"] + c["деления:нет"], 1.0)
             self.assertEqual(c["память:много"] + c["память:мало"], 1.0)
@@ -78,53 +78,53 @@ class TestЯзык(unittest.TestCase):
         dag = build_dag(parse_graph_entries(p))
         c = понятия_графа(dag)
         self.assertEqual(c["деления:есть"], 1.0)
-        self.assertEqual(c["память:много"], 1.0)               # LOAD+STORE = 2 из 4
+        self.assertEqual(c["память:много"], 1.0)               # LOAD+STORE = 2 of 4
         q = p.replace("FDIV", "ADD")
         self.assertEqual(понятия_графа(build_dag(parse_graph_entries(q)))["деления:есть"], 0.0)
         toks = ЯзыкГрафов().перевести(p)["токены"]
         self.assertTrue(any(t.startswith("оп:FDIV:") for t in toks), toks)
 
     def test_language_does_not_see_the_answer(self):
-        """Токены не меняются, если дописать к prompt любое расписание: язык читает только граф."""
+        """Tokens must not change when a schedule is appended to the prompt: the language reads only the DAG."""
         base = self.p[0]
         with_sched = base + "\n0: такт=0 канал=1\n1: такт=5 канал=2"
-        self.assertEqual(self.я.перевести(base)["токены"], self.я.перевести(with_sched)["токены"])
+        self.assertEqual(self.lang.перевести(base)["токены"], self.lang.перевести(with_sched)["токены"])
 
 
-class TestЯдра(unittest.TestCase):
+class TestCores(unittest.TestCase):
     def test_block_sizes_are_about_100k_and_200k(self):
-        for я in Я.ЯДРА:
-            оп = Я.описание_блоков(я)
-            self.assertEqual(len(оп), 2)
-            размеры = sorted(o["корзины"] * o["размер"] for o in оп)
-            self.assertTrue(95_000 <= размеры[0] <= 105_000, размеры)
-            self.assertTrue(190_000 <= размеры[1] <= 205_000, размеры)
+        for core in CORES.ЯДРА:
+            specs = CORES.описание_блоков(core)
+            self.assertEqual(len(specs), 2)
+            sizes = sorted(o["корзины"] * o["размер"] for o in specs)
+            self.assertTrue(95_000 <= sizes[0] <= 105_000, sizes)
+            self.assertTrue(190_000 <= sizes[1] <= 205_000, sizes)
 
     def test_blocks_read_each_others_concept_and_answers_are_disjoint(self):
-        for я in Я.ЯДРА:
-            a, b = Я.описание_блоков(я)
+        for core in CORES.ЯДРА:
+            a, b = CORES.описание_блоков(core)
             self.assertEqual(a["читает"], b["пишет"])
             self.assertEqual(b["читает"], a["пишет"])
             self.assertFalse(set(a["ответы"]) & set(b["ответы"]))
-            self.assertEqual(len(a["ответы"]), len(Я.ГРУППЫ))
+            self.assertEqual(len(a["ответы"]), len(CORES.ГРУППЫ))
 
     def test_cores_split_differently(self):
-        self.assertNotEqual({o["область"] for o in Я.описание_блоков("А")},
-                            {o["область"] for o in Я.описание_блоков("Б")})
+        self.assertNotEqual({o["область"] for o in CORES.описание_блоков("А")},
+                            {o["область"] for o in CORES.описание_блоков("Б")})
 
     def test_answer_ids_roundtrip(self):
-        for g in Я.ГРУППЫ:
-            self.assertEqual(Я.группа_из_ответа(Я.ответ_id("деления:есть", g)), g)
+        for g in CORES.ГРУППЫ:
+            self.assertEqual(CORES.группа_из_ответа(CORES.ответ_id("деления:есть", g)), g)
 
     def test_row_area_matches_concepts(self):
         c = {"деления:есть": 1.0, "деления:нет": 0.0, "память:много": 0.0, "память:мало": 1.0}
-        self.assertEqual(Я.область_строки("А", c), "деления:есть")
-        self.assertEqual(Я.область_строки("Б", c), "память:мало")
+        self.assertEqual(CORES.область_строки("А", c), "деления:есть")
+        self.assertEqual(CORES.область_строки("Б", c), "память:мало")
         with self.assertRaises(ValueError):
-            Я.область_строки("А", {})
+            CORES.область_строки("А", {})
 
 
-class TestРазбиение(unittest.TestCase):
+class TestSplit(unittest.TestCase):
     def mk(self, hard, easy):
         base = []
         for i in range(hard):
@@ -135,200 +135,200 @@ class TestРазбиение(unittest.TestCase):
 
     def test_all_hard_are_used_and_easy_are_capped(self):
         base = self.mk(60, 500)
-        tr, dv = Д.разбить(base, доля_жадных=1.0, доля_dev=0.2, зерно=3)
-        ключи = [r["ключ"] for r in tr + dv]
-        self.assertEqual(len(ключи), len(set(ключи)))
-        self.assertEqual(sum(k.startswith("h") for k in ключи), 60)
-        self.assertEqual(sum(k.startswith("e") for k in ключи), 60)
+        tr, dv = D.разбить(base, доля_жадных=1.0, доля_dev=0.2, зерно=3)
+        keys = [r["ключ"] for r in tr + dv]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(sum(k.startswith("h") for k in keys), 60)
+        self.assertEqual(sum(k.startswith("e") for k in keys), 60)
 
     def test_train_and_dev_do_not_overlap_and_dev_sees_every_group(self):
-        tr, dv = Д.разбить(self.mk(60, 500), доля_dev=0.2, зерно=1)
+        tr, dv = D.разбить(self.mk(60, 500), доля_dev=0.2, зерно=1)
         self.assertFalse({r["ключ"] for r in tr} & {r["ключ"] for r in dv})
         self.assertEqual({r["дешёвая"] for r in dv}, {"rule", "beam", "prio", "greedy"})
 
     def test_split_is_reproducible(self):
-        a = Д.разбить(self.mk(30, 100), зерно=7)
-        b = Д.разбить(self.mk(30, 100), зерно=7)
+        a = D.разбить(self.mk(30, 100), зерно=7)
+        b = D.разбить(self.mk(30, 100), зерно=7)
         self.assertEqual([r["ключ"] for r in a[0]], [r["ключ"] for r in b[0]])
 
 
-class TestОбучениеЗагрузкаОценка(unittest.TestCase):
-    """Один раз обучаем маленькие ядра на 80 графах eval_hard и проверяем всё, что от них требуется."""
+class TestTrainLoadEvaluate(unittest.TestCase):
+    """Train small dual cores once on 80 eval_hard graphs and verify all end-to-end invariants."""
 
     @classmethod
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         PL._init()
-        cls.язык = ЯзыкГрафов()
-        метки = [PL.строка((f"t#{i}", p)) for i, p in enumerate(prompts(80))]
-        cls.база = Д.с_токенами(метки, cls.язык)
-        tr, dv = Д.разбить(cls.база, доля_жадных=1.0, доля_dev=0.2, зерно=1)
+        cls.lang = ЯзыкГрафов()
+        labels = [PL.строка((f"t#{i}", p)) for i, p in enumerate(prompts(80))]
+        cls.base = D.с_токенами(labels, cls.lang)
+        tr, dv = D.разбить(cls.base, доля_жадных=1.0, доля_dev=0.2, зерно=1)
         cls.tr, cls.dv = tr, dv
-        cls.старые = dict(О.НАСТРОЙКИ_ОБУЧЕНИЯ)
-        О.НАСТРОЙКИ_ОБУЧЕНИЯ.update({"эпох": 3, "терпение": 3})
+        cls.old_cfg = dict(TR.НАСТРОЙКИ_ОБУЧЕНИЯ)
+        TR.НАСТРОЙКИ_ОБУЧЕНИЯ.update({"эпох": 3, "терпение": 3})
         import contextlib
         import io
-        for i, я in enumerate(("А", "Б")):
+        for i, core in enumerate(("А", "Б")):
             with contextlib.redirect_stdout(io.StringIO()):
-                О.обучить_ядро(я, tr, dv, 5 + i, cls.tmp, {"тест": True})
-        cls.A = Оц.загрузить_ядро(cls.tmp / "А", cls.язык)
-        cls.Б = Оц.загрузить_ядро(cls.tmp / "Б", cls.язык)
+                TR.обучить_ядро(core, tr, dv, 5 + i, cls.tmp, {"test": True})
+        cls.A = EV.загрузить_ядро(cls.tmp / "А", cls.lang)
+        cls.B = EV.загрузить_ядро(cls.tmp / "Б", cls.lang)
 
     @classmethod
     def tearDownClass(cls):
-        О.НАСТРОЙКИ_ОБУЧЕНИЯ.clear()
-        О.НАСТРОЙКИ_ОБУЧЕНИЯ.update(cls.старые)
+        TR.НАСТРОЙКИ_ОБУЧЕНИЯ.clear()
+        TR.НАСТРОЙКИ_ОБУЧЕНИЯ.update(cls.old_cfg)
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def test_files_and_passport_hashes(self):
-        for я in ("А", "Б"):
-            for bd in (self.tmp / я).iterdir():
+        for core in ("А", "Б"):
+            for bd in (self.tmp / core).iterdir():
                 if not bd.is_dir():
                     continue
-                пасп = json.loads((bd / "паспорт.json").read_text(encoding="utf-8"))
-                self.assertEqual(пасп["веса"]["sha256"], О.sha256_файла(bd / "веса.npz"))
-                self.assertEqual(пасп["архитектура"], "мешок_шина")
-                self.assertEqual(len(пасп["ответы"]), len(Я.ГРУППЫ))
-                self.assertIn("проекции", пасп)
+                passport = json.loads((bd / "паспорт.json").read_text(encoding="utf-8"))
+                self.assertEqual(passport["веса"]["sha256"], TR.sha256_файла(bd / "веса.npz"))
+                self.assertEqual(passport["архитектура"], "мешок_шина")
+                self.assertEqual(len(passport["ответы"]), len(CORES.ГРУППЫ))
+                self.assertIn("проекции", passport)
 
     def test_linter_accepts_every_block(self):
-        for я in ("А", "Б"):
-            for bd in sorted((self.tmp / я).iterdir()):
+        for core in ("А", "Б"):
+            for bd in sorted((self.tmp / core).iterdir()):
                 if bd.is_dir():
-                    r = Л.проверить_блок(str(bd), str(АРХ))
+                    r = LINTER.проверить_блок(str(bd), str(ARCH_DIR))
                     self.assertEqual(r["статус"], "УСПЕХ", r["ошибки"])
 
     def test_parameter_counts(self):
-        самые = sorted(b.чисел for b in self.A.блоки.values())
-        self.assertTrue(95_000 <= самые[0] <= 105_000 and 190_000 <= самые[1] <= 205_000, самые)
+        counts = sorted(b.чисел for b in self.A.блоки.values())
+        self.assertTrue(95_000 <= counts[0] <= 105_000 and 190_000 <= counts[1] <= 205_000, counts)
 
     def test_probabilities_are_a_distribution_over_nothing_and_all_answers(self):
-        p = Оц.вероятности(self.A, self.база[0]["токены"])
+        p = EV.вероятности(self.A, self.base[0]["токены"])
         self.assertAlmostEqual(sum(p.values()), 1.0, places=9)
-        self.assertEqual(len(p), 1 + 2 * len(Я.ГРУППЫ))
+        self.assertEqual(len(p), 1 + 2 * len(CORES.ГРУППЫ))
         self.assertIn("ничего", p)
 
     def test_inference_matches_the_trainer_forward(self):
-        """Композиция из сохранённых весов (через архитектуру мешок_шина) = прямой проход обучающего кода."""
-        опис = Я.описание_блоков("А")
-        блоки = []
-        for i, о in enumerate(опис):
-            P = dict(np.load(self.tmp / "А" / о["имя"] / "веса.npz"))
+        """Saved-weight inference through the bus architecture must match the trainer's forward pass."""
+        specs = CORES.описание_блоков("А")
+        blocks = []
+        for o in specs:
+            P = dict(np.load(self.tmp / "А" / o["имя"] / "веса.npz"))
             init = {k: P[k] for k in ("E", "A", "a", "U", "V", "b")}
-            блоки.append(С.БлокУч(о["имя"], о["ответы"], о["пишет"], о["читает"], корзины=о["корзины"], размер=о["размер"],
-                                  граница=8.0, соль=о["соль"], seed=1, init=init, область=о["область"], свёртка="корень",
-                                  масштаб_чтения=8.0))
-        rows = Д.строки_ядра("А", self.база[:25])
-        набор = С.Набор(rows, блоки, ВСЕ_ПОНЯТИЯ)
-        сеть = С.Сеть(блоки, проходов=2, смешивание="среднее", градиент_через_шину=False)
-        p_train = сеть.предсказать(набор)
+            blocks.append(NET.БлокУч(o["имя"], o["ответы"], o["пишет"], o["читает"], корзины=o["корзины"], размер=o["размер"],
+                                     граница=8.0, соль=o["соль"], seed=1, init=init, область=o["область"], свёртка="корень",
+                                     масштаб_чтения=8.0))
+        rows = D.строки_ядра("А", self.base[:25])
+        dataset = NET.Набор(rows, blocks, ВСЕ_ПОНЯТИЯ)
+        net = NET.Сеть(blocks, проходов=2, смешивание="среднее", градиент_через_шину=False)
+        p_train = net.предсказать(dataset)
         for k, r in enumerate(rows):
-            p = Оц.вероятности(self.A, r["токены"])
-            vec = np.array([p["ничего"]] + [p[a] for a in сеть.все_ответы])
+            p = EV.вероятности(self.A, r["токены"])
+            vec = np.array([p["ничего"]] + [p[a] for a in net.все_ответы])
             self.assertTrue(np.allclose(vec, p_train[k], atol=2e-4), (k, np.abs(vec - p_train[k]).max()))
 
     def test_tampered_weights_are_rejected_by_the_motherboard(self):
-        копия = self.tmp / "копия"
-        shutil.copytree(self.tmp / "А" / "А_без_делений", копия)
-        w = копия / "веса.npz"
+        copy_dir = self.tmp / "copy"
+        shutil.copytree(self.tmp / "А" / "А_без_делений", copy_dir)
+        w = copy_dir / "веса.npz"
         P = dict(np.load(w))
         P["b"] = P["b"] + 1.0
         np.savez(w, **P)
-        ok, err = Матплата(self.язык, str(АРХ)).подключить(str(копия))
+        ok, err = Матплата(self.lang, str(ARCH_DIR)).подключить(str(copy_dir))
         self.assertFalse(ok)
         self.assertTrue(any("sha256" in e for e in err), err)
 
     def test_removing_a_block_removes_only_its_answers(self):
-        плата = Оц.загрузить_ядро(self.tmp / "А", self.язык)
-        имя = "А_с_делениями"
-        self.assertTrue(плата.снять(имя))
-        p = Оц.вероятности(плата, self.база[0]["токены"])
+        board = EV.загрузить_ядро(self.tmp / "А", self.lang)
+        name = "А_с_делениями"
+        self.assertTrue(board.снять(name))
+        p = EV.вероятности(board, self.base[0]["токены"])
         self.assertAlmostEqual(sum(p.values()), 1.0, places=9)
-        self.assertEqual(len(p), 1 + len(Я.ГРУППЫ))
+        self.assertEqual(len(p), 1 + len(CORES.ГРУППЫ))
         self.assertFalse(any(k.startswith("деления:есть/") for k in p))
 
     def test_decision_abstains_on_nothing_and_below_threshold(self):
-        self.assertEqual(Оц.решение({"ничего": 0.6, "деления:есть/rule": 0.4})[0], None)
-        self.assertEqual(Оц.решение({"ничего": 0.1, "деления:есть/rule": 0.9})[0], "rule")
-        self.assertEqual(Оц.решение({"ничего": 0.1, "деления:есть/rule": 0.9}, порог=0.95)[0], None)
+        self.assertEqual(EV.решение({"ничего": 0.6, "деления:есть/rule": 0.4})[0], None)
+        self.assertEqual(EV.решение({"ничего": 0.1, "деления:есть/rule": 0.9})[0], "rule")
+        self.assertEqual(EV.решение({"ничего": 0.1, "деления:есть/rule": 0.9}, порог=0.95)[0], None)
 
     def test_makespan_helper_never_worse_than_greedy_and_falls_back(self):
         r = {"по_группам": {"greedy": 10, "prio": 12, "rule": 8, "hold": None}}
-        self.assertEqual(Оц.мс(r, "prio"), 10)
-        self.assertEqual(Оц.мс(r, "rule"), 8)
-        self.assertEqual(Оц.мс(r, "hold"), 10)
+        self.assertEqual(EV.мс(r, "prio"), 10)
+        self.assertEqual(EV.мс(r, "rule"), 8)
+        self.assertEqual(EV.мс(r, "hold"), 10)
 
     def test_policies_are_consistent(self):
-        o = Оц.политики(self.база, self.A, self.Б)
-        self.assertEqual(o["графов"], len(self.база))
+        o = EV.политики(self.base, self.A, self.B)
+        self.assertEqual(o["графов"], len(self.base))
         self.assertEqual(o["оракул"]["лишних_тактов"], 0)
-        ожид = sum(r["по_группам"]["greedy"] - r["лучший"] for r in self.база)
-        self.assertEqual(o["жадный"]["лишних_тактов"], ожид)
+        expected = sum(r["по_группам"]["greedy"] - r["лучший"] for r in self.base)
+        self.assertEqual(o["жадный"]["лишних_тактов"], expected)
         self.assertEqual(o["жадный"]["полный_портфель"], 0.0)
         for k in ("ядро А", "ядро Б", "перекрёсток", "эвристика"):
             self.assertGreaterEqual(o[k]["лишних_тактов"], 0)
-            self.assertLessEqual(o[k]["лишних_тактов"], ожид)      # лучшее из жадного и группы не хуже жадного
+            self.assertLessEqual(o[k]["лишних_тактов"], expected)  # min(greedy, group) <= greedy
         c = o["согласие"]
         self.assertLessEqual(c["согласны"] + c["расходятся"], o["графов"])
 
     def test_random_abstention_baseline_and_confidence_curve(self):
-        o = Оц.политики(self.база, self.A, self.Б)
-        сл = o["случайный отказ"]
-        self.assertEqual(сл["полный_портфель"], o["перекрёсток"]["полный_портфель"])
-        self.assertAlmostEqual(сл["лишних_тактов"], (1 - сл["полный_портфель"]) * o["ядро А"]["лишних_тактов"], delta=0.06)
-        к = o["уверенность ядра А"]
-        доли = [x["полный_портфель"] for x in к]
-        лишних = [x["лишних_тактов"] for x in к]
-        self.assertEqual(доли, sorted(доли))                       # выше порог — чаще отказ
-        self.assertEqual(лишних, sorted(лишних, reverse=True))     # отказ не добавляет лишних тактов
+        o = EV.политики(self.base, self.A, self.B)
+        rnd = o["случайный отказ"]
+        self.assertEqual(rnd["полный_портфель"], o["перекрёсток"]["полный_портфель"])
+        self.assertAlmostEqual(rnd["лишних_тактов"], (1 - rnd["полный_портфель"]) * o["ядро А"]["лишних_тактов"], delta=0.06)
+        curve = o["уверенность ядра А"]
+        rates = [x["полный_портфель"] for x in curve]
+        excess = [x["лишних_тактов"] for x in curve]
+        self.assertEqual(rates, sorted(rates))                      # higher threshold -> more abstentions
+        self.assertEqual(excess, sorted(excess, reverse=True))      # abstaining never adds excess cycles
 
     def test_crosscheck_policy_exact_on_scripted_cores(self):
-        """Ядра, отвечающие по сценарию: перекрёсток обязан брать группу только при согласии и без «ничего»."""
-        база = self.база
-        A, Б = object(), object()
-        скрипт = {}
-        for k, r in enumerate(база):
+        """Scripted cores: cross-check must pick a group only on non-abstaining agreement."""
+        base = self.base
+        A, B = object(), object()
+        script = {}
+        for k, r in enumerate(base):
             pa = {"ничего": 0.1, "деления:есть/rule": 0.9}
             if k % 7 == 0:
-                pb = {"ничего": 0.6, "деления:есть/rule": 0.4}       # Б не знает
+                pb = {"ничего": 0.6, "деления:есть/rule": 0.4}       # B abstains
             elif k % 3 == 0:
-                pb = {"ничего": 0.1, "деления:есть/rule": 0.9}       # Б согласен
+                pb = {"ничего": 0.1, "деления:есть/rule": 0.9}       # B agrees
             else:
-                pb = {"ничего": 0.1, "деления:есть/beam": 0.9}       # Б расходится
-            скрипт[(id(A), id(r["токены"]))] = pa
-            скрипт[(id(Б), id(r["токены"]))] = pb
-        исходная = Оц.вероятности
-        Оц.вероятности = lambda плата, токены: скрипт[(id(плата), id(токены))]
+                pb = {"ничего": 0.1, "деления:есть/beam": 0.9}       # B disagrees
+            script[(id(A), id(r["токены"]))] = pa
+            script[(id(B), id(r["токены"]))] = pb
+        orig = EV.вероятности
+        EV.вероятности = lambda board, tokens: script[(id(board), id(tokens))]
         try:
-            o = Оц.политики(база, A, Б)
+            o = EV.политики(base, A, B)
         finally:
-            Оц.вероятности = исходная
-        согласны = [k for k in range(len(база)) if k % 7 != 0 and k % 3 == 0]
-        ex_cross = sum(Оц.мс(база[k], "rule") - база[k]["лучший"] for k in согласны)
+            EV.вероятности = orig
+        agreed = [k for k in range(len(base)) if k % 7 != 0 and k % 3 == 0]
+        ex_cross = sum(EV.мс(base[k], "rule") - base[k]["лучший"] for k in agreed)
         self.assertEqual(o["перекрёсток"]["лишних_тактов"], ex_cross)
-        self.assertAlmostEqual(o["перекрёсток"]["полный_портфель"], 1 - len(согласны) / len(база), places=4)
-        self.assertEqual(o["ядро А"]["лишних_тактов"], sum(Оц.мс(r, "rule") - r["лучший"] for r in база))
-        self.assertEqual(o["согласие"]["согласны"], len(согласны))
-        # Б ответил «ничего» на k % 7 == 0: там и ядро Б отдаёт портфель целиком
-        self.assertAlmostEqual(o["ядро Б"]["полный_портфель"], sum(1 for k in range(len(база)) if k % 7 == 0) / len(база), places=4)
+        self.assertAlmostEqual(o["перекрёсток"]["полный_портфель"], 1 - len(agreed) / len(base), places=4)
+        self.assertEqual(o["ядро А"]["лишних_тактов"], sum(EV.мс(r, "rule") - r["лучший"] for r in base))
+        self.assertEqual(o["согласие"]["согласны"], len(agreed))
+        # B abstained on k % 7 == 0, triggering full portfolio fallback
+        self.assertAlmostEqual(o["ядро Б"]["полный_портфель"], sum(1 for k in range(len(base)) if k % 7 == 0) / len(base), places=4)
 
     def test_crosscheck_runs_full_portfolio_exactly_when_cores_disagree_or_abstain(self):
-        o = Оц.политики(self.база, self.A, self.Б)
+        o = EV.политики(self.base, self.A, self.B)
         n_full = 0
-        for r in self.база:
-            a, _ = Оц.решение(Оц.вероятности(self.A, r["токены"]))
-            b, _ = Оц.решение(Оц.вероятности(self.Б, r["токены"]))
+        for r in self.base:
+            a, _ = EV.решение(EV.вероятности(self.A, r["токены"]))
+            b, _ = EV.решение(EV.вероятности(self.B, r["токены"]))
             n_full += int(not (a is not None and a == b))
-        self.assertAlmostEqual(o["перекрёсток"]["полный_портфель"], n_full / len(self.база), places=4)
+        self.assertAlmostEqual(o["перекрёсток"]["полный_портфель"], n_full / len(self.base), places=4)
 
     def test_processor_runs_the_core_and_lego_insertion_check_passes(self):
-        плата = Оц.загрузить_ядро(self.tmp / "А", self.язык)
-        proc = Процессор(плата)
+        board = EV.загрузить_ядро(self.tmp / "А", self.lang)
+        proc = Процессор(board)
         res = proc.выполнить(prompts(1)[0])
-        self.assertEqual(set(res["такт1"]), set(плата.блоки))
-        # вставка блока ядра Б в работающую плату ядра А: соседи не меняются
-        proc2 = Процессор(Оц.загрузить_ядро(self.tmp / "А", self.язык))
-        rep = Л.проверить_вставку(proc2, str(self.tmp / "Б" / "Б_много_памяти"), prompts(15))
+        self.assertEqual(set(res["такт1"]), set(board.блоки))
+        # Hot-plugging a block from core B into running core A must not alter neighbors' pass-1 outputs
+        proc2 = Процессор(EV.загрузить_ядро(self.tmp / "А", self.lang))
+        rep = LINTER.проверить_вставку(proc2, str(self.tmp / "Б" / "Б_много_памяти"), prompts(15))
         self.assertEqual(rep["статус"], "УСПЕХ", rep["ошибки"])
         self.assertEqual(rep["такт1_соседей_изменилось"], 0)
 

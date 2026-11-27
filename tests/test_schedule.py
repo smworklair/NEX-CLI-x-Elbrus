@@ -1,9 +1,9 @@
-"""Проверка Schedule.validate() — по одному тесту на класс нарушения.
+"""Schedule.validate() tests — one dedicated test per constraint violation class.
 
-`validate()` — то, чем меряется вся обученная модель: любая ошибка в нём
-превращается либо в принятое незаконное расписание, либо в отвергнутое
-законное. Поэтому каждый вид нарушения проверяется отдельно, и отдельно
-проверяется, что законное расписание проходит молча.
+`validate()` is the ground-truth verifier for all schedulers (baseline, oracle,
+learned, and TINY Flash): any bug either accepts an illegal VLIW bundle or
+rejects a legal one. Each hazard/resource rule is tested individually alongside
+clean legal schedules.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from vliw.core.schedule import ChannelState, Schedule
 
 
 def dag(*specs: tuple[str, tuple[int, ...]]) -> DAG:
-    """Мини-граф: dag(("ADD", ()), ("MUL", (0,)))."""
+    """Build a compact test DAG: dag(("ADD", ()), ("MUL", (0,)))."""
     return DAG("t", "t", "", [
         Instr(i, f"n{i}", op, preds, f"n{i}")
         for i, (op, preds) in enumerate(specs)
@@ -57,50 +57,46 @@ class TestViolations(unittest.TestCase):
         d = dag(("ADD", ()), ("ADD", ()))
         errs = sched(d, (0, 0, 0)).validate()
         self.assertEqual(len(errs), 1)
-        self.assertIn("не размещены", errs[0])
+        self.assertIn("unplaced", errs[0])
         self.assertIn("[1]", errs[0])
 
     def test_dependency_too_early(self):
-        """MUL латентности 4: потребитель не может выйти раньше такта 4."""
+        """MUL has latency 4: a RAW consumer cannot issue before cycle 4."""
         d = dag(("MUL", ()), ("ADD", (0,)))
         errs = sched(d, (0, 0, 0), (1, 3, 1)).validate()
-        self.assertTrue(any("готов только к такту 4" in e for e in errs), errs)
-        # Ровно на границе — законно.
+        self.assertTrue(any("not ready until cycle 4" in e for e in errs), errs)
+        # Exactly on the boundary is legal.
         self.assertEqual(sched(d, (0, 0, 0), (1, 4, 1)).validate(), [])
 
     def test_channel_cannot_execute_op(self):
         d = dag(("DIV", ()))
         errs = sched(d, (0, 0, 0)).validate()
-        self.assertTrue(any("не исполняет" in e for e in errs), errs)
+        self.assertTrue(any("does not execute" in e for e in errs), errs)
         self.assertEqual(sched(d, (0, 0, 5)).validate(), [])
 
     def test_channel_conflict_same_cycle(self):
         d = dag(("ADD", ()), ("ADD", ()))
         errs = sched(d, (0, 0, 1), (1, 0, 1)).validate()
-        self.assertTrue(any("конфликт на канале 1" in e for e in errs), errs)
+        self.assertTrue(any("channel 1 conflict" in e for e in errs), errs)
 
     def test_occupancy_blocks_next_cycle(self):
-        """Деление держит порт 2 такта: второе в такте 1 — конфликт, в 2 — нет."""
+        """DIV holds port ,5 for 2 cycles: issuing a second DIV in cycle 1 conflicts; cycle 2 is legal."""
         d = dag(("DIV", ()), ("DIV", ()))
         errs = sched(d, (0, 0, 5), (1, 1, 5)).validate()
-        self.assertTrue(any("конфликт на канале 5 в такте 1" in e for e in errs), errs)
+        self.assertTrue(any("channel 5 conflict in cycle 1" in e for e in errs), errs)
         self.assertEqual(sched(d, (0, 0, 5), (1, 2, 5)).validate(), [])
 
     def test_width_overflow(self):
-        """Семь операций в одном такте при ширине 6.
-
-        Ловится отдельно от конфликта каналов: каналы у всех разные (один
-        повторяется), но широкая команда столько слотов не имеет.
-        """
+        """Seven ops in one cycle exceed the 6-wide VLIW bundle width."""
         d = dag(*[("ADD", ())] * 7)
         places = [(i, 0, i) for i in range(6)] + [(6, 0, 0)]
         errs = sched(d, *places).validate()
-        self.assertTrue(any("при ширине 6" in e for e in errs), errs)
+        self.assertTrue(any("exceeds width 6" in e for e in errs), errs)
 
 
 class TestMetrics(unittest.TestCase):
     def test_makespan_counts_readiness_not_issue(self):
-        """Иначе деление в последней команде выглядело бы бесплатным."""
+        """Makespan includes final op latency so a late DIV does not appear free."""
         d = dag(("DIV", ()))
         s = sched(d, (0, 0, 5))
         self.assertEqual(s.makespan, 11)
@@ -124,8 +120,8 @@ class TestMetrics(unittest.TestCase):
     def test_busy_map_marks_occupancy_tail(self):
         d = dag(("DIV", ()))
         m = sched(d, (0, 4, 5)).busy_map()
-        self.assertEqual(m[(4, 5)], (0, True))    # такт выдачи
-        self.assertEqual(m[(5, 5)], (0, False))   # продолжение занятия
+        self.assertEqual(m[(4, 5)], (0, True))    # issue cycle
+        self.assertEqual(m[(5, 5)], (0, False))   # occupancy continuation
         self.assertNotIn((6, 5), m)
 
 

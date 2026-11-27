@@ -1,40 +1,40 @@
-# Режим ЯДРО
+# CORE Mode
 
-> Этап 6 из 13 · [← РАЗБОР](LAB_MODE.md) · [Маршрут](README.md) · [Агент →](AGENT_PROMPTS.md)
+> Stage 6 of 13 · [← LAB](LAB_MODE.md) · [Roadmap](README.md) · [Agent →](AGENT_PROMPTS.md)
 
-Простой интерпретатор, который попутно строит граф зависимостей из обычных вычислений.
-Это не про ассемблер, а про то, как граф получается шаг за шагом.
+A simple interpreter that builds a dependency graph as a side effect of ordinary calculations.
+It is not about assembly syntax — it shows how a dependency graph emerges step by step.
 
-Открывается клавишей `4`, командой `/mode work` или `python -m vliw --mode work`.
+Opens with `4`, `/mode work`, or `python -m vliw --mode work`.
 
-![ЯДРО: верстак интерпретатора](img/core-mode.svg)
+![CORE: interpreter workbench](img/core-mode.svg)
 
-## Панели
+## Panels
 
-- **ЛЕНТА** — история ввода и вычислений.
-- **ИМЕНА** — переменные и значения.
-- **ПРОГРАММА** — накопленный граф.
+- **TAPE** — input and evaluation history.
+- **NAMES** — variables and values.
+- **PROGRAM** — accumulated dependency graph.
 
-## Команды
+## Commands
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `a = 10`, `t = a*2` | вычислить и добавить в граф |
-| `names` | показать имена и значения |
-| `mem` | показать память |
-| `list` | показать граф целиком |
-| `go` | отдать граф в РАЗБОР и посчитать расписание |
-| `reset` | обнулить и начать заново |
+| `a = 10`, `t = a*2` | evaluate and append to the graph |
+| `names` | show variables and values |
+| `mem` | show memory state |
+| `list` | show the full graph |
+| `go` | send the graph to LAB and compute its schedule |
+| `reset` | clear state and start over |
 
-Готовые ядра: `sum 8`, `dot 4`, `saxpy 8`, `fir 8` — число задаёт размер.
+Built-in kernels: `sum 8`, `dot 4`, `saxpy 8`, `fir 8` — the number sets the problem size.
 
-## Пример
+## Example
 
 ```text
 sum 8
 go
 ```
 
-После `go` тот же граф открывается в РАЗБОРЕ со всеми панелями.
+After `go`, the generated graph opens in LAB with all analysis panels populated.
 
-Небольшая версия ЯДРА есть вкладкой в [КОДЕ](CODE_MODE.md) — выходить из редактора не обязательно.
+A compact version of CORE is also available as a dock tab inside [CODE](CODE_MODE.md), so you don't have to leave the editor.

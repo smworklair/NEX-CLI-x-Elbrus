@@ -1,54 +1,42 @@
-# Бейчмарк фрагментов e2k
+# `e2k` Snippet Benchmark
 
-Четыре рукописных фрагмента на e2k-ассемблере: латентность `muls`, программный
-конвейер, предикатное выполнение и схема Горнера с загрузками. Каждый файл
-разбирается тем же разбором, что и настоящий вывод `lcc`, и прогоняется через
-три планировщика NEX CLI.
+Four handwritten `e2k` assembly snippets: `muls` latency, software pipelining, predicated execution, and Horner's scheme with loads. Each file is parsed with the same parser used for real `lcc` output and run through NEX CLI's three schedulers.
 
 ```bash
-python tools/bench_snippets.py                 # все файлы, ~2 с
-python tools/bench_snippets.py --budget 5      # больше времени точному поиску
+python tools/bench_snippets.py                 # all files, ~2 s
+python tools/bench_snippets.py --budget 5      # more time for exact search
 python tools/bench_snippets.py benchmarks/snippets/04_horner_load.s
 ```
 
-Результаты пишутся в [`results.json`](results.json) и [`RESULTS.md`](RESULTS.md).
+Results are written to [`results.json`](results.json) and [`RESULTS.md`](RESULTS.md).
 
-## Что считается
+## What Is Measured
 
-| колонка | смысл |
+| column | meaning |
 |---|---|
-| `автор` | длина расписания, как оно написано в файле |
-| `baseline` | жадный list scheduler |
-| `TINY Flash` | быстрый планировщик проекта, режим `exact` |
-| `oracle` | точный поиск с бюджетом (по умолчанию 1.5 с на файл) |
-| `UNKNOWN` | операции, класс которых модели неизвестен (заглушка, не замер) |
-| `ошибки` | замечания линтера: не тот канал, порт занят, результат прочитан раньше готовности |
+| `author` | schedule length as written in the file |
+| `baseline` | greedy list scheduler |
+| `TINY Flash` | project's fast learned scheduler, `exact` mode |
+| `oracle` | exact search with a time budget (default 1.5 s per file) |
+| `UNKNOWN` | operations whose class is unknown to the model (placeholder, not measured) |
+| `errors` | linter findings: disallowed channel, occupied port, result read before ready |
 
-`автор` может быть меньше законного минимума: линтер показывает, где написано
-`nop 1`, хотя латентность операции больше. Планировщики строят расписание заново
-по графу зависимостей и модели машины, поэтому их makespan всегда законен.
+`author` can be shorter than the valid minimum: the linter flags places where `nop 1` was written even though operation latency is higher. The schedulers rebuild the schedule from scratch using the dependency graph and machine model, so their makespan is always valid.
 
-## Текущий результат
+## Current Results
 
-| файл | N | автор | baseline | TINY Flash | oracle | UNKNOWN |
+| file | N | author | baseline | TINY Flash | oracle | UNKNOWN |
 |---|---:|---:|---:|---:|---:|---:|
 | `01_mul_latency.s` | 15 | 12 | 8 | 8 | 8 | 0 |
 | `02_software_pipeline.s` | 19 | 7 | 9 | 9 | 9 | 0 |
 | `03_predication.s` | 9 | 3 | 8 | 8 | 8 | 2 |
 | `04_horner_load.s` | 12 | 6 | 15 | 15 | 15 | 0 |
 
-Что видно:
+Observations:
 
-- На этих небольших фрагментах жадный планировщик уже попадает в нижнюю границу,
-  поэтому TINY Flash не улучшает makespan — он нужен на больших неровных графах.
-  По времени на 9–19 операциях TINY Flash дороже жадного (десятые доли мс).
-- Рукописные расписания 02–04 короче законного минимума в 1.3–2.5 раза, потому
-  что чтение результата стоит раньше его готовности. Например, в `04` загрузка
-  имеет латентность 5 тактов, а её результат читается уже в такте 1.
-- `muls,2` в 01–03 — недопустимый канал: умножение живёт на `,0 ,1 ,3 ,4`
-  (это проверено ассемблером, см. `docs/ISA.md`).
-- `cmples` и `cmpgts` в 03 — неизвестные мнемоники, попадают в `UNKNOWN`
-  (латентность 1, любой канал). Это заглушка, а не измерение.
+- On these small snippets, the greedy scheduler already hits the lower bound, so TINY Flash does not shorten makespan — its value shows up on larger, irregular graphs. At 9–19 operations, TINY Flash is slightly slower than greedy (tenths of a millisecond).
+- Handwritten schedules 02–04 are 1.3–2.5× shorter than the valid minimum because results are read before they are ready. For example, in `04` a load has latency 5 cycles, yet its result is consumed in cycle 1.
+- `muls,2` in 01–03 is an invalid channel: multiply executes on `,0 ,1 ,3 ,4` (verified against the assembler, see `docs/ISA.md`).
+- `cmples` and `cmpgts` in 03 are unknown mnemonics and fall into `UNKNOWN` (latency 1, any channel). That is a placeholder, not a measurement.
 
-Числа модели: `MUL` — латентность 4, каналы `,0 ,1 ,3 ,4`; `LOAD` — латентность 5;
-`ADD`/`SUB` — 1. Профиль `e2k-v6-measured`, 6 портов.
+Model numbers: `MUL` — latency 4, channels `,0 ,1 ,3 ,4`; `LOAD` — latency 5; `ADD`/`SUB` — 1. Profile `e2k-v6-measured`, 6 ports.

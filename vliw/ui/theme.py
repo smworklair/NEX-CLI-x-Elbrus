@@ -1,18 +1,12 @@
-"""Темы оформления: загрузка палитры из JSON.
+"""Color themes: palette loader from JSON.
 
-Тема — это чёрный фон плюс набор именованных ролей («акцент», «рамка»,
-«приглашение», …) и цветов операций. Роль превращается в ANSI-код
-(`38;5;N`) для построчного вывода; полноэкранный интерфейс (`vliw.tui`)
-берёт те же индексы в свою палитру.
+A theme defines named semantic roles ('accent', 'border', 'prompt', ...) and
+operation colors using 256-color terminal indices (`38;5;N`). Both plain ANSI
+output and the full-screen TUI (`vliw.tui`) share the same indices.
 
-Поэтому цвета в JSON заданы индексами 256-цветной палитры терминала: одно
-представление обслуживает оба режима вывода.
-
-Цвета операций (DIV/MUL/ADD/…) вынесены в отдельный раздел `ops` намеренно:
-это не декор, а ДАННЫЕ. По ним в расписании видно, куда попало деление —
-единственная монополия машины (порт `,5`) — и как разошлись остальные
-операции по своим каналам. Тема может их перекрашивать, но обязана оставлять
-различимыми.
+Operation colors (DIV/MUL/ADD/...) live in their own `ops` section because
+they encode data, not decoration: they immediately show where division lands
+(exclusive port `,5`) and how other ops distribute across channels.
 """
 
 from __future__ import annotations
@@ -24,7 +18,7 @@ from pathlib import Path
 THEMES_DIR = Path(__file__).parent / "themes"
 DEFAULT_THEME = "nex-dark"
 
-# Имя атрибута -> код ANSI SGR
+# Attribute name -> ANSI SGR code
 _ATTRS = {
     "bold": "1",
     "dim": "2",
@@ -35,14 +29,14 @@ _ATTRS = {
 
 @dataclass(frozen=True)
 class Style:
-    """Один стиль: цвет из 256-цветной палитры + атрибуты начертания."""
+    """Single style: 256-color index plus text attributes."""
 
     color: int = 7
     attrs: tuple[str, ...] = ()
 
     @property
     def ansi(self) -> str:
-        """Тело ANSI-кода SGR, например `1;38;5;75`."""
+        """ANSI SGR payload, e.g. `1;38;5;75`."""
         parts = [_ATTRS[a] for a in self.attrs if a in _ATTRS]
         parts.append(f"38;5;{self.color}")
         return ";".join(parts)
@@ -67,7 +61,7 @@ class Theme:
     ops: dict[str, Style] = field(default_factory=dict)
 
     def role(self, name: str) -> Style:
-        """Стиль роли; неизвестная роль тихо превращается в нейтральный текст."""
+        """Role style; unknown roles silently fall back to neutral text."""
         return self.roles.get(name) or self.roles.get("text") or Style()
 
     def op(self, name: str) -> Style:
@@ -81,18 +75,14 @@ class Theme:
 
 
 def list_themes() -> list[str]:
-    """Имена доступных тем (по именам файлов в themes/)."""
+    """Available theme names (stems of JSON files in themes/)."""
     if not THEMES_DIR.is_dir():
         return []
     return sorted(p.stem for p in THEMES_DIR.glob("*.json"))
 
 
 def load_theme(name: str = DEFAULT_THEME) -> Theme:
-    """Загрузить тему по имени. При любой проблеме — встроенная запасная.
-
-    Тема — украшение: битый или отсутствующий JSON не должен ронять
-    инструмент, поэтому здесь всё падение гасится в безопасный дефолт.
-    """
+    """Load a theme by name, falling back to a safe 8-color default on error."""
     path = THEMES_DIR / f"{name}.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -111,10 +101,10 @@ def load_theme(name: str = DEFAULT_THEME) -> Theme:
 
 
 def _fallback_theme(name: str) -> Theme:
-    """Минимальная тема на базовых цветах — если JSON недоступен или битый."""
+    """Minimal built-in 8-color theme used when JSON is missing or corrupt."""
     return Theme(
-        name=f"{name} (запасная)",
-        description="Встроенная запасная палитра на базовых 8 цветах.",
+        name=f"{name} (fallback)",
+        description="Built-in fallback palette using basic 8 terminal colors.",
         roles={
             "text": Style(7),
             "dim": Style(7, ("dim",)),

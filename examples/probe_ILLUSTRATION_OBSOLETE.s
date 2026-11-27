@@ -1,22 +1,22 @@
 ! ============================================================================
-! ВНИМАНИЕ: ЭТО НЕ ВЫВОД КОМПИЛЯТОРА. Файл — рисованная от руки иллюстрация,
-! сделанная под ПЕРВУЮ (ошибочную) версию модели: в нём деления расставлены с
-! шагом 13 тактов, а умножения с шагом 8, чтобы «показать монополию».
+! WARNING: THIS IS NOT COMPILER OUTPUT. This file is a hand-drawn illustration
+! created for the FIRST (incorrect) version of the model: divisions are spaced
+! 13 cycles apart and multiplications 8 cycles apart to "illustrate monopoly".
 !
-! Проверка настоящим lcc это опровергла: деления идут с шагом 2 такта,
-! умножения кодируются в четырёх каналах и идут по одному в такт.
-! Настоящий вывод компилятора лежит рядом: examples/probe.s и examples/probes/.
+! Testing with real lcc refuted this: divisions issue every 2 cycles,
+! and multiplications encode across four channels, issuing every cycle.
+! Real compiler output is nearby: examples/probe.s and examples/probes/.
 !
-! Файл оставлен намеренно — как экспонат: именно из-за него в модель попали
-! неверные числа. Не использовать как источник данных.
+! Kept intentionally as an exhibit: it is why wrong numbers entered the model.
+! Do not use as a data source.
 ! ============================================================================
-! Фрагмент .s-вывода lcc для e2k (тело функции, сокращено).
-! Соответствует эксперименту probe.c: четыре независимых деления и четыре
-! независимых умножения над volatile-массивами.
+! Excerpt of lcc .s output for e2k (function body, abbreviated).
+! Corresponds to experiment probe.c: four independent divisions and four
+! independent multiplications over volatile arrays.
 !
-! Видно устройство машины: деления идут по каналу ,5 с шагом 13 тактов,
-! умножения по каналу ,0 с шагом 8 — это монопольные делитель и умножитель,
-! каждый на своём порту. Задержки компилятор кодирует явными `nop N`.
+! Machine layout shown: divisions run on channel ,5 every 13 cycles,
+! multiplications on channel ,0 every 8 — exclusive divider and multiplier,
+! each on its own port. The compiler encodes stalls with explicit `nop N`.
 	.text
 	.global probe_body
 probe_body:

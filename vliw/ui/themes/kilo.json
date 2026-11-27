@@ -1,7 +1,7 @@
 {
   "name": "kilo",
-  "description": "Тёмная поверхность, лаймовый акцент — как у Kilo Code. Операции остаются разного цвета: это данные, не декор.",
-  "_comment_colors": "Индексы 256-цветной палитры. 154/190 — лайм, 235 — панель, 243 — вторичный текст.",
+  "description": "Dark surface, lime accent — inspired by Kilo Code. Operations keep distinct colors: they are data, not decoration.",
+  "_comment_colors": "256-color palette indices. 154/190 = lime, 235 = panel, 243 = secondary text.",
   "roles": {
     "text": {
       "color": 252

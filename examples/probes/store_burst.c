@@ -1,7 +1,7 @@
-/* Пропускная способность записи: 16 НЕзависимых записей по разным адресам.
- * Метод — как в div8.c: сначала ВСЕ чтения в локальные переменные (пусть
- * компилятор развернёт их параллельно), потом ВСЕ записи результатов —
- * чтобы шаг между записями не прятал в себе ожидание латентности чтения.
+/* Store throughput: 16 independent stores to distinct addresses.
+ * Method — same as div8.c: first ALL reads into local variables (let the
+ * compiler issue them in parallel), then ALL result stores —
+ * so the stride between stores does not hide load-latency stalls.
  */
 volatile int out[16];
 volatile int src[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};

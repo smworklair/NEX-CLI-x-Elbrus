@@ -1,10 +1,10 @@
-"""Маленькая нейросеть рядом: крошки (TINY Flash).
+"""Lightweight local neural helper: TINY AI (TINY Flash).
 
-TINY Flash работает сама, на каждом новом участке: строит расписание участка
-(vliw/tiny), честно «не хуже baseline». Модуль только считает и возвращает
-данные: что показать, решает экран (панель НЕЙРОСЕТИ в РАЗБОРе) и контекст
-агента. Любой сбой (нет весов, нет numpy) даёт None — тихо, без шума:
-инструмент работает и без нейросети.
+TINY Flash runs automatically on every new block: it builds a schedule for the block
+(vliw/tiny) that is guaranteed to be "no worse than baseline". This module only computes
+and returns data; what to display is decided by the screen (AI panel in LAB) and the
+agent context. Any failure (missing weights, no numpy) quietly returns None:
+the tool works fine without the neural network.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ class TinyAI:
     winner: str
     ms: float
     legal: bool
-    через_ядро: bool = False   # True: посчитал блок «планировщик» ядра NEX (nex_core), а не прямой вызов
+    через_ядро: bool = False   # True: computed by the NEX core "scheduler" block (nex_core), not a direct call
 
 
 @dataclass
@@ -45,7 +45,7 @@ class Hints:
 
 
 def tiny_ai(dag, model, baseline: int, oracle: int | None = None) -> TinyAI | None:
-    # Основной путь: блок «планировщик» ядра NEX (крошки внутри ядра NNL). Нет ядра — прямой вызов крошек.
+    # Primary path: NEX core "scheduler" block (TINY AI inside the NNL core). Fallback: direct TINY AI call.
     try:
         from nex_core import ядро as _ядро
 
@@ -68,9 +68,9 @@ def tiny_ai(dag, model, baseline: int, oracle: int | None = None) -> TinyAI | No
 
 
 def block_rows(text: str, model, min_ops: int = 10, limit: int = 8) -> tuple[list[BlockRow], int]:
-    """Блоки `.s` по убыванию того, что реально дал TINY Flash против baseline.
+    """Blocks from `.s` sorted descending by actual TINY Flash gain over baseline.
 
-    Возвращает (первые `limit` строк, сколько блоков всего).
+    Returns (first `limit` rows, total number of blocks).
     """
     try:
         from .core.baseline import GreedyListScheduler
@@ -90,13 +90,13 @@ def block_rows(text: str, model, min_ops: int = 10, limit: int = 8) -> tuple[lis
         except Exception:
             continue
         rows.append(BlockRow(g.block.index, g.block.label, g.n, base, min(base, tiny)))
-    # сначала блоки, где крошки реально выиграли, при равном выигрыше — большие блоки
+    # blocks where TINY AI actually won first; tie-break by larger block size
     rows.sort(key=lambda r: (-r.tiny_gain, -r.n))
     return rows[:limit], len(rows)
 
 
 def collect(session, base=None, orc=None, with_blocks: bool = True) -> Hints:
-    """Всё для панели: крошки на текущем участке и (если загружен `.s`) разбор по блокам."""
+    """Everything for the panel: TINY AI on the current block and (if `.s` is loaded) per-block breakdown."""
     h = Hints()
     dag, model = session.dag_obj, session.model()
     if dag is None:
@@ -110,7 +110,7 @@ def collect(session, base=None, orc=None, with_blocks: bool = True) -> Hints:
 
 
 def core_facts(session) -> list[str]:
-    """Строки рассказчику от ядра NEX (фразы из техкарты). Пусто — ядра нет, агент берёт прежний путь."""
+    """Narrator lines from the NEX core (facts from the technical spec). Empty if core is absent (agent uses fallback path)."""
     cached = session.peek()
     if cached is None:
         return []

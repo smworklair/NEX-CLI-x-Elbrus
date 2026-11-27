@@ -1,13 +1,11 @@
-"""Общая основа рабочих экранов.
+"""Shared foundation for workspace screens.
 
-Три режима — три разных рабочих места со своей раскладкой. Общего у них
-ровно столько, сколько нужно, чтобы это был один инструмент: полоса режима
-сверху, док ввода снизу, одинаковый способ выполнить команду и одинаковый
-выход — `/clear` возвращает к выбору режима.
+Each mode is its own workspace with a dedicated layout. They share only what is
+needed to feel like one tool: the top mode bar, the bottom input dock, a
+uniform way to run commands, and `/clear` to return to the mode picker.
 
-Переключения между режимами на горячих клавишах нет намеренно: это разные
-занятия, а не вкладки одного окна. Поэтому цифры, буквы и всё остальное
-достаётся строке ввода целиком.
+There are intentionally no global hotkeys to switch modes: the full keyboard
+belongs to the input line and editor.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ from ..widgets import (Console, ConsoleJournal, HintBar, Panel, PanelChat,
 
 
 class ModeScreen(Screen):
-    """Каркас режима: шапка, тело (своё у каждого), док ввода."""
+    """Mode scaffold: header, mode-specific body, and input dock."""
 
     mode = "lab"
     mode_title = ""
@@ -32,27 +30,23 @@ class ModeScreen(Screen):
     placeholder = ""
     hint = ""
 
-    # Что можно убрать с экрана, когда мешает. Боковая колонка полезна, но
-    # постоянно занимает треть ширины; полоса подсказок нужна, пока не выучил
-    # команды. Обе прячутся с клавиатуры и не мешают работе, когда не нужны.
+    # Collapsible panels: the sidebar takes a third of width and the tips bar
+    # is only needed while learning commands. Both toggle via keyboard.
     SIDE_ID = ""
     TIPS_ID = ""
 
     BINDINGS = [
-        # Esc — ОДИН шаг назад, всегда и везде. priority=True обязателен:
-        # без него Esc сначала достаётся сфокусированному виджету (полю
-        # ввода, строке вопроса, решётке), и каждый трактовал его по-своему —
-        # получалось три разных Esc в одном приложении. Теперь он один и
-        # разбирает уровни по порядку, см. action_back.
-        Binding("escape", "back", "назад", priority=True),
-        # Tab — открыть/закрыть справочник ИИ у развёрнутой панели. Тоже
-        # priority: иначе Tab уходит в поле ввода на дополнение команды.
-        # Вне разворота дополнение и остаётся — см. action_ai_or_complete.
-        Binding("tab", "ai_or_complete", "справочник ИИ", priority=True),
-        ("ctrl+b", "toggle_side", "боковая панель"),
-        ("ctrl+t", "toggle_tips", "полоса подсказок"),
-        ("ctrl+o", "to_picker", "к выбору режима"),
-        ("ctrl+q", "quit_app", "выход"),
+        # Esc always steps back one level. priority=True prevents focused child
+        # widgets from intercepting Esc inconsistently; see action_back.
+        Binding("escape", "back", "back", priority=True),
+        # Tab toggles the AI helper on a maximized panel (priority=True so it
+        # beats input completion when maximized; outside maximize it still
+        # completes commands — see action_ai_or_complete).
+        Binding("tab", "ai_or_complete", "AI helper", priority=True),
+        ("ctrl+b", "toggle_side", "sidebar"),
+        ("ctrl+t", "toggle_tips", "tips bar"),
+        ("ctrl+o", "to_picker", "mode picker"),
+        ("ctrl+q", "quit_app", "quit"),
     ]
 
     def __init__(self, **kw) -> None:
@@ -61,7 +55,7 @@ class ModeScreen(Screen):
         self.side_shown = True
         self.tips_shown = True
 
-    # --- сборка -----------------------------------------------------------
+    # --- layout -----------------------------------------------------------
 
     def compose(self):
         yield TopBar(self.mode, self.mode_title, self.mode_subtitle, id="topbar")
@@ -73,30 +67,20 @@ class ModeScreen(Screen):
             yield HintBar(id="hints")
 
     def extra_commands(self) -> list[dict]:
-        """Команды, которые понимает только этот экран (попадают в палитру)."""
+        """Screen-specific commands added to the `/` command palette."""
         return []
 
     def compose_body(self):
-        """Раскладка режима. Переопределяется каждым экраном."""
+        """Mode layout. Overridden by each screen."""
         yield Vertical(id="body")
 
-    #: Что остаётся видимым, когда панель развёрнута. Textual по умолчанию
-    #: прячет ВСЕХ прямых детей экрана, кроме развёрнутого, — и чат по панели
-    #: исчезал вместе с ними. #dock назван ПОЛНОСТЬЮ: его дети (PromptBar,
-    #: HintBar) в списке есть, но родитель спрятанного контейнера не виден —
-    #: без этого «полный экран» съедал строку ввода и подсказки, и выходить
-    #: из разворота приходилось наугад.
+    #: Widgets kept visible when a panel is maximized. Including `#dock` keeps
+    #: the prompt and hint bar visible in full-screen panel view.
     ALLOW_IN_MAXIMIZED_VIEW = ("PanelChat, PanelPrompt, PromptBar, HintBar, "
                                "Footer, #dock, TopBar")
 
-    #: Textual сам перехватывает Esc ДО всех биндингов, когда что-то
-    #: развёрнуто (`App._process_messages`: `escape_to_minimize` → сразу
-    #: `screen.minimize()`), и наш каскад до дела не доходил: один Esc
-    #: проскакивал уровень справочника и схлопывал панель. Хуже того,
-    #: встроенный путь зовёт `minimize()` напрямую и НЕ шлёт
-    #: `Panel.Collapsed` — экран не узнавал, что панель свернули, и держал
-    #: развёрнутый режим отрисовки. Выключаем; сворачивание делает
-    #: `action_back` сам, четвёртым шагом, и с уведомлением панели.
+    #: Disable Textual's built-in Esc-to-minimize so `action_back` handles the
+    #: full cascade in order and always emits `Panel.Collapsed`.
     ESCAPE_TO_MINIMIZE = False
 
     _chat_panel = None
@@ -114,24 +98,18 @@ class ModeScreen(Screen):
         self.on_ready()
 
     def on_ready(self) -> None:
-        """Первое наполнение панелей. Переопределяется экраном."""
+        """Initial panel population. Overridden by each screen."""
 
-    # --- ширина окна ------------------------------------------------------
+    # --- window sizing ----------------------------------------------------
     #
-    # Правых колонок в раскладке не жалко ровно до тех пор, пока слева хватает
-    # места на решётку и ленту. Дальше колонка ужимается, а на совсем узком
-    # окне вспомогательные полосы с подсказками убираются: лучше потерять
-    # подсказку, чем рабочую область.
+    # Sidebars stay visible while the main grid/tape has enough room; on narrow
+    # terminals auxiliary hint strips drop first to preserve the workspace.
 
     NARROW = 124
     TIGHT = 100
 
-    # Пороги по ВЫСОТЕ. Ширину экран учитывал с самого начала, высоту — нет,
-    # и правая колонка РАЗБОРА на невысоком терминале уезжала за нижний край:
-    # `#p-detail` рос по содержимому без потолка, а у панелей под ним стоял
-    # min-height, которому уже негде было поместиться. Панель МАШИНА просто
-    # оказывалась за экраном — вместе с матрицей портов, ради которой всё и
-    # затевалось.
+    # Height breakpoints so lower panels (e.g., MACHINE in LAB) stay above the
+    # fold on shorter terminals.
     LOW = 34
     VERY_LOW = 28
     ROOMY = 50
@@ -149,17 +127,17 @@ class ModeScreen(Screen):
         self.set_class(height < self.VERY_LOW, "very-low")
         self.set_class(height >= self.ROOMY, "roomy")
 
-    # --- шапка и подсказки ------------------------------------------------
+    # --- header & hints ---------------------------------------------------
 
     def context_bits(self) -> str:
         s = self.app.session
         model = s.model()
-        bits = [f"участок {s.scenario}", f"{len(s.dag_obj)} оп.", model.name]
+        bits = [f"block {s.scenario}", f"{len(s.dag_obj)} ops", model.name]
         cached = s.peek()
         if cached is not None:
             base, orc, _ = cached
             b, o = base.schedule.makespan, orc.schedule.makespan
-            bits.append(f"{b}→{o}" if b != o else f"{b} тактов")
+            bits.append(f"{b}→{o}" if b != o else f"{b} cycles")
         return "   ·   ".join(bits)
 
     def refresh_context(self) -> None:
@@ -169,27 +147,23 @@ class ModeScreen(Screen):
             pass
 
     def hint_pairs(self) -> list[tuple[str, str]]:
-        return [("/", "команды"), ("Esc", "назад"), ("/exit", "выход")]
+        return [("/", "commands"), ("Esc", "back"), ("/exit", "quit")]
 
     def toggle_hints(self) -> list[tuple[str, str]]:
-        """Подсказки про скрываемые панели — одинаковые во всех режимах."""
+        """Shared hints for toggleable panels across all modes."""
         out = []
-        # Про двойной клик иначе не догадаться: мышь в текстовом интерфейсе
-        # обычно ничего не делает, и панель на весь экран никто искать не станет.
         if self.screen is self and self.screen.maximized is not None:
-            out.append(("Esc", "свернуть панель"))
+            out.append(("Esc", "restore panel"))
         else:
-            out.append(("2xклик", "панель на весь экран"))
-        # Tab виден только там, где он что-то делает: справочник живёт
-        # исключительно у развёрнутой панели.
+            out.append(("2xclick", "maximize panel"))
         if (self.screen is self and self.maximized is not None
                 and self._expanded_panel is not None):
-            out.append(("Tab", "справочник ИИ"
-                        if not list(self.query(PanelPrompt)) else "закрыть"))
+            out.append(("Tab", "AI helper"
+                        if not list(self.query(PanelPrompt)) else "close"))
         if self.SIDE_ID:
-            out.append(("^B", "панель" if self.side_shown else "панель ←"))
+            out.append(("^B", "sidebar" if self.side_shown else "sidebar ←"))
         if self.TIPS_ID:
-            out.append(("^T", "подсказки" if self.tips_shown else "подсказки ←"))
+            out.append(("^T", "tips" if self.tips_shown else "tips ←"))
         return out
 
     def refresh_hints(self) -> None:
@@ -199,18 +173,14 @@ class ModeScreen(Screen):
         except Exception:
             pass
 
-    # --- ввод -------------------------------------------------------------
+    # --- input ------------------------------------------------------------
 
     def on_prompt_bar_submitted(self, event: PromptBar.Submitted) -> None:
         event.stop()
         self.submit_line(event.value)
 
     def on_console_journal_run_requested(self, event) -> None:
-        """Команда набрана прямо в развёрнутом ВЫВОДЕ КОМАНД — терминал
-        внутри панели, а не только общий док внизу экрана. Тот же путь, что
-        и у общей строки ввода: /exit, /clear и остальное работают одинаково
-        независимо от того, откуда набрана команда.
-        """
+        """Handle commands typed directly inside the maximized output journal."""
         event.stop()
         self.submit_line(event.line)
 
@@ -224,22 +194,21 @@ class ModeScreen(Screen):
             self.app.to_picker()
             return
         if low.split(" ")[0] == "mode":
-            # Режимы больше не переключаются на месте — это разные рабочие
-            # места. `/mode` остаётся в ядре ради построчного режима, здесь
-            # он только объясняет, куда идти.
+            # Modes are separate workspaces; `/mode` stays in core for line
+            # mode and here simply points the user to `/clear`.
             if self.console is not None:
                 self.console.note(
-                    "  режим меняется через /clear — выбор откроется заново",
+                    "  switch modes via /clear — opens the mode picker",
                     "warning")
             return
         self.handle_line(line)
 
     def handle_line(self, line: str) -> None:
-        """Что делать с введённой строкой. Переопределяется экраном."""
+        """Handle a submitted input line. Overridden by each screen."""
         self.run_core(line)
 
     def on_chip_picked(self, event) -> None:
-        """Клик по подсказке подставляет её в ввод и сразу выполняет."""
+        """Clicking a suggestion chip populates and runs it immediately."""
         event.stop()
         bar = self.query_one("#prompt", PromptBar)
         bar.focus_input()
@@ -247,38 +216,28 @@ class ModeScreen(Screen):
         self.handle_line(event.value)
 
     def on_nex_input_pasted(self, event) -> None:
-        """Многострочную вставку поле ввода не рвёт построчно, а отдаёт
-        целиком — в буфер КОДА. Из любого режима: вставил — F5 в КОДЕ.
-        """
+        """Route multi-line pastes into the CODE buffer from any mode."""
         event.stop()
         self.app.session.code_text = event.text
         lines = [l for l in event.text.splitlines() if l.strip()]
         con = self.console
         if con is not None:
-            con.note(f"  вставлено {len(lines)} "
-                     f"строк → буфер КОДА   ·   режим КОД (клавиша 4) — "
-                     "редактор, /code run — прогнать", "warning")
+            con.note(f"  pasted {len(lines)} "
+                     f"lines → CODE buffer   ·   CODE mode (key 1) — "
+                     "editor, /code run — run", "warning")
 
-    # --- инструменты развёрнутой панели ------------------------------------
+    # --- maximized panel tools --------------------------------------------
 
     def on_tool_picked(self, event: Tool.Picked) -> None:
-        """Клик по инструменту развёрнутой панели — действие сразу.
-
-        Инструмент, в отличие от чипа, не подставляет команду в строку ввода:
-        панель разворачивают, чтобы работать в ней, и её кнопки обязаны
-        работать без обходного пути через док внизу экрана.
-        """
+        """Clicking a panel toolbar action executes it immediately."""
         event.stop()
         self.panel_tool(event.tool)
 
     def panel_tool(self, tool: str) -> None:
-        """Действие инструмента развёрнутой панели. Переопределяется экраном.
+        """Handle a panel toolbar action. Overridden by each screen.
 
-        Базовая реализация знает три вида инструментов: мостик журнала
-        («@lab»/«@agent»/«@work»/«@code» — отправить выбранный прогон в
-        другой режим), команду со слэшем; всё остальное (навигация
-        курсором, тумблеры отрисовки, переходы между панелями) — дело
-        конкретного экрана.
+        Base implementation handles journal bridge actions (`@lab`/`@agent`/
+        `@work`/`@code`), `@restore`, and slash commands.
         """
         if tool in ("@lab", "@agent", "@work", "@code"):
             self._bridge_run(tool[1:])
@@ -289,20 +248,10 @@ class ModeScreen(Screen):
         else:
             self.app.bell()
 
-    # --- мостик: прогон из журнала → другой режим ---------------------------
+    # --- bridge: journal run -> another mode ------------------------------
 
     def _bridge_run(self, dest: str) -> None:
-        """Отправить выбранный в журнале прогон туда, куда решил человек.
-
-        Ничего не уезжает само: пока кнопка не нажата, прогон живёт только
-        в журнале. Какой прогон поедет — выбираешь кликом в ЗАПУСКАХ, и
-        подсветка строки показывает, кого тронет кнопка. Полная сетка:
-        из любого режима прогон доезжает до любого другого. «В разбор»
-        делает прогон текущим участком и открывает РАЗБОР; «в агента»
-        открывает АГЕНТА с готовым вопросом в строке; «в ядро» и «в код»
-        открывают верстак с пометкой о прогоне — а если у записи есть его
-        исходник (прогон буфера КОДА), «в код» кладёт исходник в буфер.
-        """
+        """Send the selected journal run to another mode."""
         con = self.console
         if con is None or not con.runs:
             self.app.bell()
@@ -313,43 +262,35 @@ class ModeScreen(Screen):
             if dag is None:
                 self.app.bell()
                 return
-            self.app.session.set_dag(dag, rec.get("scenario") or "прогон")
+            self.app.session.set_dag(dag, rec.get("scenario") or "run")
             self.app.open_mode("lab")
         elif dest == "agent":
             scenario = rec.get("scenario") or "—"
             self.app.session.pending_question = (
-                f"прогон «{rec['cmd']}» на участке {scenario} — что он "
-                "показал и где здесь теряются такты?")
+                f"run \"{rec['cmd']}\" on block {scenario} — what did it "
+                "show and where are cycles being lost?")
             self.app.open_mode("mind")
         elif dest == "work":
             self.app.session.pending_note = (
-                f"из журнала: прогон «{rec['cmd']}» на участке "
+                f"from journal: run \"{rec['cmd']}\" on block "
                 f"{rec.get('scenario') or '—'}")
             self.app.open_mode("work")
         elif dest == "code":
             src = rec.get("code")
             if src:
-                # Исходник прогона существует только у прогонов буфера:
-                # им «в код» возвращает текст целиком, правь и F5 заново.
+                # Buffer runs carry their original source; restore it to CODE.
                 self.app.session.code_text = src
                 self.app.session.pending_note = (
-                    f"из журнала: исходник «{rec['cmd']}» — в буфере")
+                    f"from journal: source for \"{rec['cmd']}\" loaded into buffer")
             else:
                 self.app.session.pending_note = (
-                    f"из журнала: прогон «{rec['cmd']}» на участке "
-                    f"{rec.get('scenario') or '—'} — исходника у записи "
-                    "нет, буфер не тронут")
+                    f"from journal: run \"{rec['cmd']}\" on block "
+                    f"{rec.get('scenario') or '—'} — no source recorded, "
+                    "buffer unchanged")
             self.app.open_mode("code")
 
     def _restore_run(self) -> None:
-        """«Вернуть» — checkout состояния выбранного прогона на месте.
-
-        Мостик перевозит прогон в другой режим; «вернуть» делает то же,
-        но без переезда: участок, граф и исходник сессии становятся такими,
-        какими были у этого прогона, а экран остаётся текущим. Это ответ
-        на «а что если вернуться к тому, что я считал десять минут назад» —
-        вопрос, ради которого в git существует log.
-        """
+        """Restore the selected journal run's session state in place."""
         con = self.console
         if con is None or not con.runs:
             self.app.bell()
@@ -363,26 +304,22 @@ class ModeScreen(Screen):
             self.app.bell()
             return
         if snap is not None:
-            # Чекаут машины ЯДРА целиком: имена, память и граф становятся
-            # такими, какими были на момент этой строки. Восстановление
-            # видно при следующем открытии ЯДРА — машина одна на сессию.
+            # Checkout the full CORE interpreter state (names, memory, graph).
             self.app.session.workspace().restore(snap)
         if dag is not None:
-            self.app.session.set_dag(dag, rec.get("scenario") or "прогон")
+            self.app.session.set_dag(dag, rec.get("scenario") or "run")
         if code:
             self.app.session.code_text = code
-        con.note(f"  состояние #{pos + 1} возвращено: "
+        con.note(f"  restored state #{pos + 1}: "
                  f"{rec.get('scenario') or '—'}"
-                 + ("  ·  машина ЯДРА восстановлена" if snap is not None else "")
-                 + (f"  ·  исходник в буфере" if code else ""),
+                 + ("  ·  CORE machine restored" if snap is not None else "")
+                 + (f"  ·  source in buffer" if code else ""),
                  "success")
         self.refresh_context()
         self.after_command()
 
     def _bridge_index(self, con) -> int:
-        """Какой прогон мостим: тот, что выбран в журнале, если он открыт;
-        иначе последний. Журнал у консоли один, выбранная позиция в нём.
-        """
+        """Return the selected run index in the journal, or the latest run."""
         try:
             journal = self.query_one(ConsoleJournal)
             if 0 <= journal.pos < len(con.runs):
@@ -391,56 +328,35 @@ class ModeScreen(Screen):
             pass
         return len(con.runs) - 1
 
-    # --- Esc: один шаг назад ----------------------------------------------
+    # --- Esc: one step back -----------------------------------------------
 
     def action_back(self) -> None:
-        """Esc — выйти на один уровень наружу, вплоть до начального экрана.
-
-        Раньше Esc значил три разных вещи в зависимости от того, что в
-        фокусе: закрыть справочник, переключить решётка<>ввод, уйти к выбору
-        режима. Каждый обработчик стоял в своём классе и не знал про
-        остальные — отсюда и ощущение костыля. Теперь уровень ровно один и
-        разбирается сверху вниз: что открыто последним, то и закрывается.
-        """
+        """Step out one UI level on Esc, all the way back to the mode picker."""
         bar = None
         try:
             bar = self.query_one("#prompt", PromptBar)
         except Exception:
             pass
-        # 1. Палитра команд поверх всего — закрыть её, ввод не трогать.
+        # 1. Close the command palette overlay if open.
         if bar is not None and bar.palette_widget.display:
             bar.set_value("")
             return
-        # 2. Справочник ИИ у развёрнутой панели.
+        # 2. Close the AI helper bar on a maximized panel.
         if list(self.query(PanelPrompt)):
             self.close_panel_prompt()
             self.refresh_hints()
             return
-        # 3. Развёрнутая панель — свернуть обратно в раскладку экрана.
+        # 3. Restore a maximized panel back to normal layout.
         if self.maximized is not None:
             panel = self.maximized
             self.minimize()
             panel.post_message(Panel.Collapsed())
             return
-        # 4. Дальше выходить некуда, кроме как из самого режима. Если режим
-        #    открыли двойным кликом по вкладке КОДа — Esc возвращает в КОД, а
-        #    не к выбору: жест «заглянуть в блок» обязан иметь обратный ход
-        #    там же, где начался. Пришли иначе — как раньше, к выбору режима.
+        # 4. Exit the mode screen back to caller or picker.
         self.app.back_out()
 
     def action_ai_or_complete(self) -> None:
-        """Tab: у развёрнутой панели — справочник ИИ, иначе — дополнение.
-
-        Справочник больше не выскакивает сам при развороте: панель
-        разворачивают, чтобы работать в ней, и чужая строка снизу в этот
-        момент только мешает. Открывается ровно по Tab и по нему же
-        закрывается.
-
-        Вне разворота Tab оставлен дополнению команды в общем доке — это
-        его привычное место, и отбирать его ради функции, которой там всё
-        равно нет (справочник живёт только у развёрнутой панели), значило бы
-        сломать рабочую клавишу ради пустого действия.
-        """
+        """Tab: toggle AI helper when a panel is maximized, else complete input."""
         if self.maximized is not None and self._expanded_panel is not None:
             self.action_toggle_panel_prompt()
             return
@@ -449,7 +365,7 @@ class ModeScreen(Screen):
         except Exception:
             pass
 
-    # --- выполнение команд ядра -------------------------------------------
+    # --- core command execution -------------------------------------------
 
     @property
     def console(self) -> Console | None:
@@ -459,7 +375,7 @@ class ModeScreen(Screen):
             return None
 
     def run_core(self, line: str) -> None:
-        """Выполнить команду ядра, вывод — в консоль экрана."""
+        """Run a core command and display its output in the screen console."""
         con = self.console
         if con is not None:
             con.echo(line, self.mode)
@@ -473,12 +389,8 @@ class ModeScreen(Screen):
         con = self.console
         width = con.size.width - 2 if con is not None and con.size.width else 96
 
-        # Пока команда идёт, ядро отдаёт события планировщика сюда, а не
-        # печатает их в перехваченный stdout. Разница принципиальная: stdout
-        # моста копится и показывается ЦЕЛИКОМ В КОНЦЕ, поэтому обученная
-        # модель раньше выглядела как замерший на полминуты экран. События
-        # приходят по ходу — видно, как модель пишет и как заполняется
-        # решётка.
+        # Stream scheduler events live to the UI instead of buffering them
+        # until the command finishes.
         session = self.app.session
         session.event_sink = bridge.EventPump(
             self.app, self.on_scheduler_text, self.on_scheduler_event)
@@ -488,22 +400,13 @@ class ModeScreen(Screen):
             session.event_sink = None
         self.app.call_from_thread(self._core_done, out, err)
 
-    # --- события планировщика ---------------------------------------------
+    # --- scheduler events -------------------------------------------------
     #
-    # Приходят уже в главном потоке. По умолчанию экран показывает поток
-    # текстом; экран, у которого есть решётка, переопределяет и заливает её.
+    # Delivered on the main UI thread. Default behavior logs text to EVENTS;
+    # screens with a live grid override these to update cells directly.
 
     def on_scheduler_text(self, text: str) -> None:
-        """Живой поток (строки модели, пометки планировщика) — в СОБЫТИЯ.
-
-        Раньше он лился в вывод команд и перемешивался с отчётами: таблица
-        обрывалась строкой генерации, а при открытом журнале — когда лента
-        консоли скрыта — текст вообще уходил «в никуда». Отдельная лента
-        решает оба раза: отчёты чисты, а поток читается целиком на вкладке
-        СОБЫТИЯ развёрнутого ОТЧЁТА. Экраны, для которых этот поток — само
-        содержимое (решётка РАЗБОРА), переопределяют метод и рисуют его
-        по-своему.
-        """
+        """Append live scheduler text (model tokens, notes) to EVENTS."""
         clean = "  " + text.replace("[end of text]", "").rstrip()
         self.app.session.journal_events.append(
             Text(clean, style=palette.role_hex("dim")))
@@ -514,7 +417,7 @@ class ModeScreen(Screen):
         journal.append_event(Text(clean, style=palette.role_hex("dim")))
 
     def on_scheduler_event(self, ev) -> None:
-        """Не-текстовое событие: размещение, починка, вердикт, отказ."""
+        """Non-text scheduler event: placement, repair, verdict, or failure."""
 
     def _core_done(self, out: str, err: str) -> None:
         con = self.console
@@ -524,26 +427,21 @@ class ModeScreen(Screen):
             if err:
                 con.note("  " + err, "error")
             con.write("")
-            # Мостик-поля последнего прогона: что показывал, чем считалось.
-            # Без них запись — просто текст; с ними её можно отправить в
-            # РАЗБОР или АГЕНТУ одной кнопкой из журнала.
+            # Attach bridge metadata to the latest run so it can be sent to
+            # LAB or AGENT from the journal.
             if con.runs:
                 rec = con.runs[-1]
                 rec["scenario"] = self.app.session.scenario
                 rec["dag"] = self.app.session.dag_obj
                 rec["profile"] = self.app.session.profile
         self.set_busy(False)
-        self.app.reload_palette()   # команда могла сменить тему
+        self.app.reload_palette()   # command may have switched theme
         self.refresh_context()
         self.after_command()
-        # Журнал мог быть открыт ДО того, как команда донесла свой граф:
-        # без перечитывания у свежего прогона оставались бы пустыми мостик-
-        # кнопки и список строк. Перечитываем всегда, когда он виден.
         self._refresh_journal()
 
     def _refresh_journal(self) -> None:
-        """Показанный журнал — перечитать: у него свои данные, а не общие
-        с лентой консоли. Дешёво: список прогонов уже в памяти."""
+        """Reload the visible journal from in-memory session runs."""
         try:
             journal = self.query_one("#journal", ConsoleJournal)
         except Exception:
@@ -554,32 +452,20 @@ class ModeScreen(Screen):
                      list(self.app.commands) + self.extra_commands(),
                      self.app.session.journal_events)
 
-    # --- чат по развёрнутой панели ----------------------------------------
+    # --- panel AI helper --------------------------------------------------
 
     def panel_facts(self, topic: str) -> list[str]:
-        """Факты открытой панели для ИИ. Переопределяется экраном.
-
-        Пустой список — панели нечего рассказывать, спрашивать не о чем.
-        """
+        """Facts about the maximized panel for the AI helper. Overridden per screen."""
         return []
 
     def panel_chips(self, topic: str) -> list[str]:
-        """Готовые вопросы для всплывающей строки этой панели.
-
-        Свои у каждой панели: спрашивают всегда про то, на что смотрят, и
-        общий список «о чём спросить» на все панели был бы тем же боковым
-        чатом, только без колонки.
-        """
+        """Suggested questions for the panel's floating prompt bar."""
         return []
 
     def on_panel_expanded(self, event) -> None:
         event.stop()
         panel = event.panel
-        # Помним, какая панель развёрнута: ^G возвращает строку вопроса без
-        # того, чтобы сворачивать и разворачивать панель заново.
-        # Справочник ИИ сам НЕ открывается: панель разворачивают, чтобы
-        # работать в ней, и чужая строка снизу в этот момент мешает. Только
-        # запоминаем панель — Tab поднимет справочник, когда он понадобится.
+        # Remember the maximized panel so Tab can open the AI helper on demand.
         self._expanded_panel = panel if getattr(panel, "topic", "") else None
         self.refresh_hints()
 
@@ -590,10 +476,10 @@ class ModeScreen(Screen):
         self.close_panel_chat()
         self.refresh_hints()
 
-    # --- всплывающая строка вопроса ---------------------------------------
+    # --- floating question bar --------------------------------------------
 
     def action_toggle_panel_prompt(self) -> None:
-        """Открыть/закрыть справочник ИИ у развёрнутой панели (Tab)."""
+        """Toggle the AI helper bar on a maximized panel (Tab)."""
         if list(self.query(PanelPrompt)):
             self.close_panel_prompt()
             self.refresh_hints()
@@ -604,21 +490,14 @@ class ModeScreen(Screen):
             self.refresh_hints()
 
     def open_panel_prompt(self, panel) -> None:
-        """Строка вопроса внизу развёрнутой панели.
-
-        Раньше это была колонка сбоку (PanelChat) и открывалась она у двух
-        панелей из шестнадцати: у остальных фактов не было, а у панелей со
-        своим вводом колонка отбирала треть ширины ровно у того, ради чего
-        панель и разворачивают. Строка снизу не отбирает ширину ни у кого,
-        поэтому её можно дать каждой панели.
-        """
+        """Open the bottom question bar for a maximized panel."""
         topic = getattr(panel, "topic", "")
         facts = self.panel_facts(topic)
         chips = self.panel_chips(topic)
         if not facts and not chips:
             return
-        # remove() у Textual отложенный: если просто позвать close перед
-        # mount, старый виджет ещё жив и новый падает на дублирующемся id.
+        # Textual's remove() is deferred; wait a refresh before remounting the
+        # same widget id to avoid duplicate-id collisions.
         for old in self.query(PanelPrompt):
             old.remove()
             self._prompt_panel = None
@@ -638,8 +517,6 @@ class ModeScreen(Screen):
     def on_panel_prompt_closed(self, event) -> None:
         event.stop()
         self.close_panel_prompt()
-        # Полоса подсказок должна сразу показать, что строку можно вернуть:
-        # иначе скрытие по Esc выглядит как «функцию убрал навсегда».
         self.refresh_hints()
 
     def on_panel_prompt_asked(self, event) -> None:
@@ -654,22 +531,12 @@ class ModeScreen(Screen):
 
     @work(thread=True, exclusive=True, group="panel-prompt")
     def _panel_prompt_worker(self, question: str) -> None:
-        """Отвечает НАСТОЯЩИЙ агент — тот же, что в АГЕНТЕ, не облегчённая копия.
-
-        Раньше здесь стоял отдельный, узкий путь: `context.panel_prompt` +
-        голый `llm.stream` — только текст, без единого действия. Спросить
-        «переключись на wide_ilp» из всплывающей строки МАШИНЫ было нельзя:
-        агент такого не умел, отвечал про факты, которые ему дали, и точка.
-        Теперь это тот же `Agent.ask_stream`, что ведёт ДИАЛОГ в АГЕНТЕ: он
-        сам распознаёт намерение, переключает сценарий, грузит файл, считает
-        расписание — а панельные факты идут суффиксом (см. `panel=` в
-        `Agent.ask_stream`), чтобы ответ не терял их и не портил кэш префикса.
-        """
+        """Run the full session Agent with panel facts appended as context."""
         import time
 
         panel = getattr(self, "_prompt_panel", None)
         full = getattr(panel, "_title", "") if panel is not None else ""
-        title = full.split("   ")[0].strip() or "панель"
+        title = full.split("   ")[0].strip() or "panel"
         prompts = list(self.query(PanelPrompt))
         facts = list(prompts[0].facts) if prompts else []
         agent = self.app.session.agent()
@@ -704,21 +571,15 @@ class ModeScreen(Screen):
             p.finish(seconds)
             break
         if acted:
-            # after_command(), А НЕ redraw(): redraw() красит уже посчитанное
-            # (единственный прежний вызывающий — repaint() при смене темы, где
-            # self.base и session.dag_obj гарантированно согласованы). Действие
-            # агента могло переключить сценарий — session.dag_obj уехал вперёд,
-            # а self.base/orc/met в РАЗБОРЕ ещё старые до асинхронного
-            # recompute(). Однажды так и упало: агент переключал на mulclash,
-            # redraw() лез в старое self.base с DAG уже нового сценария и
-            # получал IndexError на несуществующей инструкции. after_command()
-            # — тот же путь, что и после обычной команды из дока ввода.
+            # Call after_command() rather than redraw(): an agent action may
+            # have switched the scenario/DAG, so cached schedules must be
+            # recomputed before repainting.
             self.refresh_context()
             self.after_command()
 
     def _pp_fail(self, message: str) -> None:
         for p in self.query(PanelPrompt):
-            p.note("не получилось: " + message[:160], "error")
+            p.note("failed: " + message[:160], "error")
             return
 
     def open_panel_chat(self, panel) -> None:
@@ -726,14 +587,9 @@ class ModeScreen(Screen):
         if not facts:
             return
         self.close_panel_chat()
-        # Только имя панели: полный заголовок несёт ещё и состояние
-        # («РАСПИСАНИЕ   baseline   23 тактов») и в узкой колонке переносится
-        # на три строки, съедая ленту диалога.
         full = getattr(panel, "_title", "") or panel.topic
         title = full.split("   ")[0].strip() or panel.topic
         chat = PanelChat(title=title, facts=facts, id="panel-chat")
-        # Слева у панелей со своим вводом, справа у остальных: у первых справа
-        # уже живёт их собственная строка, и два ввода рядом путают.
         chat.add_class("left" if getattr(panel, "has_own_input", False)
                        else "right")
         self.mount(chat)
@@ -768,7 +624,7 @@ class ModeScreen(Screen):
 
         panel = self._chat_panel
         full = getattr(panel, "_title", "") if panel is not None else ""
-        title = full.split("   ")[0].strip() or "панель"
+        title = full.split("   ")[0].strip() or "panel"
         system = context.panel_prompt(title, list(self._chat_facts))
         import time
 
@@ -795,15 +651,15 @@ class ModeScreen(Screen):
     def _panel_chat_fail(self, message: str) -> None:
         chats = list(self.query(PanelChat))
         if chats:
-            chats[0].note("не получилось: " + message[:160], "error")
+            chats[0].note("failed: " + message[:160], "error")
 
     def after_command(self) -> None:
-        """Пересобрать панели после команды. Переопределяется экраном."""
+        """Refresh panels after a command completes. Overridden per screen."""
 
-    # --- перекраска (смена темы) ------------------------------------------
+    # --- repaint (theme switch) -------------------------------------------
 
     def repaint(self) -> None:
-        """Перерисовать всё, что несёт цвета темы. Виджеты не пересобираем."""
+        """Repaint theme-dependent elements without rebuilding widgets."""
         self.query_one("#topbar", TopBar).refresh_bar()
         self.query_one("#prompt", PromptBar).repaint()
         self.refresh_hints()
@@ -811,7 +667,7 @@ class ModeScreen(Screen):
         self.redraw()
 
     def redraw(self) -> None:
-        """Содержимое панелей экрана. Переопределяется экраном."""
+        """Redraw screen panel contents. Overridden per screen."""
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -820,11 +676,11 @@ class ModeScreen(Screen):
         except Exception:
             return
         if busy:
-            bar.set_side(Text("считаю…", style=palette.role_hex("warning")))
+            bar.set_side(Text("running…", style=palette.role_hex("warning")))
         else:
             bar.set_side("")
 
-    # --- действия ---------------------------------------------------------
+    # --- actions ----------------------------------------------------------
 
     def _toggle(self, selector: str, shown: bool) -> bool:
         if not selector:

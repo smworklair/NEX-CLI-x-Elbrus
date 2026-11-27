@@ -1,23 +1,23 @@
-"""Регресс-тест: агент не должен давать модели повод выдумывать такты.
+"""Regression test: the agent must never give the model a reason to fabricate cycles.
 
-История бага
-------------
-Mistral назвал неверный такт для инструкции. Разбор показал, что виновата не
-модель, а то, ЧТО ей дали: блок ФАКТЫ собирался с раскладкой расписания только
-если вопрос попадал под шаблон `такт|расписан|разлож|порядок|когда|выдал`.
-Вопрос «на каком КАНАЛЕ стоит z0?» под шаблон не подходил — раскладка в факты
-не попадала, а отвечать модель всё равно бралась. Взять числа было неоткуда.
+Bug history
+-----------
+Mistral reported an incorrect cycle for an instruction. Investigation showed the
+model wasn't at fault — it was WHAT it was given: the FACTS block only included
+the schedule layout if the question matched a narrow keyword pattern. A question
+like "which port is z0 on?" missed the pattern, so the layout was omitted from
+FACTS, yet the model still tried to answer with no source for the numbers.
 
-Проверять сам ответ языковой модели тестом нельзя: он недетерминирован и стоит
-сетевого вызова. Зато можно проверить ГРУНТОВКУ — что в фактах лежит вся
-правда, которая нужна для ответа, и что она совпадает с расписанием из ядра.
-Это ровно та половина, которая была сломана и которую мы контролируем.
+We cannot unit-test an LLM's output directly (it is nondeterministic and
+requires a network call), but we CAN test GROUNDING — that FACTS contains all
+the ground truth needed to answer and matches the core `Schedule` exactly.
+That is the exact half that broke and that we control.
 
-Проверяются четыре свойства:
-  1. в раскладке присутствует КАЖДАЯ инструкция со своим тактом и каналом;
-  2. числа в раскладке совпадают с ядром (Schedule), а не пересчитаны заново;
-  3. раскладка попадает в факты при любом вопросе о размещении;
-  4. обрезка длинной раскладки объявлена явно, а не молчит.
+Four properties are verified:
+  1. EVERY instruction appears in the layout with its issue cycle and port;
+  2. numbers in the layout match the core (`Schedule`), not recomputed separately;
+  3. the layout is included in FACTS for any placement question;
+  4. truncation of a long layout is explicitly announced, never silent.
 """
 
 from __future__ import annotations
@@ -30,15 +30,15 @@ from vliw.agent import context
 from vliw.agent.agent import Agent
 from vliw.cli import Session
 
-# Вопросы, на которых старый шаблон промахивался. Каждый требует знания
-# размещения, и ни один (кроме первого) не содержит слова «такт».
+# Questions the old keyword regex missed. Each requires knowing instruction
+# placement, and none (except the first) contains the word "cycle".
 PLACEMENT_QUESTIONS = [
-    "в каком такте выдано dc?",
-    "на каком канале стоит z0?",
-    "где размещена операция g1?",
-    "в какой широкой команде идёт m0?",
-    "почему деление dc позже?",
-    "что тут вообще происходит?",
+    "which cycle is dc issued in?",
+    "which port is z0 on?",
+    "where is operation g1 placed?",
+    "which VLIW bundle contains m0?",
+    "why is division dc delayed?",
+    "what is happening here overall?",
 ]
 
 
@@ -56,15 +56,15 @@ class TestLayoutCompleteness(unittest.TestCase):
     def test_every_instruction_is_in_the_layout(self):
         lay = "\n".join(context.schedule_layout(self.s))
         for ins in self.s.dag_obj:
-            self.assertIn(ins.name, lay, f"{ins.name} не попала в раскладку")
+            self.assertIn(ins.name, lay, f"{ins.name} missing from schedule layout")
 
     def test_cycles_and_channels_match_the_core(self):
-        """Раскладка — пересказ Schedule, а не независимый расчёт."""
+        """The layout must reflect Schedule directly, not an independent computation."""
         lines = context.schedule_layout(self.s)
         model, dag = self.s.model(), self.s.dag_obj
         seen: dict[str, tuple[int, int]] = {}
         for line in lines:
-            m = re.match(r"\s*т\.(\d+):\s*(.+)", line)
+            m = re.match(r"\s*c\.(\d+):\s*(.+)", line)
             if not m:
                 continue
             cycle = int(m.group(1))
@@ -77,8 +77,8 @@ class TestLayoutCompleteness(unittest.TestCase):
             name = dag[p.instr].name
             self.assertIn(name, seen)
             self.assertEqual(seen[name], (p.cycle, p.channel),
-                             f"{name}: в фактах {seen[name]}, "
-                             f"в расписании ({p.cycle}, {p.channel})")
+                             f"{name}: in facts {seen[name]}, "
+                             f"in schedule ({p.cycle}, {p.channel})")
 
     def test_layout_names_which_schedule_it_is(self):
         lay = "\n".join(context.schedule_layout(self.s))
@@ -87,7 +87,7 @@ class TestLayoutCompleteness(unittest.TestCase):
 
 class TestLayoutReachesTheModel(unittest.TestCase):
     def test_placement_questions_all_get_the_layout(self):
-        """Тот самый баг: канал/размещение не подпадали под шаблон слов."""
+        """Regression guard: port/placement queries must trigger layout inclusion."""
         s = session()
         agent = Agent(session=s)
         for q in PLACEMENT_QUESTIONS:
@@ -97,18 +97,18 @@ class TestLayoutReachesTheModel(unittest.TestCase):
     def test_facts_contain_the_layout(self):
         s = session()
         facts = context.build(s, include_layout=True)
-        self.assertIn("РАСПИСАНИЕ", facts)
+        self.assertIn("SCHEDULE", facts)
         for ins in s.dag_obj:
             self.assertIn(ins.name, facts)
 
     def test_no_layout_promised_before_the_run(self):
-        """Пока расписания нет, выдумывать нечего — и раскладки быть не должно."""
+        """Before a schedule exists, there is nothing to report and no layout should appear."""
         s = Session(args=SimpleNamespace(budget=5.0, portfolio=1.0),
                     scenario="slotclash")
         agent = Agent(session=s)
-        self.assertFalse(agent._needs_layout("в каком такте dc?"))
+        self.assertFalse(agent._needs_layout("which cycle is dc in?"))
         self.assertEqual(context.schedule_layout(s), [])
-        self.assertIn("НЕ посчитано", context.build(s))
+        self.assertIn("NOT been computed", context.build(s))
 
 
 class TestTruncationIsAnnounced(unittest.TestCase):
@@ -116,43 +116,42 @@ class TestTruncationIsAnnounced(unittest.TestCase):
         s = session("ptrchase")
         lay = context.schedule_layout(s, max_rows=3)
         tail = "\n".join(lay)
-        self.assertIn("обрезана", tail)
-        self.assertIn("НЕТ", tail, "модель должна быть предупреждена явно")
+        self.assertIn("truncated", tail)
+        self.assertIn("NOT shown", tail, "model must be explicitly warned about truncation")
 
     def test_full_layout_says_nothing_extra(self):
         s = session("simple4")
-        self.assertNotIn("обрезана", "\n".join(context.schedule_layout(s)))
+        self.assertNotIn("truncated", "\n".join(context.schedule_layout(s)))
 
 
 class TestMachineFacts(unittest.TestCase):
-    """Опровергнутая модель не должна попасть в подсказку через факты."""
+    """Refuted machine assumptions must never leak into the prompt via FACTS."""
 
     def test_divider_named_as_the_only_monopoly(self):
         facts = "\n".join(context.machine_facts(session().model()))
         self.assertIn("DIV", facts)
-        # С 30.08.2026 монополистов на ,5 двое: целочисленный делитель и
-        # делитель плавающей точки — ассемблер отвергает fdivd во всех
-        # остальных каналах. Проверяем сам факт монополии и что DIV в ней
-        # назван, а не точную формулировку перечисления.
-        self.assertRegex(facts, r"Порт ,5 — ЕДИНСТВЕННЫЙ исполнитель [\w/]*DIV")
-        self.assertIn("монопольный", facts)
-        self.assertNotRegex(facts, r"ЕДИНСТВЕННЫЙ исполнитель MUL")
+        # Port ,5 is exclusive to both integer DIV and floating-point FDIV —
+        # the assembler rejects fdivd on all other issue ports. Verify the
+        # exclusivity fact and that DIV is named, regardless of listing order.
+        self.assertRegex(facts, r"Port ,5 is the SOLE executor for [\w/]*DIV")
+        self.assertIn("exclusive", facts)
+        self.assertNotRegex(facts, r"SOLE executor for MUL")
 
     def test_narrow_ops_are_listed_with_their_ports(self):
         facts = "\n".join(context.machine_facts(session().model()))
-        self.assertIn("MUL исполнима на портах", facts)
-        self.assertIn("STORE исполнима на портах", facts)
+        self.assertIn("MUL executes on ports", facts)
+        self.assertIn("STORE executes on ports", facts)
 
     def test_system_prompt_forbids_inventing_numbers(self):
-        self.assertIn("ТОЛЬКО из блока ФАКТЫ", context.SYSTEM)
+        self.assertIn("ONLY from the FACTS block", context.SYSTEM)
 
 
 class TestTinyFactsInGrounding(unittest.TestCase):
-    """Агент в курсе TINY Flash: третья цифра планирования — в фактах и в офлайне.
+    """Agent awareness of TINY Flash: the third makespan figure appears in FACTS and offline mode.
 
-    Синергия односторонняя и честная: TINY Flash считается детерминированно,
-    агент только пересказывает готовое число. Проверяется та половина, что
-    контролируем мы: число в фактах совпадает с прямым прогоном TinyFlashScheduler.
+    The synergy is one-way and deterministic: TINY Flash computes its schedule
+    deterministically, and the agent only reports the resulting number. We verify
+    the controlled half: the number in FACTS matches a direct TinyFlashScheduler run.
     """
 
     def test_facts_match_direct_tiny_run(self):
@@ -171,11 +170,13 @@ class TestTinyFactsInGrounding(unittest.TestCase):
         self.assertEqual(context.tiny_facts(s), [])
 
     def test_build_contains_tiny(self):
-        self.assertIn("крошки", context.build(session(), include_layout=True))
+        facts = context.build(session(), include_layout=True)
+        self.assertIn("NEX", facts)
+        self.assertIn("rule_", facts)
 
     def test_offline_answer_mentions_tiny(self):
         a = Agent(session=session())
-        self.assertIn("TINY Flash", a.offline_answer("почему этот участок медленный?"))
+        self.assertIn("TINY Flash", a.offline_answer("why is this basic block slow?"))
 
 
 if __name__ == "__main__":

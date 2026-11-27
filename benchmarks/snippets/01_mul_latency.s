@@ -1,4 +1,4 @@
-// Фрагмент 1. Латентность умножения: две волны muls и ожидание через nop 2.
+// Snippet 1. Multiplication latency: two waves of muls and a stall via nop 2.
 {
   muls,0 %r10, %r11, %r20
   muls,1 %r12, %r13, %r21
@@ -12,7 +12,7 @@
   muls,3 %r34, %r35, %r27
 }
 {
-  nop 2 // Ожидание готовности результатов умножения (латентность muls)
+  nop 2 // Wait for multiplication results to become ready (muls latency)
 }
 {
   adds,0 %r20, %r21, %r40

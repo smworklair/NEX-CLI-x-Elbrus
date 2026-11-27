@@ -1,13 +1,13 @@
-! ЗАГРУЗКИ В ОДИН КАНАЛ — очередь на ровном месте
+! LOADS ON A SINGLE CHANNEL — an avoidable queue
 ! nex: src=10 orc=7 err=0
 !
-! Загрузка исполнима на ,0 ,2 ,3 ,5 и отдаёт значение
-! через 5 тактов. Здесь все четыре стоят в ,0 — то есть
-! выстроены в очередь на ровном месте: адреса независимы,
-! ждать друг друга им незачем.
+! Loads can execute on ,0 ,2 ,3 ,5 and return a value
+! after 5 cycles. Here all four are placed on ,0 — meaning
+! they are serialized unnecessarily: the addresses are independent,
+! so there is no reason for them to wait on each other.
 !
-! Точный поиск ставит их в один такт по четырём каналам, и
-! вся дальнейшая арифметика съезжает на 3 такта вверх.
+! Exact search packs them into a single cycle across four channels, and
+! all subsequent arithmetic shifts 3 cycles earlier.
 {
   ldw,0 %r10, %r20
 }

@@ -1,9 +1,9 @@
-/* Латентность записи: видимость через store->load по ОДНОЙ и той же ячейке.
- * volatile не даёт компилятору исключить обращение к памяти или переставить
- * запись и следующее чтение местами. Цепочка вынуждает: следующая запись не
- * может состояться раньше, чем предыдущее значение реально прочитано —
- * поэтому шаг между bundle отражает настоящую видимость записи, а не выбор
- * планировщика компилятора.
+/* Store latency: visibility via store->load to the SAME memory location.
+ * volatile prevents the compiler from eliminating memory accesses or reordering
+ * the store and subsequent load. The chain forces the next store not to
+ * happen until the previous value has actually been read —
+ * so the stride between bundles reflects true store visibility, not a compiler
+ * scheduler choice.
  */
 volatile int mem;
 int main(void) {

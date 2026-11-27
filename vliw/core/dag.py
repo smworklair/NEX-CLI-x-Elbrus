@@ -1,8 +1,7 @@
-"""Граф зависимостей инструкций (DAG) и набор тестовых сценариев.
+"""Instruction dependency DAG and built-in test scenarios.
 
-Один DAG = один участок прямолинейного кода, который планировщик должен
-разложить по широким командам. Узлы — инструкции, рёбра — зависимости
-«результат → операнд» (RAW).
+One DAG = one basic block of straight-line code scheduled into wide
+instructions. Nodes are instructions; edges are RAW dependencies.
 """
 
 from __future__ import annotations
@@ -20,11 +19,11 @@ _SYMBOL = {
     "DIV": "/",
     "AND": "&",
     "SHL": "<<",
-    # Классы, измеренные 30.08.2026. Плавающая точка помечена точкой в знаке
-    # (`+.`, `*.`) — так её видно в тексте участка, не заводя второй алфавит.
-    # У остальных знака в привычном смысле нет, поэтому берётся короткое имя:
-    # выдумывать для предиката символ значило бы делать вид, что он читается
-    # как арифметика.
+    # Op classes measured 2026-08-30; FP uses dotted symbols (`+.`, `*.`).
+    #
+    #
+    #
+    #
     "FADD": "+.",
     "FMUL": "*.",
     "FDIV": "/.",
@@ -59,19 +58,19 @@ class DAG:
     note: str
     instrs: list[Instr]
     profile: str | None = None
-    """Профиль модели, для которого сценарий задумывался (None = любой)."""
+    """Target machine profile for this scenario (None = any)."""
 
     family: str = ""
-    """Группа сценариев: какой приём оптимизации разбирается (для /scenarios)."""
+    """Scenario group for /scenarios listing."""
 
     lesson: str = ""
-    """Одна строка: что именно этот участок показывает и что с ним делать."""
+    """One-line takeaway describing what this block demonstrates."""
 
     def __post_init__(self) -> None:
         for i, ins in enumerate(self.instrs):
-            assert ins.id == i, "инструкции должны быть пронумерованы подряд"
+            assert ins.id == i, "instructions must be numbered consecutively"
             for p in ins.preds:
-                assert p < i, "предшественник должен идти раньше (граф ацикличен)"
+                assert p < i, "predecessor must precede consumer (graph must be acyclic)"
 
     def __len__(self) -> int:
         return len(self.instrs)
@@ -98,36 +97,25 @@ class DAG:
 
 
 # --------------------------------------------------------------------------
-# Метрики графа относительно конкретной машины
+# DAG metrics relative to a specific machine model
 # --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class DagMetrics:
-    """Всё, что можно посчитать про граф ДО планирования.
-
-    Две нижние границы makespan — главный инструмент объяснения в этом демо:
-    они сразу показывают, чем связан данный участок кода — длиной цепочки
-    зависимостей или количеством каналов.
-    """
+    """Pre-scheduling DAG metrics: ASAP, height, and critical-path vs resource lower bounds."""
 
     asap: tuple[int, ...]
-    """Самый ранний такт выдачи без учёта ресурсов (только зависимости)."""
+    """Earliest issue cycle ignoring resources (dependencies only)."""
 
     height: tuple[int, ...]
-    """Длина оставшегося критического пути от инструкции до конца (с её латентностью)."""
+    """Remaining critical-path length from this instruction to completion (including its latency)."""
 
     critical_path_bound: int
-    """Нижняя граница makespan по длине цепочек зависимостей."""
+    """Makespan lower bound from dependency chain length."""
 
     resource_bound: int
-    """Нижняя граница makespan по пропускной способности каналов.
-
-    С 02.09.2026 считается ИНТЕРВАЛЬНО (см. `_interval_bound`), а не делением
-    суммарной занятости на число каналов. Прежний способ не выигрывал у
-    критического пути НИ НА ОДНОМ из 300 графов трудного эвала — то есть был
-    мёртвым кодом с точки зрения границы.
-    """
+    """Makespan lower bound from channel throughput (energetic interval bound via `_interval_bound`)."""
 
     @property
     def lower_bound(self) -> int:
@@ -136,43 +124,15 @@ class DagMetrics:
     @property
     def binding(self) -> str:
         if self.resource_bound > self.critical_path_bound:
-            return "ресурсы"
+            return "resources"
         if self.critical_path_bound > self.resource_bound:
-            return "критический путь"
-        return "и то, и другое"
+            return "critical path"
+        return "both"
 
 
 def _interval_bound(dag: DAG, model: MachineModel,
                     asap: list[int], height: list[int]) -> int:
-    """Интервальная (энергетическая) нижняя граница makespan.
-
-    ЗАЧЕМ. Прежняя ресурсная граница делила суммарную занятость каналов на их
-    количество — и проигрывала критическому пути на всех 300 графах трудного
-    эвала. Она не видела главного: операции не размазаны по расписанию
-    равномерно, их прижимают к своим местам зависимости.
-
-    ИДЕЯ. Если операция выдана в такте t, то makespan >= t + height. Канал она
-    держит occ тактов, значит освобождает его к t + occ, и от этого момента до
-    конца расписания остаётся q = height - occ.
-
-    Возьмём группу каналов C и все операции, которым нужны ТОЛЬКО каналы из C
-    (другие могут уйти в сторону, на них рассчитывать нельзя). Отберём те, что
-    не могут начаться раньше r и не могут освободить канал позже makespan - q.
-    Вся их работа обязана уместиться в это окно:
-
-        sum(occ) <= |C| * (makespan - q - r)
-
-        =>  makespan >= r + q + ceil(sum(occ) / |C|)
-
-    Перебираем все пары порогов (r, q). Стоимость O(n^2) на группу: для
-    фиксированного r идём по операциям в порядке убывания q и накапливаем
-    работу — так каждый префикс сразу даёт кандидата в границу.
-
-    ЧЕГО ЗДЕСЬ НЕТ. Объединений групп каналов: перебираются только те наборы,
-    что реально встречаются у операций графа. Более сильные варианты (все
-    подмножества, дизъюнктивные рассуждения на монопольном порту) остаются
-    возможным продолжением — эта версия уже сняла 89% узлов перебора.
-    """
+    """Energetic interval resource lower bound: makespan >= r + q + ceil(sum(occ) / |C|)."""
     n = len(dag)
     if not n:
         return 0
@@ -185,7 +145,7 @@ def _interval_bound(dag: DAG, model: MachineModel,
         width = len(group)
         if not width:
             continue
-        # Только операции, которым БОЛЬШЕ некуда: их каналы вложены в группу.
+        # Only ops whose capable channels are a subset of group C.
         idx = [i for i in range(n) if chans[i] <= group]
         if not idx:
             continue
@@ -207,7 +167,7 @@ def compute_metrics(dag: DAG, model: MachineModel) -> DagMetrics:
     lat = [model.latency(ins.op) for ins in dag]
 
     asap = [0] * n
-    for ins in dag:  # инструкции топологически отсортированы по построению
+    for ins in dag:  # instructions are topologically sorted by construction
         for p in ins.preds:
             asap[ins.id] = max(asap[ins.id], asap[p] + lat[p])
 
@@ -220,7 +180,7 @@ def compute_metrics(dag: DAG, model: MachineModel) -> DagMetrics:
 
     cp_bound = max((asap[i] + height[i] for i in range(n)), default=0)
 
-    # Ресурсная граница — интервальная, см. `_interval_bound`.
+    # Resource lower bound via energetic interval bound (`_interval_bound`).
     res_bound = _interval_bound(dag, model, asap, height)
 
     return DagMetrics(
@@ -232,7 +192,7 @@ def compute_metrics(dag: DAG, model: MachineModel) -> DagMetrics:
 
 
 # --------------------------------------------------------------------------
-# Конструктор графов
+# DAG builder
 # --------------------------------------------------------------------------
 
 
@@ -274,20 +234,20 @@ class DagBuilder:
 
 
 # --------------------------------------------------------------------------
-# Сценарии
+# Built-in scenarios
 # --------------------------------------------------------------------------
 
 
 def _simple4() -> DAG:
     b = DagBuilder(
         "simple4",
-        "Четыре независимые операции и свёртка",
-        "Четыре операции разной латентности без зависимостей между собой, потом "
-        "попарная свёртка в один результат.\n"
-        "Сложение, вычитание, умножение и деление уходят в одну широкую команду, "
-        "дальше участок ждёт готовности самого длинного из них.",
-        family="основа",
-        lesson="С чего начинать: независимые операции расходятся по портам сразу.",
+        "Four independent ops and reduction",
+        "Four independent ops of varied latency followed by pairwise reduction.\n"
+        ""
+        "ADD, SUB, MUL, and DIV issue in a single wide instruction; the block "
+        "then waits for the longest latency to complete.",
+        family="basics",
+        lesson="Starting point: independent operations fan out across ports immediately.",
     )
     a = b.op("ADD", "t0")
     m = b.op("MUL", "t1")
@@ -302,13 +262,13 @@ def _simple4() -> DAG:
 def _loadchain() -> DAG:
     b = DagBuilder(
         "loadchain",
-        "Восемь загрузок: прячем 5 тактов до готовности данных",
-        "Восемь загрузок и арифметика над ними. На e2k загрузка исполнима только "
-        "в `,0 ,2 ,3 ,5`, результат готов через 5 тактов.\n"
-        "Планировщик должен растащить загрузку и её потребителя и заполнить "
-        "дырку полезной работой. Иначе участок стоит, пока данные не придут.",
-        family="память",
-        lesson="Между загрузкой и её потребителем нужно 5 тактов полезной работы.",
+        "Eight loads: hiding 5 cycles of memory latency",
+        "Eight loads and dependent arithmetic. On e2k loads run on `,0 ,2 ,3 ,5` "
+        "with 5-cycle latency.\n"
+        "The scheduler must separate loads from consumers and fill the gap with "
+        "useful work to avoid stalls.",
+        family="memory",
+        lesson="Fill the 5-cycle load-to-use window with independent work.",
     )
     loads = [b.op("LOAD", f"v{i}") for i in range(8)]
     m0 = b.op("MUL", "p0", loads[0], loads[1])
@@ -325,13 +285,13 @@ def _loadchain() -> DAG:
 def _mixed18() -> DAG:
     b = DagBuilder(
         "mixed18",
-        "18 инструкций: смесь латентностей и нерегулярных связей",
-        "Два деления, четыре умножения, загрузки и мелкая арифметика, связанные "
-        "неравномерно.\n"
-        "Цепочки зависимостей тянут длину участка, делитель ставит очередь. "
-        "Оба ограничения видны на одном графе.",
-        family="основа",
-        lesson="Смешанный участок: зависимости и монопольный порт сразу.",
+        "18 instructions: mixed latencies and irregular dependencies",
+        "Two divisions, four multiplications, loads, and scalar arithmetic with "
+        "irregular dependencies.\n"
+        "Dependency chains stretch the block while the divider queues on `,5`. "
+        "Both limits appear in a single DAG.",
+        family="basics",
+        lesson="Mixed block: dependency chains and exclusive port contention together.",
     )
     l0 = b.op("LOAD", "v0")
     l1 = b.op("LOAD", "v1")
@@ -358,13 +318,13 @@ def _mixed18() -> DAG:
 def _divpressure() -> DAG:
     b = DagBuilder(
         "divpressure",
-        "Четыре деления на единственном делителе",
-        "Четыре деления и один порт `,5`. Очередь: новое деление раз в два "
-        "такта, результат каждого — через 11.\n"
-        "Выбирать планировщику не из чего, baseline и oracle совпадают. Предел "
-        "машины, а не промах эвристики.",
-        family="цена операции",
-        lesson="Планировать нечего — лечится только убиранием делений: см. divstrength.",
+        "Four divisions on the exclusive divider",
+        "Four divisions on exclusive port `,5`: one issue every 2 cycles, "
+        "11-cycle latency each.\n"
+        "No scheduling choice exists; baseline and oracle match at the hardware "
+        "lower bound.",
+        family="op cost",
+        lesson="Nothing to schedule — eliminate divisions instead: see divstrength.",
     )
     divs = [b.op("DIV", f"d{i}") for i in range(4)]
     adds = [b.op("ADD", f"a{i}") for i in range(8)]
@@ -379,7 +339,7 @@ def _divpressure() -> DAG:
 
 
 def _reduce_tree(b: DagBuilder, ids: list[int], prefix: str) -> int:
-    """Попарная свёртка списка значений в одно — как хвост развёрнутого цикла."""
+    """Pairwise tree reduction (like an unrolled loop epilogue)."""
     level = list(ids)
     k = 0
     while len(level) > 1:
@@ -396,25 +356,25 @@ def _reduce_tree(b: DagBuilder, ids: list[int], prefix: str) -> int:
 def _slotclash() -> DAG:
     b = DagBuilder(
         "slotclash",
-        "Монополия делителя: тупиковое деление против критического",
-        "Два деления на один делитель (порт `,5`, единственный). `z0` готово в "
-        "такте 0, но его результата никто не ждёт. `dc` стоит на критическом "
-        "пути, операнд готов к такту 1.\n"
-        "Эвристика выдаёт то, что готово раньше, и занимает порт. Оптимум "
-        "придерживает его для `dc`. Цена ошибки — 1 такт.",
+        "Divider monopoly: dead-end division vs critical division",
+        "Two divisions on exclusive port `,5`: `z0` is ready at cycle 0 with no "
+        "critical consumers, while `dc` is on the critical path and ready at "
+        "cycle 1.\n"
+        "Greedy issues `z0` immediately and blocks `,5`; oracle holds `,5` for "
+        "`dc`, saving 1 cycle.",
         profile="e2k-v6-measured",
-        family="монопольный порт",
-        lesson="Монопольный порт нельзя занимать работой, которой никто не ждёт.",
+        family="exclusive port",
+        lesson="Never occupy an exclusive port with non-critical work ahead of a critical op.",
     )
-    a0 = b.op("ADD", "a0")            # операнд критического деления, готов к т.1
-    dz = b.op("DIV", "z0")           # тупиковое деление, готово в т.0 — ловушка
-    dc = b.op("DIV", "dc", a0)       # критическое деление, готово к т.1
-    m0 = b.op("MUL", "m0", dc)       # критический путь продолжается умножением
+    a0 = b.op("ADD", "a0")            # operand of critical division, ready at cyc 1
+    dz = b.op("DIV", "z0")           # dead-end division, ready at cyc 0 — trap
+    dc = b.op("DIV", "dc", a0)       # critical division, ready at cyc 1
+    m0 = b.op("MUL", "m0", dc)       # critical path continues with multiply
     e0 = b.op("ADD", "e0", m0)
     e1 = b.op("ADD", "e1", e0)
     e2 = b.op("ADD", "e2", e1)
-    z = b.op("ADD", "z", dz)         # потребитель тупикового деления (низкий приоритет)
-    g0 = b.op("ADD", "g0")           # независимая мелочь — занять свободные порты
+    z = b.op("ADD", "z", dz)         # consumer of dead-end division (low priority)
+    g0 = b.op("ADD", "g0")           # independent scalar ops to fill free ports
     g1 = b.op("ADD", "g1", g0)
     r = b.op("ADD", "r", e2, z)
     r2 = b.op("ADD", "r2", r, g1)
@@ -425,22 +385,22 @@ def _slotclash() -> DAG:
 def _mulclash() -> DAG:
     b = DagBuilder(
         "mulclash",
-        "Умножение на четырёх каналах: зеркало slotclash не сработало",
-        "Строился как зеркало slotclash — считалось, что умножитель один "
-        "(порт `,0`) и держит его 8 тактов. Ассемблер это опроверг: `muls` "
-        "кодируется в `,0 ,1 ,3 ,4`, четыре умножения собираются в одну "
-        "широкую команду.\n"
-        "Монополии нет, разрыва между эвристикой и оптимумом тоже. Граф "
-        "оставлен, чтобы сравнить с профилем `e2k-v6-firstprobe`: там "
-        "«разрыв» появляется из ошибки в описании машины.",
+        "Four-channel multiply: slotclash mirror has no gap",
+        "Built as a mirror of slotclash under the old 1-multiplier assumption. "
+        "Assembler probing refuted this: `muls` executes on `,0 ,1 ,3 ,4` "
+        "(4 per wide instruction).\n"
+        ""
+        "No monopoly and zero gap on e2k-v6. Kept for comparison against "
+        "`e2k-v6-firstprobe`, where a false gap appears from the flawed model."
+        "",
         profile="e2k-v6-measured",
-        family="проверка модели",
-        lesson="Умножитель на четырёх каналах. Сравните с профилем e2k-v6-firstprobe.",
+        family="model check",
+        lesson="Four-channel multiplier. Compare with profile e2k-v6-firstprobe.",
     )
     a0 = b.op("ADD", "a0")
-    mz = b.op("MUL", "z0")           # тупиковое умножение, готово в т.0
-    mc = b.op("MUL", "mc", a0)       # критическое умножение, готово к т.1
-    d0 = b.op("DIV", "d0", mc)       # критический путь уходит в делитель
+    mz = b.op("MUL", "z0")           # dead-end multiply, ready at cyc 0
+    mc = b.op("MUL", "mc", a0)       # critical multiply, ready at cyc 1
+    d0 = b.op("DIV", "d0", mc)       # critical path feeds the divider
     e0 = b.op("ADD", "e0", d0)
     e1 = b.op("ADD", "e1", e0)
     z = b.op("ADD", "z", mz)
@@ -453,32 +413,32 @@ def _mulclash() -> DAG:
 
 
 # --------------------------------------------------------------------------
-# Сценарии приёмов оптимизации
+# Optimization-technique scenarios
 #
-# Всё, что выше, показывает работу ПЛАНИРОВЩИКА: один и тот же граф, две
-# раскладки, разрыв между ними. Дальше — участки, на которых видно другое:
-# планировщик уже выжал всё, а такты всё равно теряются, потому что дело в
-# самом коде. Такие пары («как написано» → «как надо») и есть повседневная
-# работа по оптимизации под e2k из руководства по эффективному
-# программированию: реассоциация свёрток, снижение силы операции, развёртка
-# цикла, сокращение обращений к памяти, спекулятивное исполнение обеих ветвей.
+# Scenarios below compare code transformations ("before" -> "after")
+# where the algorithm itself must change rather than the schedule.
 #
-# Пары сравниваются командой /all (или /run <ключ> для каждого): числа в
-# таблице считает сам инструмент, здесь они намеренно не зашиты.
+#
+#
+#
+#
+#
+#
+#
 # --------------------------------------------------------------------------
 
 
 def _seqreduce() -> DAG:
     b = DagBuilder(
         "seqreduce",
-        "Свёртка в один аккумулятор: параллелизма нет",
-        "Как пишут обычно: `for (i…) acc += v[i];`. Восемь загрузок независимы и "
-        "уходят сразу, дальше цепочка сложений: каждое ждёт предыдущее.\n"
-        "Расписание единственное. Эвристика и точный поиск совпадают. Смотрите "
-        "treereduce — та же работа, то же число инструкций, другая форма графа.",
+        "Single-accumulator reduction: no parallelism",
+        "Typical loop `for (i...) acc += v[i];`: 8 independent loads followed by "
+        "a serial addition chain.\n"
+        "Baseline and oracle tie. Compare with `treereduce` (same op count, "
+        "shorter critical path).",
         profile="e2k-v6-measured",
-        family="форма графа",
-        lesson="Цепочка `acc += x` не параллелится. Разбивайте свёртку в исходнике: treereduce.",
+        family="graph shape",
+        lesson="Serial `acc += x` cannot parallelize. Reassociate into a tree: treereduce.",
     )
     loads = [b.op("LOAD", f"v{i}") for i in range(8)]
     acc = b.op("ADD", "acc0", loads[0], loads[1])
@@ -491,16 +451,16 @@ def _seqreduce() -> DAG:
 def _treereduce() -> DAG:
     b = DagBuilder(
         "treereduce",
-        "Та же свёртка деревом: реассоциация",
-        "Тот же участок, что seqreduce, и столько же инструкций. Сложения "
-        "свёрнуты попарно: четыре частичных суммы, потом две, потом одна. "
-        "Критический путь по сложениям — три шага вместо семи.\n"
-        "Компилятор сам так не сделает для чисел с плавающей точкой: меняется "
-        "порядок округления. Нужно переписать код или явно разрешить "
-        "реассоциацию. Сравните: /run seqreduce, затем /run treereduce.",
+        "Tree reduction: reassociation",
+        "Same work and op count as seqreduce, reassociated into a binary tree: "
+        "3 addition levels instead of 7.\n"
+        ""
+        "Compilers cannot auto-reassociate FP due to rounding; rewrite or enable "
+        "fast-math. Compare: /run seqreduce, then /run treereduce."
+        "",
         profile="e2k-v6-measured",
-        family="форма графа",
-        lesson="То же число инструкций, участок короче. Выигрыш даёт форма графа.",
+        family="graph shape",
+        lesson="Same instruction count, shorter makespan from graph shape alone.",
     )
     loads = [b.op("LOAD", f"v{i}") for i in range(8)]
     r = _reduce_tree(b, loads, "s")
@@ -511,17 +471,17 @@ def _treereduce() -> DAG:
 def _divstrength() -> DAG:
     b = DagBuilder(
         "divstrength",
-        "Снижение силы: те же четыре деления, но сдвигом",
-        "Тот же граф, что divpressure. Делитель — константа 2^k, деление стало "
-        "сдвигом. Сдвиг исполним на любом из шести портов, занимает один такт, "
-        "результат через один — вместо порта `,5` (приём раз в два такта, "
-        "латентность 11).\n"
-        "Четыре операции уходят в одну широкую команду. Если делитель — "
-        "переменная, тот же приём: вынести обратное значение из цикла, одно "
-        "деление вместо N.",
+        "Strength reduction: four divisions replaced by shifts",
+        "Same DAG as divpressure with power-of-two divisor replaced by SHL: "
+        "all 6 ports, latency 1, occupancy 1 vs exclusive port `,5` (lat 11, occ 2).\n"
+        ""
+        ""
+        "All four issue in one wide instruction. For loop-invariant divisors, "
+        "hoist reciprocal computation outside the loop."
+        "",
         profile="e2k-v6-measured",
-        family="цена операции",
-        lesson="Убрать деление дешевле, чем планировать его. /run divpressure, затем сюда.",
+        family="op cost",
+        lesson="Eliminating division beats scheduling it. Compare with /run divpressure.",
     )
     fast = [b.op("SHL", f"q{i}") for i in range(4)]
     adds = [b.op("ADD", f"a{i}") for i in range(8)]
@@ -538,15 +498,15 @@ def _divstrength() -> DAG:
 def _ptrchase() -> DAG:
     b = DagBuilder(
         "ptrchase",
-        "Обход по указателям: цепочка зависимых загрузок",
-        "`p = p->next` шесть раз. Адрес следующей загрузки известен только после "
-        "предыдущей, переставить их нельзя. При латентности 5 это три десятка "
-        "тактов на одном критическом пути.\n"
-        "Рядом лежит независимая арифметика: планировщик обязан затолкать её "
-        "в те такты, пока идёт обход. /doctor покажет: длину задаёт память.",
+        "Pointer chasing: dependent load chain",
+        "`p = p->next` six times: each address depends on the previous load "
+        "(5-cycle latency -> ~30-cycle critical path).\n"
+        ""
+        "Independent arithmetic must be packed into the load-latency shadow. "
+        "/doctor will show memory latency as the lower bound.",
         profile="e2k-v6-measured",
-        family="память",
-        lesson="Зависимые загрузки не переставить. Латентность прячут независимой работой.",
+        family="memory",
+        lesson="Dependent loads cannot reorder; hide latency with independent work.",
     )
     p = b.op("LOAD", "p0")
     for i in range(1, 6):
@@ -561,16 +521,16 @@ def _ptrchase() -> DAG:
 def _memstream() -> DAG:
     b = DagBuilder(
         "memstream",
-        "Поток «загрузить — посчитать — записать»: узкое место — запись",
-        "Восемь независимых троек `x = a[i]; x += c; b[i] = x;`. Зависимости "
-        "короткие. Запись кодируется только в `,2` и `,5`, загрузка — в четырёх. "
-        "Восемь записей не быстрее двух за такт, и `,5` ещё нужен делителю.\n"
-        "Эвристика занимает канал записи не в том порядке, точный поиск "
-        "обыгрывает. Сокращать надо число обращений: шире тип, векторизация, "
-        "слияние циклов.",
+        "Load-compute-store stream: store-port bottleneck",
+        "Eight independent `x = a[i]; x += c; b[i] = x;` streams. Stores only "
+        "encode on `,2` and `,5` (loads on 4 ports), capping throughput at 2/cycle.\n"
+        ""
+        "Exact search beats greedy on store-port ordering. Reduce traffic via "
+        "wider types, vectorization, or loop fusion."
+        "",
         profile="e2k-v6-measured",
-        family="память",
-        lesson="Запись живёт только в двух каналах.",
+        family="memory",
+        lesson="Stores execute on only two channels (`,2` and `,5`).",
     )
     for i in range(8):
         v = b.op("LOAD", f"v{i}")
@@ -582,16 +542,16 @@ def _memstream() -> DAG:
 def _unroll4() -> DAG:
     b = DagBuilder(
         "unroll4",
-        "Развёртка ×4 с умножением: мешает латентность загрузки",
-        "Тело `s += v[i] * k`, четыре итерации. Загрузки и умножения независимы, "
-        "накопление свёрнуто деревом. Умножения уходят разом: четыре канала, "
-        "латентность 4.\n"
-        "Длину участка задаёт загрузка — 5 тактов до готовности данных, потом "
-        "свёртка. Разворачивать имеет смысл, данные лучше поднимать повыше "
-        "или префетчить заранее.",
+        "4x unrolled multiply-accumulate: load-latency bound",
+        "Four unrolled iterations of `s += v[i] * k` with tree reduction. "
+        "Four multiplies issue in parallel across 4 channels (lat 4).\n"
+        ""
+        "Makespan is bounded by 5-cycle load latency; hoist loads or prefetch."
+        ""
+        "",
         profile="e2k-v6-measured",
-        family="циклы",
-        lesson="Развёртка работает. Узкое место — латентность загрузки.",
+        family="loops",
+        lesson="Unrolling works; load latency is the remaining bottleneck.",
     )
     muls = []
     for i in range(4):
@@ -607,16 +567,16 @@ def _unroll4() -> DAG:
 def _ifconv() -> DAG:
     b = DagBuilder(
         "ifconv",
-        "Обе ветви условия посчитаны заранее",
-        "На e2k переход дорогой, свободных портов обычно много. Здесь длинная "
-        "ветвь (шесть зависимых сложений) и короткая (три) считаются одновременно, "
-        "результат выбирается по условию.\n"
-        "Инструкций вдвое больше, участок почти не удлинился: короткая ветвь "
-        "уместилась в такты длинной. Если в ветвь попадёт деление, спекуляция "
-        "займёт монопольный порт впустую — как в slotclash.",
+        "Speculative execution of both branches",
+        "Branches are costly on e2k while ports are plentiful. Long branch (6 ops) "
+        "and short branch (3 ops) execute concurrently, merged conditionally.\n"
+        ""
+        "Twice the ops, nearly zero extra cycles — unless a branch contains DIV "
+        "and hogs exclusive port `,5`."
+        "",
         profile="e2k-v6-measured",
-        family="ветвления",
-        lesson="Считать обе ветви выгодно, пока в них универсальные операции.",
+        family="branching",
+        lesson="Executing both branches pays off when ops use flexible ports.",
     )
     c = b.op("SUB", "cond")
     long_br = b.op("ADD", "L0")
@@ -642,7 +602,7 @@ def random_dag(
     max_preds: int = 2,
     reach: int = 6,
 ) -> DAG:
-    """Воспроизводимый случайный граф — для поиска показательных примеров."""
+    """Reproducible random DAG for stress-testing and benchmarking."""
     rnd = random.Random(seed)
     w = weights or {"ADD": 4, "SUB": 2, "MUL": 3, "DIV": 1, "SHL": 1, "AND": 1, "LOAD": 2}
     ops = list(w)
@@ -650,7 +610,7 @@ def random_dag(
 
     b = DagBuilder(
         key or f"rand{seed}",
-        title or f"Случайный граф (seed={seed}, {n} инструкций)",
+        title or f"Random DAG (seed={seed}, {n} instructions)",
         note,
         profile,
     )
@@ -666,18 +626,18 @@ def random_dag(
 
 
 def _wide_ilp() -> DAG:
-    """Крупный участок с высоким ILP — здесь связывают уже ресурсы, а не путь."""
+    """Large high-ILP block bound by port resources rather than critical path."""
     b = DagBuilder(
         "wide_ilp",
-        "Развёрнутый цикл: упор в пропускную способность",
-        "14 независимых умножений и много сложений готовы сразу. Умножения "
-        "расходятся по `,0 ,1 ,3 ,4` и идут по одному в такт на каждом.\n"
-        "Участок связан числом операций на шесть портов: нижняя граница по "
-        "ресурсам обгоняет границу по критическому пути. Граф большой — "
-        "точный поиск переключается на запасной портфельный движок.",
+        "Unrolled loop: throughput bound",
+        "14 independent multiplies across `,0 ,1 ,3 ,4` plus heavy scalar work.\n"
+        ""
+        "Resource lower bound exceeds critical path; large graph triggers the "
+        "oracle's portfolio fallback."
+        "",
         profile="e2k-v6-measured",
-        family="циклы",
-        lesson="Здесь связывают ресурсы, не зависимости. Единственный такой сценарий.",
+        family="loops",
+        lesson="Resource-bound rather than latency-bound.",
     )
     muls = [b.op("MUL", f"m{i}") for i in range(14)]
     adds = [b.op("ADD", f"a{i}") for i in range(18)]
@@ -700,40 +660,40 @@ def _wide_ilp() -> DAG:
 
 
 def _twodividers() -> DAG:
-    """Два РАЗНЫХ делителя на одном порту — конфликт, которого раньше не было."""
+    """Two distinct divider classes (INT and FP) contending on exclusive port ,5."""
     b = DagBuilder(
         "twodividers",
-        "Один порт, два делителя: целочисленный против плавающего",
-        "Измерение 30.08.2026 показало, что деление с плавающей точкой "
-        "исполняется ровно там же, где целочисленное, — на единственном порту "
-        "`,5`. До этого модель знала один делитель, и такой конфликт было "
-        "НЕЧЕМ выразить.\n"
-        "Граф построен как `slotclash`: тупиковое деление `fz` готово в такте "
-        "0 и занимает порт, критическое `dc` ждёт операнда до такта 1. Там "
-        "такая ловушка стоила эвристике такт — ЗДЕСЬ НЕ СТОИТ НИЧЕГО, и это "
-        "результат, а не недоделка. Причина в самих измеренных числах: "
-        "латентность FDIV — 14 тактов против 11 у DIV, и высоты обеих "
-        "операций сравниваются (21 против 21). Потерянный на порту такт "
-        "прячется внутри и так длинного хвоста деления ПТ, поэтому точный "
-        "поиск не находит расстановки лучше.",
+        "One port, two dividers: integer vs floating-point",
+        "Probing showed FP division shares exclusive port `,5` with integer DIV.\n"
+        ""
+        ""
+        ""
+        "Structured like `slotclash`, but FDIV latency (14 vs 11) equalizes both "
+        "heights (21 vs 21), hiding the 1-cycle port stall inside the FDIV tail."
+        ""
+        ""
+        ""
+        ""
+        ""
+        "",
         profile="e2k-v6-measured",
-        family="монопольный порт",
-        lesson="Тот же конфликт, что в slotclash, но с другим классом — и "
-               "цена у него нулевая: длинная латентность прячет потерю "
-               "порта. Ловушка опасна не сама по себе, а по соотношению "
-               "чисел.",
+        family="exclusive port",
+        lesson="Same port conflict as slotclash, but long FDIV latency hides the stall."
+               ""
+               ""
+               "",
     )
-    # Устройство ловушки — как в slotclash, но ловушка ДРУГОГО класса: порт
-    # `,5` держат два разных делителя, и раньше выразить это было нечем.
-    a0 = b.op("ADD", "a0")            # операнд критического деления, готов к т.1
-    fz = b.op("FDIV", "fz")           # тупиковое деление ПТ, готово в т.0
-    dc = b.op("DIV", "dc", a0)        # критическое деление, операнд к т.1
-    m0 = b.op("MUL", "m0", dc)        # за ним тянется длинный хвост
+    # Same trap structure as slotclash, with FDIV contending on exclusive port ,5.
+    #
+    a0 = b.op("ADD", "a0")            # operand of critical division, ready at cyc 1
+    fz = b.op("FDIV", "fz")           # dead-end FDIV, ready at cyc 0
+    dc = b.op("DIV", "dc", a0)        # critical DIV, operand ready at cyc 1
+    m0 = b.op("MUL", "m0", dc)        # long dependent tail
     e0 = b.op("ADD", "e0", m0)
     e1 = b.op("ADD", "e1", e0)
     e2 = b.op("ADD", "e2", e1)
-    zm = b.op("FMUL", "zm", fz)       # хвост тупикового: умножение ПТ…
-    z = b.op("FADD", "z", zm)         # …и сложение — оба на всех шести каналах
+    zm = b.op("FMUL", "zm", fz)       # dead-end tail: FP multiply...
+    z = b.op("FADD", "z", zm)         # ...and FP add (both on all 6 channels)
     g0 = b.op("ADD", "g0")
     g1 = b.op("AND", "g1", g0)
     r = b.op("ADD", "r", e2, z)
@@ -743,22 +703,22 @@ def _twodividers() -> DAG:
 
 
 def _packnarrow() -> DAG:
-    """Упакованная арифметика: всего две дорожки на всю ширину машины."""
+    """Packed SIMD arithmetic: only two lanes across a 6-wide machine."""
     b = DagBuilder(
         "packnarrow",
-        "SIMD в двух каналах: ширина машины не помогает",
-        "Упакованные сложения (`PACK`) ассемблер принимает только в `,0` и "
-        "`,3` — проверено перебором. Шесть каналов есть, а разложить можно "
-        "по два в такт.\n"
-        "Восемь независимых упакованных операций: казалось бы, машина "
-        "шириной шесть проглотит их за пару тактов. На деле они выстраиваются "
-        "в очередь из двух дорожек, и скалярная мелочь вокруг — единственное, "
-        "чем можно занять остальные четыре канала.",
+        "SIMD on two channels: 6-wide machine cannot help",
+        "Packed arithmetic (`PACK`) encodes only on `,0` and `,3` (max 2/cycle).\n"
+        ""
+        ""
+        "Eight independent PACK ops serialize 2-per-cycle; only scalar work can "
+        "fill the other four channels."
+        ""
+        "",
         profile="e2k-v6-measured",
-        family="узкий класс",
-        lesson="Ширина машины считается не портами, а портами ДЛЯ ЭТОЙ "
-               "операции. Эвристика справляется с этим сама: когда мест мало, "
-               "выбирать особо не из чего — ошибиться негде.",
+        family="narrow class",
+        lesson="Effective width is per-op-class ports, not total machine width."
+               ""
+               "",
     )
     src = b.op("LOAD", "v")
     packs = [b.op("PACK", f"p{i}", src) for i in range(8)]
@@ -771,24 +731,24 @@ def _packnarrow() -> DAG:
 
 
 def _predchain() -> DAG:
-    """Предикаты: if-conversion упирается в четыре канала из шести."""
+    """Predicates: if-conversion limited to four of six channels."""
     b = DagBuilder(
         "predchain",
-        "Предикаты: цена превращения ветвлений в поток",
-        "Сравнения, кладущие результат в предикат (`PRED`), исполняются в "
-        "`,0 ,1 ,3 ,4`, но НЕ в `,2` и `,5` — измерено ассемблером. Именно "
-        "ими компилятор заменяет ветвления, и в настоящем коде их много: на "
-        "выводе `lcc -O3` это второй по частоте класс после арифметики.\n"
-        "Здесь шесть сравнений готовят маски, а `MERGE` выбирает по ним "
-        "значения. Загрузки при этом хотят `,2` и `,5` — то есть ровно те "
-        "каналы, которые предикатам недоступны. Расписание получается "
-        "плотным не потому, что операций много, а потому что они не "
-        "перемешиваются.",
+        "Predicates: cost of if-converting branches",
+        "Predicate comparisons (`PRED`) run on `,0 ,1 ,3 ,4` (not `,2` or `,5`).\n"
+        ""
+        ""
+        ""
+        "Six comparisons prepare masks while loads naturally take `,2` and `,5`, "
+        "packing complementary channel halves cleanly."
+        ""
+        ""
+        "",
         profile="e2k-v6-measured",
-        family="узкий класс",
-        lesson="Два класса, каждый со своими каналами, мешают друг другу "
-               "меньше, чем кажется: они заполняют разные половины команды, "
-               "и эвристика попадает в оптимум без подсказок.",
+        family="narrow class",
+        lesson="Complementary channel sets pack cleanly; greedy hits optimum."
+               ""
+               "",
     )
     a = b.op("LOAD", "a")
     c = b.op("LOAD", "c")
@@ -809,7 +769,7 @@ def _register(dag: DAG) -> None:
 
 
 for _d in (
-    # работа планировщика: один граф — две раскладки
+    # scheduler showcase: same DAG, two schedules
     _simple4(),
     _loadchain(),
     _mixed18(),
@@ -817,12 +777,12 @@ for _d in (
     _mulclash(),
     _divpressure(),
     _wide_ilp(),
-    # классы, измеренные 30.08.2026: до них модель не знала ни плавающей
-    # точки, ни предикатов, ни упакованных — и показать их было нечем
+    # op classes probed 2026-08-30 (FP, predicates, SIMD)
+    #
     _twodividers(),
     _packnarrow(),
     _predchain(),
-    # приёмы оптимизации: парами «как написано» → «как надо»
+    # optimization techniques: before/after pairs
     _seqreduce(),
     _treereduce(),
     _divstrength(),
@@ -843,6 +803,6 @@ def get_scenario(key: str) -> DAG:
         except ValueError:
             pass
     raise SystemExit(
-        f"неизвестный сценарий {key!r}; доступны: {', '.join(SCENARIOS)} "
-        f"(или randN, где N — seed)"
+        f"unknown scenario {key!r}; available: {', '.join(SCENARIOS)} "
+        f"(or randN where N is a seed)"
     )

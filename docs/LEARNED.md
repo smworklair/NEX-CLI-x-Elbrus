@@ -1,72 +1,66 @@
-# Обученная LLM как планировщик
+# Learned LLM as a Scheduler
 
-> Этап 12 из 13 · [← Настоящее против синтетики](REAL_VS_SYNTH.md) · [Маршрут](README.md) · [Разработчику →](ENTHUSIAST.md)
+> Stage 12 of 13 · [← Real vs. Synthetic](REAL_VS_SYNTH.md) · [Roadmap](README.md) · [For Developers →](ENTHUSIAST.md)
 
-Исторический трек: LoRA-адаптер поверх `Qwen/Qwen2.5-3B-Instruct`. Он работает, но в проекте
-заменён крошками TINY AI — они быстрее на порядки и не хуже на настоящем коде.
+Historical track: a LoRA adapter on top of `Qwen/Qwen2.5-3B-Instruct`. It works, but has been superseded by TINY AI — which is orders of magnitude faster and no worse on real code.
 
-## Статус
+## Status
 
-- Адаптеры: три штуки (r=16, ~120 МБ) на [Hugging Face](https://huggingface.co/Shmonika/nex-vliw-lora),
-  в `safetensors` и GGUF.
-- База в репозитории не лежит: её скачивает `tools/setup_local_llm.sh`.
-- Разговорная база агента — Phi-4-mini GGUF; планировщик — отдельный LoRA-трек.
-- Главный результат отрицательный: на настоящем коде после `lcc` модель не обошла случайный перебор
-  ни на одном из 13 графов. Методика — [`../real_candidates_100_400/model_eval/REPORT.md`](../real_candidates_100_400/model_eval/REPORT.md).
+- Adapters: three checkpoints (`r=16`, ~120 MB) on [Hugging Face](https://huggingface.co/Shmonika/nex-vliw-lora), in `safetensors` and GGUF formats.
+- The base model is not stored in this repository: `tools/setup_local_llm.sh` downloads it.
+- The agent's conversational base model is Phi-4-mini GGUF; the scheduler is a separate LoRA track.
+- Main result is negative: on real `lcc` output, the model did not beat random search on any of the 13 graphs. Methodology: [`../real_candidates_100_400/model_eval/REPORT.md`](../real_candidates_100_400/model_eval/REPORT.md).
 
-## Запуск
+## Running
 
 ```bash
 pip install -e ".[learned]"      # torch, transformers, peft
-python -m vliw learned           # на текущем графе
-python -m vliw learned --bench 5 # несколько графов
+python -m vliw learned           # on the current graph
+python -m vliw learned --bench 5 # across several graphs
 ```
 
-Без весов и зависимостей команда не падает, а печатает, чего не хватает.
-Один граф на ноутбуке без GPU — около 30 секунд.
+Without weights or dependencies, the command does not crash — it prints what is missing.
+One graph on a CPU-only laptop takes around 30 seconds.
 
-## Два пути
+## Two Backends
 
-**1. transformers.** Эталонный путь, тот же код, что гонялся на Kaggle.
+**1. transformers.** Reference path — the same code that ran on Kaggle.
 
-| формат | вес модели | где разумно |
+| format | model size | practical where |
 |---|---:|---|
-| float32 | 12,4 ГБ | практически нигде |
-| bfloat16 / float16 | 6,2 ГБ | CPU от 16 ГБ / GPU |
-| 4-битный GGUF | ~2,0 ГБ | CPU от 8 ГБ |
+| float32 | 12.4 GB | almost nowhere |
+| bfloat16 / float16 | 6.2 GB | CPU with 16+ GB RAM / GPU |
+| 4-bit GGUF | ~2.0 GB | CPU with 8+ GB RAM |
 
-Устройство переопределяется `NEX_LEARNED_DEVICE=cpu`.
+Override device with `NEX_LEARNED_DEVICE=cpu`.
 
-**2. GGUF через llama.cpp.** Основной путь на CPU:
+**2. GGUF via llama.cpp.** Primary CPU path:
 
 ```bash
-tools/setup_local_llm.sh          # движок + база + конвертация адаптеров
-tools/setup_local_llm.sh check    # проверить, что уже есть
+tools/setup_local_llm.sh          # engine + base model + adapter conversion
+tools/setup_local_llm.sh check    # check what is already present
 ```
 
-Скрипт берёт готовый `llama-completion`, качает `qwen2.5-3b-instruct-q4_k_m.gguf`
-и конвертирует адаптеры. Всё тяжёлое живёт в `vendor/` и в git не идёт.
+The script fetches a prebuilt `llama-completion`, downloads `qwen2.5-3b-instruct-q4_k_m.gguf`, and converts the adapters. All heavy files live in `vendor/` and are excluded from git.
 
-Базу менять нельзя: LoRA — поправка к весам конкретного чекпоинта. Другая модель
-с теми же формами матриц загрузится без ошибки и будет тихо выдавать чушь.
+You cannot swap the base model: LoRA is a delta applied to a specific checkpoint's weights. Another model with matching matrix shapes will load without error and silently emit nonsense.
 
-## Как это устроено
+## Architecture
 
-| файл | роль |
+| file | role |
 |---|---|
-| `vliw/learned/runtime.py` | поиск весов, зависимости, загрузка, генерация |
-| `vliw/learned/scheduler.py` | протокол `Scheduler`: граф → расписание |
-| `vliw/learned/portfolio.py` | портфель вариантов |
-| `training/` | генерация датасета и обучение |
+| `vliw/learned/runtime.py` | weight discovery, dependencies, loading, generation |
+| `vliw/learned/scheduler.py` | `Scheduler` protocol: graph → schedule |
+| `vliw/learned/portfolio.py` | candidate portfolio |
+| `training/` | dataset generation and training |
 
-Модель получает граф в виде промпта и возвращает расписание. Если ответ невалиден,
-планировщик честно откатывается на жадный, а не выдаёт сломанное расписание за рабочее.
+The model receives the graph as a prompt and returns a schedule. If the output is invalid, the scheduler honestly falls back to greedy rather than passing off a broken schedule as valid.
 
-## Почему не прижилось
+## Why It Didn't Stick
 
-- 2–6 ГБ весов и десятки секунд на граф против миллисекунд у крошек.
-- На синтетике внутри распределения обучения модель иногда обгоняет жадный.
-- На настоящем коде вне распределения — не обгоняет случайный перебор.
-- Обе цифры настоящие; они просто измерены в разных условиях.
+- 2–6 GB of weights and tens of seconds per graph versus milliseconds for TINY AI.
+- On in-distribution synthetic graphs, the model occasionally beats greedy.
+- On out-of-distribution real code, it fails to beat random search.
+- Both numbers are real — they were simply measured under different conditions.
 
-Обучение своей версии — [`../training/README.md`](../training/README.md).
+Training your own version: [`../training/README.md`](../training/README.md).

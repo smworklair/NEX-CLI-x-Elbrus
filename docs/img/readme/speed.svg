@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1150" viewBox="0 0 1600 1150" role="img" aria-labelledby="title desc">
-  <title id="title">TINY Flash быстрее TINY AI в 26 раз</title>
-  <desc id="desc">TINY Flash даёт то же расписание, что TINY AI, но в 26 раз быстрее: 2,6 мс против 63,4 мс на граф.</desc>
+  <title id="title">TINY Flash is 26× faster than TINY AI</title>
+  <desc id="desc">TINY Flash produces the same schedule as TINY AI, 26× faster: 2.6 ms vs 63.4 ms per graph.</desc>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -18,59 +18,59 @@
 
   <rect width="1600" height="1150" fill="url(#bg)"/>
 
-  <text x="80" y="82" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="22" font-weight="600" letter-spacing="6" fill="#2c5c99">TINY AI · СКОРОСТЬ</text>
+  <text x="80" y="82" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="22" font-weight="600" letter-spacing="6" fill="#2c5c99">TINY AI · SPEED</text>
 
   <text font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="54" font-weight="700" fill="#0b2a4a">
-    <tspan x="80" y="170">TINY Flash быстрее TINY AI</tspan>
-    <tspan x="80" y="238">в 26 раз — те же расписания</tspan>
+    <tspan x="80" y="170">TINY Flash is 26× faster</tspan>
+    <tspan x="80" y="238">than TINY AI — same schedules</tspan>
   </text>
 
   <rect x="80" y="300" width="1440" height="430" rx="26" fill="#ffffff" filter="url(#shadow)"/>
 
-  <text x="140" y="360" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="20" font-weight="600" fill="#7d93a8">меньше — лучше · миллисекунд на граф</text>
+  <text x="140" y="360" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="20" font-weight="600" fill="#7d93a8">lower is better · milliseconds per graph</text>
 
   <text x="140" y="436" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="28" font-weight="700" fill="#0b2a4a">TINY AI</text>
   <rect x="360" y="406" width="760" height="42" rx="21" fill="#d7e4f2"/>
-  <text x="1150" y="437" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="26" font-weight="600" fill="#5a7184">63,4 мс</text>
+  <text x="1150" y="437" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="26" font-weight="600" fill="#5a7184">63.4 ms</text>
 
   <text x="140" y="520" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="28" font-weight="700" fill="#2c5c99">TINY Flash</text>
   <rect x="360" y="490" width="48" height="42" rx="21" fill="url(#flash)"/>
-  <text x="432" y="521" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="26" font-weight="700" fill="#2c5c99">2,6 мс</text>
+  <text x="432" y="521" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="26" font-weight="700" fill="#2c5c99">2.6 ms</text>
   <rect x="600" y="486" width="118" height="50" rx="25" fill="#e8f1fb"/>
   <text x="624" y="520" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="24" font-weight="700" fill="#2c5c99">×26</text>
 
-  <text x="140" y="618" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="22" font-weight="500" fill="#5a7184">тот же makespan · 0 расхождений на 3 061 графе · расписания законны</text>
-  <text x="140" y="668" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="20" font-weight="500" fill="#7d93a8">скорость даёт остановка на нижней границе тактов, движок ListPlan и ленивая трасса</text>
+  <text x="140" y="618" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="22" font-weight="500" fill="#5a7184">same makespan · 0 discrepancies across 3,061 graphs · valid schedules</text>
+  <text x="140" y="668" font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="20" font-weight="500" fill="#7d93a8">speedup from lower-bound early stop, ListPlan engine, and lazy trace</text>
 
   <g font-family="'Segoe UI', 'Inter', Arial, sans-serif">
     <rect x="80" y="786" width="456" height="244" rx="22" fill="#ffffff" filter="url(#shadow)"/>
     <text x="120" y="842" font-size="20" font-weight="700" letter-spacing="3" fill="#7d93a8">TINY AI</text>
     <text font-size="23" font-weight="500" fill="#33475b">
-      <tspan x="120" y="894">Считает все кандидаты</tspan>
-      <tspan x="120" y="930">до конца. Надёжно,</tspan>
-      <tspan x="120" y="966">но около 40 мс на граф.</tspan>
+      <tspan x="120" y="894">Evaluates all candidates</tspan>
+      <tspan x="120" y="930">to completion. Reliable,</tspan>
+      <tspan x="120" y="966">but ~40 ms per graph.</tspan>
     </text>
 
     <rect x="572" y="786" width="456" height="244" rx="22" fill="#ffffff" stroke="#4b86cf" stroke-width="2" filter="url(#shadow)"/>
     <text x="612" y="842" font-size="20" font-weight="700" letter-spacing="3" fill="#2c5c99">TINY FLASH</text>
     <text font-size="23" font-weight="500" fill="#33475b">
-      <tspan x="612" y="894">Останавливается, когда</tspan>
-      <tspan x="612" y="930">достигнута нижняя граница.</tspan>
-      <tspan x="612" y="966">Результат тот же, ×26 быстрее.</tspan>
+      <tspan x="612" y="894">Stops as soon as the cycle</tspan>
+      <tspan x="612" y="930">lower bound is reached.</tspan>
+      <tspan x="612" y="966">Same result, 26× faster.</tspan>
     </text>
 
     <rect x="1064" y="786" width="456" height="244" rx="22" fill="#ffffff" filter="url(#shadow)"/>
-    <text x="1104" y="842" font-size="20" font-weight="700" letter-spacing="3" fill="#b4552f">РЕЖИМ ASM</text>
+    <text x="1104" y="842" font-size="20" font-weight="700" letter-spacing="3" fill="#b4552f">ASM MODE</text>
     <text font-size="23" font-weight="500" fill="#33475b">
-      <tspan x="1104" y="894">Ещё быстрее, но на 6 графах</tspan>
-      <tspan x="1104" y="930">из 300 хуже. Гарантии нет,</tspan>
-      <tspan x="1104" y="966">поэтому выключен по умолчанию.</tspan>
+      <tspan x="1104" y="894">Even faster, but worse on 6</tspan>
+      <tspan x="1104" y="930">of 300 graphs. No guarantee,</tspan>
+      <tspan x="1104" y="966">so disabled by default.</tspan>
     </text>
   </g>
 
   <g font-family="'Segoe UI', 'Inter', Arial, sans-serif" font-size="20" font-weight="600" fill="#5a7184">
     <rect x="80" y="1082" width="46" height="30" rx="7" fill="#0b2a4a"/>
     <path d="M92 1105 L104 1094 L116 1105" fill="none" stroke="#9fc3ea" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="146" y="1105">NEX CLI <tspan fill="#9aa9b8">× Эльбрус</tspan></text>
+    <text x="146" y="1105">NEX CLI <tspan fill="#9aa9b8">× Elbrus</tspan></text>
   </g>
 </svg>

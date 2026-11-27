@@ -1,10 +1,10 @@
-"""Чтение и запись `.env` в корне проекта — только stdlib.
+"""Reading and writing `.env` at the project root — stdlib only.
 
-Файл в `.gitignore` и никогда не коммитится: это единственное место, куда
-CLI-команды (`/ai`, `/key`) сохраняют ключи. Формат — `ИМЯ=значение`,
-`#` — комментарий. Сохранение бережное: комментарии, порядок строк и чужие
-переменные не трогаются, меняется только нужная строка (или дописывается
-в конец). Значение `None` — удалить строку.
+The file is in `.gitignore` and never committed: it is the only place where
+CLI commands (`/ai`, `/key`) persist keys. Format: `NAME=value`, `#` starts
+a comment. Edits are surgical: comments, line order, and unrelated variables
+are preserved; only the target line is updated (or appended at the end).
+Setting a value to `None` removes the line.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def load(path: str | Path) -> dict[str, str]:
-    """Разбор `.env`: `ИМЯ=значение`, `#` — комментарий, кавычки снимаются."""
+    """Parse `.env`: `NAME=value`, `#` comment, strips surrounding quotes."""
     out: dict[str, str] = {}
     try:
         text = Path(path).read_text(encoding="utf-8")
@@ -36,9 +36,9 @@ def _quote(value: str) -> str:
 
 
 def save(path: str | Path, updates: dict[str, str | None]) -> list[str]:
-    """Применить изменения к `.env`. Возвращает имена реально записанных ключей.
+    """Apply updates to `.env`. Returns names of keys actually written.
 
-    Ключ со значением `None` удаляется. Файл создаётся, если его не было.
+    Keys mapped to `None` are removed. Creates the file if missing.
     """
     p = Path(path)
     try:
@@ -56,7 +56,7 @@ def save(path: str | Path, updates: dict[str, str | None]) -> list[str]:
         if k in pending:
             v = pending.pop(k)
             if v is None:
-                lines[i] = f"# {k}= (удалён {__name__})"
+                lines[i] = f"# {k}= (removed by {__name__})"
             else:
                 lines[i] = f"{k}={_quote(v)}"
                 out.append(k)
@@ -70,18 +70,18 @@ def save(path: str | Path, updates: dict[str, str | None]) -> list[str]:
 
 
 def mask(value: str) -> str:
-    """Показать ключ так, чтобы его нельзя было скопировать из вывода."""
+    """Display a key so it cannot be copied from terminal output."""
     v = (value or "").strip()
     if len(v) <= 8:
         return f"•×{len(v)}"
-    return f"{v[:3]}…{v[-2:]} (длина {len(v)})"
+    return f"{v[:3]}…{v[-2:]} (len {len(v)})"
 
 
 def persist(path: str | Path, updates: dict[str, str | None]) -> None:
-    """Сохранить настройки: сразу в процесс и в `.env` (вне git).
+    """Persist settings: immediately in process env and in `.env` (outside git).
 
-    Единая точка для `/ai`, `/key` и вставки ключа в АГЕНТЕ: иначе три места
-    рассинхронизируются (одно пишет файл, другое забывает окружение).
+    Single entry point for `/ai`, `/key`, and pasting a key in AGENT mode so
+    all three stay in sync.
     """
     save(path, updates)
     for k, v in updates.items():

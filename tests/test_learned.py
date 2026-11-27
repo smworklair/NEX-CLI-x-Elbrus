@@ -1,15 +1,9 @@
-"""Обученный планировщик: склейка «граф → промпт → ответ → расписание».
+"""Learned scheduler tests: the DAG -> prompt -> completion -> schedule pipeline.
 
-Проверяется НЕ качество модели, а конвейер вокруг неё: что промпт собран тем
-же кодом, что и обучающий датасет; что ответ разбирается; что законное
-расписание признаётся законным, а незаконное — незаконным и с указанием
-причины. Всё это гоняется через `ScriptedBackend` — без torch и без весов,
-поэтому тест идёт везде и за миллисекунды.
-
-Почему это стоит закреплять тестом: у обученного планировщика контракт не
-такой, как у baseline/oracle. Те по построению выдают законное расписание, а
-этот — не обязательно, и его ошибки обязаны доезжать до пользователя, а не
-теряться. Регрессия здесь выглядела бы как «модель вдруг стала идеальной».
+Tests the plumbing around the model (not model quality): prompts are built by
+the same encoder used in training, completions parse deterministically, legal
+schedules pass validation, and illegal ones surface explicit diagnostics. Runs
+via `ScriptedBackend` without torch or weights in milliseconds.
 """
 
 from __future__ import annotations
@@ -27,7 +21,7 @@ from vliw.learned.scheduler import LearnedScheduler
 
 
 def _fixture():
-    """Граф, модель и ЗАВЕДОМО законное расписание для него (от эвристики)."""
+    """Return a DAG, machine model, and a known-legal greedy baseline schedule."""
     dag = get_scenario("simple4")
     machine = get_profile("e2k-v6-measured")
     good = GreedyListScheduler().schedule(dag, machine).schedule
@@ -36,11 +30,8 @@ def _fixture():
 
 class TestPromptIsTrainingFormat(unittest.TestCase):
     def test_prompt_built_by_training_encoder(self):
-        """Промпт обязан собираться тем же кодом, что и обучающий датасет.
-
-        Вторая копия формата однажды молча разъедется с обучением — ровно так
-        и получился EOS-баг (docs/archive/EOS_INCIDENT.md).
-        """
+        """Prompts must be built by the same encoder as the training dataset
+        so training and inference formats can never silently diverge."""
         dag, machine, _ = _fixture()
         seen = {}
 
@@ -65,7 +56,7 @@ class TestValidAnswer(unittest.TestCase):
         self.assertEqual(res.schedule.makespan, good.makespan)
 
     def test_never_claims_optimality(self):
-        """Модель ничего не доказывает — optimal обязан остаться None."""
+        """A learned model does not prove optimality — `optimal` must remain None."""
         dag, machine, good = _fixture()
         res = LearnedScheduler(
             backend=ScriptedBackend(encode_completion(good))).schedule(dag, machine)
@@ -73,22 +64,21 @@ class TestValidAnswer(unittest.TestCase):
 
 
 class TestBrokenAnswers(unittest.TestCase):
-    """Каждый случай — реальный класс ошибки из дампов прогонов."""
+    """Each case reflects a real failure mode observed in evaluation dumps."""
 
     def test_illegal_channel_reported(self):
-        """STORE на канал, который его не исполняет — 85% ошибок прогона 1."""
+        """Placing ops on illegal or conflicting issue ports must be flagged."""
         dag, machine, good = _fixture()
-        # Ставим ВСЁ на канал 5: деление там законно, а вот, например,
-        # несколько операций в одном такте на одном канале — уже нет.
+        # Cram everything onto port 5 in cycle 0: triggers port and width conflicts.
         bad = "\n".join(f"{i}: такт=0 канал=5" for i in range(len(dag)))
         res = LearnedScheduler(backend=ScriptedBackend(bad)).schedule(dag, machine)
 
         self.assertFalse(res.search_stats["valid"])
         self.assertTrue(res.search_stats["errors"])
-        self.assertTrue(any("РАСПИСАНИЕ НЕЗАКОННО" in n for n in res.notes))
+        self.assertTrue(any("SCHEDULE INVALID" in n for n in res.notes))
 
     def test_unstopped_tail_reported(self):
-        """Модель не остановилась и дописала строки для несуществующих id."""
+        """Model failed to stop at EOS and emitted lines for nonexistent op IDs."""
         dag, machine, good = _fixture()
         n = len(dag)
         text = encode_completion(good) + "\n" + "\n".join(
@@ -96,21 +86,21 @@ class TestBrokenAnswers(unittest.TestCase):
         res = LearnedScheduler(backend=ScriptedBackend(text)).schedule(dag, machine)
 
         self.assertEqual(res.search_stats["extra"], list(range(n, n + 5)))
-        self.assertTrue(any("НЕ ОСТАНОВИЛАСЬ" in n for n in res.notes))
-        # Префикс при этом законен — именно это отличает «хвост» от брака.
+        self.assertTrue(any("DID NOT STOP" in n for n in res.notes))
+        # The prefix itself is legal — distinguishing an EOS overrun from a bad schedule.
         self.assertEqual(res.search_stats["errors"], [])
 
     def test_missing_instructions_reported(self):
         dag, machine, good = _fixture()
-        lines = encode_completion(good).splitlines()[:-1]     # теряем последнюю
+        lines = encode_completion(good).splitlines()[:-1]     # drop the last op
         res = LearnedScheduler(
             backend=ScriptedBackend("\n".join(lines))).schedule(dag, machine)
 
         self.assertIn(len(dag) - 1, res.search_stats["missing"])
-        self.assertTrue(any("НЕ РАЗМЕЩЕНЫ" in n for n in res.notes))
+        self.assertTrue(any("UNPLACED" in n for n in res.notes))
 
     def test_empty_answer_does_not_crash(self):
-        """Пустой ответ — не исключение, а результат с диагнозом."""
+        """An empty reply must return a diagnosed invalid result, not raise."""
         dag, machine, _ = _fixture()
         res = LearnedScheduler(backend=ScriptedBackend("")).schedule(dag, machine)
 
@@ -119,17 +109,17 @@ class TestBrokenAnswers(unittest.TestCase):
         self.assertEqual(len(res.search_stats["missing"]), len(dag))
 
     def test_garbage_answer_does_not_crash(self):
-        """Свободный текст без единой разборной строки."""
+        """Free-form prose with no parseable placement lines."""
         dag, machine, _ = _fixture()
         res = LearnedScheduler(
-            backend=ScriptedBackend("Конечно! Вот оптимальное расписание:")
+            backend=ScriptedBackend("Sure! Here is the optimal schedule:")
         ).schedule(dag, machine)
         self.assertFalse(res.search_stats["valid"])
 
 
 class TestAdapterDiscovery(unittest.TestCase):
     def test_status_works_without_torch(self):
-        """Отчёт о готовности обязан работать без тяжёлых зависимостей."""
+        """Readiness reporting must work without heavy ML dependencies installed."""
         from vliw.learned import runtime
 
         ready, lines = runtime.status()
@@ -149,26 +139,17 @@ class TestAdapterDiscovery(unittest.TestCase):
 
 
 class TestLlamaCppBackend(unittest.TestCase):
-    """Путь llama.cpp — основной для CPU. Проверяем разбор и выбор бэкенда.
-
-    Сам запуск модели здесь НЕ гоняется: он занимает полминуты на граф и
-    требует 2 ГБ весов, которых в git нет. Проверяется то, что ломается тихо, —
-    срезание эха промпта и порядок выбора бэкенда.
-    """
+    """llama.cpp CPU backend: prompt-echo stripping and backend priority order."""
 
     def test_prompt_echo_is_stripped(self):
-        """llama.cpp повторяет промпт перед ответом — его надо срезать.
-
-        Если не срезать, разбор примет строки графа за расписание: в промпте
-        есть подстроки вида «0 ADD», и парсер намеренно терпимый.
-        """
+        """llama.cpp echoes the prompt before the completion — it must be stripped."""
         from vliw.learned.runtime import Adapter, LlamaCppBackend
 
         prompt = "профиль: e2k-v6-measured\nграф:\n0 ADD\nрасписание:"
         answer = "0: такт=0 канал=1"
 
-        be = LlamaCppBackend.__new__(LlamaCppBackend)   # без поиска бинарника
-        out = prompt + answer + "[end of text]\nмусор после"
+        be = LlamaCppBackend.__new__(LlamaCppBackend)   # bypass binary lookup
+        out = prompt + answer + "[end of text]\ntrailing junk"
         tail = prompt[-40:]
         self.assertIn(tail, out)
         cleaned = out.split(tail, 1)[1].split("[end of text]")[0]
@@ -182,11 +163,11 @@ class TestLlamaCppBackend(unittest.TestCase):
         a = runtime.Adapter(path=Path("/x/lora-eos"), base="b", size_mb=1.0,
                             has_tokenizer=False)
         got = runtime.gguf_adapter_for(a)
-        # Файла может не быть — важно, что имя выводится из имени адаптера.
+        # File may not exist — what matters is deriving the filename from the adapter name.
         self.assertTrue(got is None or got.name == "lora-eos-f16.gguf")
 
     def test_base_search_skips_adapters(self):
-        """Адаптеры (…-f16.gguf) не должны попасть в базу — они лежат рядом."""
+        """LoRA adapters (*-f16.gguf) must not be picked as the base GGUF model."""
         import inspect
 
         from vliw.learned import runtime
@@ -200,19 +181,13 @@ class TestLlamaCppBackend(unittest.TestCase):
         from vliw.learned import runtime
 
         src = inspect.getsource(runtime.make_backend)
-        # llama.cpp должен проверяться ДО transformers: 2.1 ГБ против 6.2 ГБ.
+        # llama.cpp must take precedence over transformers: ~2.1 GB vs ~6.2 GB RAM.
         self.assertLess(src.index("llama_cpp_ready"), src.index("missing_deps"))
 
 
 
 class TestConcurrencyGuard(unittest.TestCase):
-    """Повторный /learned, пока первый ещё считает, не должен плодить процессы.
-
-    Найдено по факту: Textual отменяет СТАРЫЙ воркер только на своём уровне —
-    subprocess.run() внутри него блокирующий и отмену не видит. Без блокировки
-    второй /learned запускает ВТОРОЙ параллельный процесс модели: два по
-    3.6 ГБ на машине с 7 ГБ ОЗУ — секунды до OOM.
-    """
+    """A second /learned while the first is still running must not spawn a second process."""
 
     def test_second_call_rejected_while_first_holds_lock(self):
         from vliw.learned.runtime import _GENERATE_LOCK, LlamaCppBackend
@@ -226,38 +201,32 @@ class TestConcurrencyGuard(unittest.TestCase):
             _GENERATE_LOCK.release()
 
     def test_lock_released_after_call(self):
-        """После завершения (успешного или нет) блокировка обязана сняться."""
+        """The concurrency lock must always be released, even after an exception."""
         from vliw.learned.runtime import _GENERATE_LOCK, LlamaCppBackend
 
         be = LlamaCppBackend.__new__(LlamaCppBackend)
-        be.binary = None       # заставит упасть внутри _generate_locked
+        be.binary = None       # forces failure inside _generate_locked
         be.base_gguf = None
         be.lora_gguf = None
         be.threads = 1
         with self.assertRaises(Exception):
             be.generate("x", 5)
         self.assertTrue(_GENERATE_LOCK.acquire(blocking=False),
-                        "блокировка осталась висеть после сбоя")
+                        "lock remained held after failure")
         _GENERATE_LOCK.release()
 
 
 class TestChannelRepair(unittest.TestCase):
-    """Починка каналов: такты модели неприкосновенны, канал — законный.
-
-    Замер показал ровное разделение: когда модель не путает канал, она попадает
-    ТОЧНО в оптимум. Когда путает — это почти всегда STORE, которого не было в
-    обучающих данных. Матрица машины при этом известна точно, поэтому канал
-    можно переназначить, не трогая план.
-    """
+    """Port repair: preserve model issue cycles while reassigning legal functional units."""
 
     def test_illegal_store_channel_is_fixed(self):
         from vliw.learned.repair import repair
 
-        # mixed18 — самый богатый по составу операций, STORE там есть.
+        # mixed18 has the richest op mix, including STORE.
         dag = get_scenario("mixed18")
         machine = get_profile("e2k-v6-measured")
         good = GreedyListScheduler().schedule(dag, machine).schedule
-        # STORE исполняют только ,2 и ,5 — ставим на ,0 и ждём починки.
+        # STORE executes only on ,2 and ,5 — place on ,0 and expect repair.
         store = next(i for i in range(len(dag)) if dag[i].op == "STORE")
         broken = Schedule(dag, machine)
         for i in range(len(dag)):
@@ -270,22 +239,22 @@ class TestChannelRepair(unittest.TestCase):
         self.assertTrue(rep.touched)
 
     def test_cycles_are_never_moved(self):
-        """Главный инвариант: makespan определяется тактами, их мы не трогаем."""
+        """Core invariant: issue cycles (and thus makespan) are never altered by port repair."""
         from vliw.learned.repair import repair
 
         dag, machine, good = _fixture()
         broken = Schedule(dag, machine)
         for i in range(len(dag)):
-            broken.place(i, good.placements[i].cycle, 0)   # все на канал 0
+            broken.place(i, good.placements[i].cycle, 0)   # all forced onto port 0
 
         fixed, _ = repair(broken, machine)
         for i in range(len(dag)):
             self.assertEqual(fixed.placements[i].cycle, good.placements[i].cycle,
-                             f"такт инструкции {i} сдвинулся при починке")
+                             f"issue cycle of op {i} shifted during port repair")
         self.assertEqual(fixed.makespan, broken.makespan)
 
     def test_already_legal_schedule_is_left_alone(self):
-        """Законное расписание чинить не надо — ни одной перестановки."""
+        """An already-legal schedule must be untouched (zero port moves)."""
         from vliw.learned.repair import repair
 
         dag, machine, good = _fixture()
@@ -296,37 +265,32 @@ class TestChannelRepair(unittest.TestCase):
                              good.placements[i].channel)
 
     def test_narrow_op_wins_over_greedy_grab(self):
-        """Матчинг, а не жадность: широкая операция не должна занять
-        единственный канал, нужный узкой.
-
-        ADD исполним на всех шести каналах, STORE — только на ,2 и ,5. Если
-        раздавать жадно по порядку, ADD может сесть на ,2 и оставить STORE без
-        места, хотя законное решение существует.
-        """
+        """Bipartite matching, not greedy assignment: wide ops must not steal
+        narrow ports needed by constrained ops like STORE."""
         from vliw.learned.repair import _assign_cycle
 
         machine = get_profile("e2k-v6-measured")
         add_ch = machine.channels_for("ADD")
         store_ch = machine.channels_for("STORE")
-        # Обе просятся на ,2; законно только STORE->,2 (или ,5), ADD->куда угодно.
+        # Both request ,2; only STORE->,2 (or ,5) and ADD->any other port is legal.
         got = _assign_cycle([(0, add_ch, 2), (1, store_ch, 2)], machine.width)
-        self.assertIsNotNone(got, "решение существует, а матчинг его не нашёл")
+        self.assertIsNotNone(got, "valid matching exists but was not found")
         self.assertIn(got[1], store_ch)
         self.assertNotEqual(got[0], got[1])
 
     def test_impossible_cycle_reported_not_hidden(self):
-        """Если законно раздать нельзя — это видно, а не замаскировано."""
+        """Unsatisfiable port demand (e.g. 3 STOREs in 1 cycle) must return None."""
         from vliw.learned.repair import _assign_cycle
 
         machine = get_profile("e2k-v6-measured")
-        store_ch = machine.channels_for("STORE")      # ровно два канала
-        # Три STORE в одном такте — портов записи всего два, решения нет.
+        store_ch = machine.channels_for("STORE")      # only two store ports
+        # Three STOREs in one cycle exceed the 2 available store ports.
         got = _assign_cycle([(i, store_ch, store_ch[0]) for i in range(3)],
                             machine.width)
         self.assertIsNone(got)
 
     def test_scheduler_repair_flag_off_by_default(self):
-        """По умолчанию планировщик ничего не чинит — ответ модели как есть."""
+        """By default repair_channels=False preserves the raw model answer."""
         dag, machine, good = _fixture()
         bad = "\n".join(
             f"{i}: такт={good.placements[i].cycle} канал=0" for i in range(len(dag)))
@@ -341,17 +305,13 @@ class TestChannelRepair(unittest.TestCase):
                                repair=True).schedule(dag, machine)
         self.assertTrue(res.search_stats["valid"])
         self.assertTrue(res.search_stats["repaired"])
-        self.assertTrue(any("ПОЧИНЕНО" in n for n in res.notes))
-        # Такты модели сохранены — makespan тот же, что она задумала.
+        self.assertTrue(any("REPAIRED CHANNELS" in n for n in res.notes))
+        # Model issue cycles are preserved — makespan stays unchanged.
         self.assertEqual(res.schedule.makespan, good.makespan)
 
 
 class TestStreaming(unittest.TestCase):
-    """Ответ модели отдаётся по мере генерации, а не целиком в конце.
-
-    Генерация идёт около тридцати секунд. Без стриминга это тишина, в которой
-    непонятно, работает оно или повисло.
-    """
+    """Model output streams incrementally during generation rather than buffering until completion."""
 
     def test_callback_receives_text(self):
         dag, machine, good = _fixture()
@@ -359,22 +319,18 @@ class TestStreaming(unittest.TestCase):
         LearnedScheduler(
             backend=ScriptedBackend(encode_completion(good))
         ).schedule(dag, machine, on_text=got.append)
-        self.assertTrue(got, "колбэк не вызвался ни разу")
+        self.assertTrue(got, "streaming callback was never invoked")
         self.assertIn("такт=", "".join(got))
 
     def test_works_without_callback(self):
-        """on_text необязателен: протокол Scheduler его не требует."""
+        """`on_text` is optional and not required by the Scheduler protocol."""
         dag, machine, good = _fixture()
         res = LearnedScheduler(
             backend=ScriptedBackend(encode_completion(good))).schedule(dag, machine)
         self.assertTrue(res.search_stats["valid"])
 
     def test_echo_detection_splits_prompt_from_answer(self):
-        """llama.cpp повторяет промпт перед ответом — наружу идёт только ответ.
-
-        Проверяем ровно ту логику, что в потоковом чтении: ответ начинается
-        сразу после хвоста промпта в 40 символов.
-        """
+        """llama.cpp echoes the prompt before streaming the answer; only the answer is emitted."""
         prompt = encode_prompt(*_fixture()[:2])
         answer = "0: такт=0 канал=1\n"
         stream = prompt + answer
@@ -387,15 +343,10 @@ class TestStreaming(unittest.TestCase):
                 out.append(ch)
             elif "".join(buf[-len(tail):]) == tail:
                 echo_done = True
-        self.assertTrue(echo_done, "хвост промпта не найден в потоке")
+        self.assertTrue(echo_done, "prompt tail was not detected in stream")
         self.assertEqual("".join(out), answer)
 class ChunkedBackend(ScriptedBackend):
-    """Отдаёт ответ мелкими кусками — как настоящий поток llama.cpp.
-
-    Куски намеренно НЕ совпадают с границами строк: llama.cpp отдаёт байты по
-    мере генерации, и перевод строки приходит в середине куска. Разбор,
-    который это не учитывает, работает на тестах и разваливается вживую.
-    """
+    """Emit completion in small arbitrary chunks not aligned to newlines, like real llama.cpp."""
 
     def __init__(self, text: str, size: int = 3):
         super().__init__(text)
@@ -408,7 +359,7 @@ class ChunkedBackend(ScriptedBackend):
 
 
 class CancelWatchBackend(ScriptedBackend):
-    """Бесконечная генерация, которая замечает, что её закрыли."""
+    """Unbounded generator that records when it is closed/cancelled."""
 
     def __init__(self) -> None:
         super().__init__("")
@@ -419,28 +370,21 @@ class CancelWatchBackend(ScriptedBackend):
         try:
             while True:
                 self.emitted += 1
-                yield "…\n"          # не размещение: важен сам факт потока
+                yield "…\n"          # non-placement token: only streaming matters
         finally:
-            # У настоящего бэкенда здесь умирает подпроцесс llama.cpp и
-            # отпускается блокировка.
+            # In the real backend this terminates the llama.cpp subprocess and releases the lock.
             self.cleaned = True
 
 
 def _answer_line(dag, machine, instr: int, cycle: int, channel: int) -> str:
-    """Одна строка ответа модели, собранная кодировщиком обучения.
-
-    Писать `"0: такт=0 канал=4"` от руки нельзя: это вторая копия формата, а
-    вторая копия однажды молча разъезжается с обучением — так и получился
-    EOS-баг (docs/archive/EOS_INCIDENT.md). Формат живёт в одном месте, тесты берут
-    его оттуда же, откуда берёт планировщик.
-    """
+    """Single completion line produced by the canonical training encoder."""
     sched = Schedule(dag, machine)
     sched.place(instr, cycle, channel)
     return encode_completion(sched)
 
 
 class TestLiveGridFilling(unittest.TestCase):
-    """Решётка заполняется ПО ХОДУ генерации, а не одним куском в конце."""
+    """The schedule grid populates incrementally as lines stream in."""
 
     def setUp(self) -> None:
         self.dag, self.machine, self.good = _fixture()
@@ -452,12 +396,7 @@ class TestLiveGridFilling(unittest.TestCase):
         return list(stream(LearnedScheduler(backend=backend), self.dag, self.machine))
 
     def test_placements_arrive_before_the_end(self) -> None:
-        """Хотя бы одно размещение приходит раньше терминального события.
-
-        Ради этого всё и затевалось: если `Placed` приезжают только вместе с
-        `Done`, интерфейс снова показывает пустой экран и стену текста в
-        конце — ровно то, что чинил событийный контракт.
-        """
+        """At least one `Placed` event must arrive before the terminal `Done` event."""
         from vliw.core import Done, Placed
 
         evs = self._events(ChunkedBackend(self.answer))
@@ -474,7 +413,7 @@ class TestLiveGridFilling(unittest.TestCase):
         self.assertEqual(sorted(ids), sorted(range(len(self.dag))))
 
     def test_live_run_is_marked_live(self) -> None:
-        """Живой прогон — не переигровка, и подписан соответственно."""
+        """Live streaming run is marked as non-replay (`replay=False`)."""
         from vliw.core import Placed
 
         placed = [e for e in self._events(ChunkedBackend(self.answer))
@@ -482,7 +421,7 @@ class TestLiveGridFilling(unittest.TestCase):
         self.assertEqual({e.live for e in placed}, {True})
 
     def test_chunk_boundaries_do_not_lose_lines(self) -> None:
-        """Размер куска не влияет на разбор — перевод строки ищется в потоке."""
+        """Chunk size must not affect line parsing across arbitrary byte boundaries."""
         from vliw.core import Placed
 
         for size in (1, 2, 3, 7, 1000):
@@ -492,15 +431,10 @@ class TestLiveGridFilling(unittest.TestCase):
                 self.assertEqual(len(placed), len(self.dag))
 
     def test_illegal_placement_still_reaches_the_grid(self) -> None:
-        """Незаконное размещение не прячется до вердикта.
-
-        Решётка обязана показать, ГДЕ модель ошиблась. Решение по интерфейсу:
-        сырой ответ с красными ячейками, починка — отдельным действием.
-        """
+        """Illegal placements still emit `Placed` events so the grid can highlight errors."""
         from vliw.core import Placed
 
-        # Ставим первую инструкцию на заведомо посторонний канал и
-        # проверяем, что событие всё равно есть.
+        # Place the first op on an illegal port and verify the event is still emitted.
         bad = _answer_line(self.dag, self.machine, 0, 0, 7) + "\n"
         placed = [e for e in self._events(ChunkedBackend(bad))
                   if isinstance(e, Placed)]
@@ -508,7 +442,7 @@ class TestLiveGridFilling(unittest.TestCase):
         self.assertEqual(placed[0].placement.channel, 7)
 
     def test_repeated_identical_line_is_not_a_second_event(self) -> None:
-        """Повтор той же строки не заставляет ячейку мигать впустую."""
+        """Duplicate identical placement lines do not emit redundant `Placed` events."""
         from vliw.core import Placed
 
         line = _answer_line(self.dag, self.machine, 0, 0, 1)
@@ -517,7 +451,7 @@ class TestLiveGridFilling(unittest.TestCase):
         self.assertEqual(len(placed), 1)
 
     def test_moved_placement_is_a_second_event(self) -> None:
-        """А вот ПЕРЕЕЗД той же инструкции — событие: модель передумала."""
+        """Re-placing the same op at a different (cycle, port) emits a new `Placed` event."""
         from vliw.core import Placed
 
         text = (_answer_line(self.dag, self.machine, 0, 0, 1) + "\n"
@@ -527,7 +461,7 @@ class TestLiveGridFilling(unittest.TestCase):
         self.assertEqual([e.placement.cycle for e in placed], [0, 2])
 
     def test_old_schedule_contract_matches_the_stream(self) -> None:
-        """`schedule()` даёт ровно то же, что `Done` из потока."""
+        """`schedule()` returns the exact same result as the terminal `Done` event."""
         from vliw.core import Done
 
         evs = self._events(ChunkedBackend(self.answer))
@@ -539,7 +473,7 @@ class TestLiveGridFilling(unittest.TestCase):
 
 
 class TestCancellation(unittest.TestCase):
-    """Отмена доходит до бэкенда — иначе процесс модели остаётся сиротой."""
+    """Cancellation propagates to the backend generator so subprocesses do not leak."""
 
     def test_close_kills_the_backend_stream(self) -> None:
         from vliw.core import stream
@@ -554,7 +488,7 @@ class TestCancellation(unittest.TestCase):
         self.assertTrue(be.cleaned)
 
     def test_partial_placements_survive_cancellation(self) -> None:
-        """Отменённый прогон — тоже данные: что успело встать, то встало."""
+        """A cancelled run still yields partial placements collected before cancellation."""
         from vliw.core import Placed, stream
 
         dag, machine, good = _fixture()
@@ -567,13 +501,7 @@ class TestCancellation(unittest.TestCase):
 
 
 class TestSamplingPlumb(unittest.TestCase):
-    """temperature/seed доехали до бэкенда — и не сломали путь по умолчанию.
-
-    Умолчание — жадный детерминированный ответ, которым сняты все замеры.
-    Он обязан оставаться прежним ВЫЗОВОМ: kwargs сэмплинга передаются только
-    когда их реально просили (см. sampling_kwargs), поэтому бэкенды со старой
-    сигнатурой generate_events(prompt, max_new_tokens) продолжают работать.
-    """
+    """Verify temperature/seed forwarding while preserving legacy deterministic default calls."""
 
     def test_sampling_kwargs_empty_at_defaults(self):
         from vliw.learned.runtime import sampling_kwargs
@@ -594,9 +522,9 @@ class TestSamplingPlumb(unittest.TestCase):
 
         class Old(Backend):
             def generate_events(self, prompt, max_new_tokens):
-                yield "ответ"
+                yield "reply"
 
-        self.assertEqual(Old().generate("p", 5), "ответ")
+        self.assertEqual(Old().generate("p", 5), "reply")
 
     def test_scheduler_passes_sampling_to_backend(self):
         dag, machine, good = _fixture()
@@ -606,7 +534,7 @@ class TestSamplingPlumb(unittest.TestCase):
         self.assertEqual(be.last_sampling, {"temperature": 0.7, "seed": 11})
 
     def test_scheduler_default_keeps_old_call(self):
-        """Умолчание — прежний вызов без kwargs: старые бэкенды живы."""
+        """Default deterministic call passes no sampling kwargs, keeping legacy backends working."""
         dag, machine, good = _fixture()
 
         class Old(ScriptedBackend):
@@ -617,7 +545,7 @@ class TestSamplingPlumb(unittest.TestCase):
         self.assertTrue(res.search_stats["valid"])
 
     def test_llama_cmd_grows_only_when_sampling(self):
-        """Командная строка llama-completion при умолчаниях — прежняя до элемента."""
+        """Default llama-completion CLI args remain identical when sampling is off."""
         from pathlib import Path as _P
 
         from vliw.learned.runtime import _llama_cmd
@@ -633,12 +561,7 @@ class TestSamplingPlumb(unittest.TestCase):
 
 
 class TestBestOfBench(unittest.TestCase):
-    """best-of-N в bench: N сэмплов, каждому repair, выбор по validate().
-
-    Модель не гоняется — вместо неё ScriptedBackend с несколькими ответами.
-    Проверяется именно механика выбора и счётчики: правильный выбор — это
-    min по (нарушения, makespan), а не «последний» или «первый».
-    """
+    """best-of-N benchmarking: N samples, per-sample repair, selection by (violations, makespan)."""
 
     def setUp(self) -> None:
         self.dag, self.machine, self.good = _fixture()
@@ -654,11 +577,11 @@ class TestBestOfBench(unittest.TestCase):
         return LearnedScheduler(backend=ScriptedBackend(replies), repair=True)
 
     def _broken(self, drop_last: int = 1) -> str:
-        """Ответ с недостающими строками — repair такое не чинит честно."""
+        """Incomplete completion with missing ops (cannot be repaired by port reassignment)."""
         return "\n".join(encode_completion(self.good).splitlines()[:-drop_last])
 
     def _stretched(self, by: int = 1) -> str:
-        """Законное расписание с раздвинутыми тактами — валидно, но длиннее."""
+        """Valid schedule with stretched cycles — legal, but longer makespan."""
         s = Schedule(self.dag, self.machine)
         for i in range(len(self.dag)):
             p = self.good.placements[i]
@@ -673,12 +596,12 @@ class TestBestOfBench(unittest.TestCase):
                         self.machine,
                         best_of=BestOf(n=2, temperature=0.7, seed=1))
         row = res.rows[0]
-        self.assertEqual(row.kind, "валидно")
+        self.assertEqual(row.kind, "valid")
         self.assertEqual(row.valid_samples, 1)
         self.assertEqual([s.valid for s in row.samples], [False, True])
 
     def test_prefix_table_counts_any_of_first_k(self):
-        """best-of-2 и best-of-4 — это те же сэмплы, усечённые до первых k."""
+        """best-of-2 and best-of-4 evaluate prefixes of the same sample sequence."""
         from vliw.learned.bench import BestOf, run_bench
 
         good = encode_completion(self.good)
@@ -700,12 +623,12 @@ class TestBestOfBench(unittest.TestCase):
                         self.machine,
                         best_of=BestOf(n=2, temperature=0.7, seed=1))
         row = res.rows[0]
-        self.assertEqual(row.kind, "валидно")
-        self.assertEqual(row.gap, 0)      # выбран компактный, не раздвинутый
+        self.assertEqual(row.kind, "valid")
+        self.assertEqual(row.gap, 0)      # picked compact schedule over stretched one
         self.assertEqual([s.gap for s in row.samples], [1, 0])
 
     def test_fewer_violations_win(self):
-        """Ни один сэмпл не валиден — побеждает тот, где нарушений меньше."""
+        """When no sample is valid, select the one with the fewest violations."""
         from vliw.learned.bench import BestOf, run_bench
 
         res = run_bench(self.dataset, 1,
@@ -713,24 +636,24 @@ class TestBestOfBench(unittest.TestCase):
                         self.machine,
                         best_of=BestOf(n=2, temperature=0.7, seed=1))
         row = res.rows[0]
-        self.assertNotEqual(row.kind, "валидно")
-        # Выбран сэмпл с ОДНОЙ недостающей инструкцией, а не с двумя.
+        self.assertNotEqual(row.kind, "valid")
+        # Picked the sample with ONE missing op rather than two.
         self.assertEqual(row.samples[0].missing, 2)
         self.assertEqual(row.samples[1].missing, 1)
 
     def test_default_run_leaves_sampling_alone(self):
-        """Без best_of — прежний путь: один ответ, атрибуты не трогаются."""
+        """Without best_of, run a single sample and leave best-of fields untouched."""
         from vliw.learned.bench import run_bench
 
         sch = self._scheduler(encode_completion(self.good))
         res = run_bench(self.dataset, 1, sch, self.machine)
         self.assertIsNone(res.rows[0].samples)
-        self.assertEqual(res.rows[0].kind, "валидно")
+        self.assertEqual(res.rows[0].kind, "valid")
         self.assertEqual(sch.temperature, 0.0)
         self.assertIsNone(sch.seed)
 
     def test_single_sample_still_samples(self):
-        """best-of-1 — законный замер: один сэмплированный ответ."""
+        """best-of-1 is a valid single-sample benchmark run."""
         from vliw.learned.bench import BestOf, run_bench
 
         sch = self._scheduler(encode_completion(self.good))
@@ -754,12 +677,7 @@ class TestBestOfBench(unittest.TestCase):
 
 
 class TestLearnedArgParse(unittest.TestCase):
-    """Разбор флагов /learned — чистой функцией, без запуска модели.
-
-    Закреплённая регрессия: значение «0.7» у --temperature раньше
-    принималось за имя адаптера (isdigit() его не отфильтровывал), и
-    команда падала с «адаптер '0.7' не найден» до единой генерации.
-    """
+    """Pure flag parsing for `/learned`: regression guard for float values like `--temperature 0.7`."""
 
     def parse(self, arg: str):
         from vliw.cli import _parse_learned
@@ -791,7 +709,7 @@ class TestLearnedArgParse(unittest.TestCase):
         self.assertIsNone(a.name)
 
     def test_bench_value_is_not_adapter_name(self):
-        """Прежнее поведение сохранено: «15» после --bench — не имя."""
+        """Numeric count after `--bench` is not mistaken for an adapter name."""
         a = self.parse("--bench 15")
         self.assertEqual(a.bench, 15)
         self.assertIsNone(a.name)
@@ -802,9 +720,7 @@ class TestLearnedArgParse(unittest.TestCase):
 
 
 class TestBestOfRender(unittest.TestCase):
-    """Сводка замера печатает таблицу по k для best-of — источник таблицы
-    из docs/LEARNED.md, поэтому формат стоит закрепить.
-    """
+    """Benchmark summary prints the best-of-k validity table."""
 
     def _result(self, valid_by_sample: list[list[bool]]):
         from vliw.learned.bench import BestOf, BenchResult, BenchRow, SampleOutcome
@@ -812,7 +728,7 @@ class TestBestOfRender(unittest.TestCase):
         res = BenchResult(best_of=BestOf(n=8, temperature=0.7, seed=1))
         for samples in valid_by_sample:
             res.rows.append(BenchRow(
-                n=10, kind="валидно" if any(samples) else "прочее",
+                n=10, kind="valid" if any(samples) else "other",
                 has_store=True,
                 samples=[SampleOutcome(valid=v, errors=0 if v else 1,
                                        missing=0, makespan=5, gap=0 if v else None)
@@ -826,29 +742,23 @@ class TestBestOfRender(unittest.TestCase):
             self._result([[False, True, False, False, False, False, False, False],
                           [False] * 8]), "lora-eos")
         text = "\n".join(lines)
-        self.assertIn("best-of: 8 сэмплов", text)
+        self.assertIn("best-of: 8 samples", text)
         for k in (1, 2, 4, 8):
             self.assertIn(f"k={k} ", text)
-        self.assertIn("(1/2)", text)      # k=2: первый граф спасён
+        self.assertIn("(1/2)", text)      # k=2: first graph recovered
 
     def test_plain_bench_render_unchanged(self):
-        """Без best_of сводка прежняя: ни строки про сэмплы, ни таблицы k."""
+        """Without best_of, summary omits sampling headers and k-table."""
         from vliw.learned.bench import BenchResult, BenchRow
         from vliw.ui import learned_view
 
         res = BenchResult()
-        res.rows.append(BenchRow(n=10, kind="валидно", has_store=True))
+        res.rows.append(BenchRow(n=10, kind="valid", has_store=True))
         text = "\n".join(learned_view.render_bench(res, "lora-eos"))
         self.assertNotIn("best-of", text)
         self.assertNotIn("k=", text)
 class TestLearnedArgErrors(unittest.TestCase):
-    """Опечатка в числовом флаге не должна проглатываться молча.
-
-    `--bench 5o` тихо превращалось в `--bench 15`: человек ждал восемь минут
-    вместо двух и не понимал, почему примеров больше, чем он просил. А
-    `--temperature ой` роняло команду трассировкой ValueError прямо из
-    разбора аргументов.
-    """
+    """Typos in numeric flags must be reported in `bad_value`, never silently ignored or raising ValueError."""
 
     @staticmethod
     def _parse(text: str):
@@ -857,12 +767,12 @@ class TestLearnedArgErrors(unittest.TestCase):
         return _parse_learned(text.split())
 
     def test_non_numeric_bench_is_reported(self):
-        a = self._parse("--bench абв")
-        self.assertEqual(a.bad_value, ("--bench", "абв"))
+        a = self._parse("--bench abc")
+        self.assertEqual(a.bad_value, ("--bench", "abc"))
 
     def test_non_numeric_temperature_does_not_raise(self):
-        a = self._parse("--temperature ой")
-        self.assertEqual(a.bad_value, ("--temperature", "ой"))
+        a = self._parse("--temperature oops")
+        self.assertEqual(a.bad_value, ("--temperature", "oops"))
         self.assertEqual(a.temperature, 0.0)
 
     def test_good_values_pass_through(self):
@@ -878,13 +788,7 @@ class TestLearnedArgErrors(unittest.TestCase):
 
 
 class TestScheduleGrammar(unittest.TestCase):
-    """Грамматика ответа: структурная гарантия вместо надежды.
-
-    На Kaggle то же самое сделано маскированием логитов, но локально
-    работает llama.cpp через сокет, где логитов наружу нет. GBNF даёт ту же
-    гарантию другим механизмом — сервер сам не выпускает модель за
-    грамматику.
-    """
+    """GBNF completion grammar: structural legality guarantee for llama.cpp decoding."""
 
     @staticmethod
     def _grammar(key="slotclash"):
@@ -894,19 +798,15 @@ class TestScheduleGrammar(unittest.TestCase):
         return schedule_grammar(get_scenario(key), get_profile("e2k-v6-measured"))
 
     def test_newline_is_escaped_not_raw(self):
-        """Сырой перевод строки в литерале GBNF не принимается.
-
-        Сервер отвергает ТАКУЮ грамматику целиком и отвечает ошибкой разбора,
-        а не подсказкой — то есть ломается всё, а выглядит как «модель молчит».
-        """
+        """Raw unescaped newlines inside GBNF string literals are invalid and must not appear."""
         g = self._grammar()
         self.assertIn("\\n", g)
         for line in g.splitlines():
-            self.assertTrue(line.strip(), "пустая строка в грамматике")
-        self.assertNotIn('"\n', g, "перевод строки уехал сырым")
+            self.assertTrue(line.strip(), "empty line in GBNF grammar")
+        self.assertNotIn('"\n', g, "unescaped newline in GBNF literal")
 
     def test_channels_come_from_the_machine_not_from_a_common_set(self):
-        """У каждой операции свои каналы — иначе всё затевалось зря."""
+        """Each op rule must list only its legal issue ports."""
         from vliw.core import get_profile, get_scenario
 
         model = get_profile("e2k-v6-measured")
@@ -915,14 +815,14 @@ class TestScheduleGrammar(unittest.TestCase):
         for idx, ins in enumerate(dag.instrs):
             rule = next(l for l in g.splitlines() if l.startswith(f"op{idx} ::="))
             allowed = model.channels_for(ins.op)
-            with self.subTest(операция=ins.name, класс=ins.op):
+            with self.subTest(op_name=ins.name, op_class=ins.op):
                 for c in range(model.width):
                     present = f'"{c}"' in rule.split("канал=")[1]
                     self.assertEqual(present, c in allowed,
-                                     f"канал {c} у {ins.op}")
+                                     f"port {c} for {ins.op}")
 
     def test_store_cannot_be_put_on_an_illegal_channel(self):
-        """Ровно тот отказ, ради которого всё делалось: STORE только ,2 ,5."""
+        """STORE must be restricted strictly to ports ,2 and ,5."""
         from vliw.core import get_scenario
 
         dag = get_scenario("slotclash")
@@ -935,7 +835,7 @@ class TestScheduleGrammar(unittest.TestCase):
         self.assertNotIn('"0"', tail)
 
     def test_every_instruction_is_in_the_root(self):
-        """Скелет обязан покрывать граф целиком, иначе часть ответа свободна."""
+        """Root rule must cover every instruction in the DAG."""
         from vliw.core import get_scenario
 
         dag = get_scenario("mixed18")
@@ -948,7 +848,7 @@ class TestScheduleGrammar(unittest.TestCase):
             self.assertIn(f"op{idx}", root.split())
 
     def test_grammar_is_off_by_default(self):
-        """Прежние замеры сняты свободной генерацией — менять их молча нельзя."""
+        """Free generation remains the default when grammar constraints are not requested."""
         from vliw.learned.scheduler import LearnedScheduler
 
         self.assertFalse(LearnedScheduler().constrained)

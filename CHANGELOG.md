@@ -1,189 +1,127 @@
-# История версий
+# Changelog
 
-Формат: что изменилось для пользователя и какие цифры это подтверждают.
-Внутренняя хронология решений — в `docs/archive/JOURNAL.md` и `docs/TINY.md`.
+Format: user-facing changes and the numbers backing them up.
+Internal decision history lives in `docs/archive/JOURNAL.md` and `docs/TINY.md`.
 
-## 1.4 (11.11.2026)
+## 1.5 (2026-11-27)
 
-Лицензия и уточнение роли NNL. Планировщики не менялись.
+Full English localization of NEX CLI:
 
-- **Лицензия больше не MIT.** Проект перешёл на source-available: бесплатно — обучение
-  и личное использование; коммерческое и корпоративное — только по отдельному платному
-  соглашению с правообладателем. Полный текст — [LICENSE](LICENSE).
-- **Роль NNL описана честно.** Рабочее ядро — `nex_core/`: TINY AI упакован в NNL-блок
-  «планировщик», через него отвечают панель НЕЙРОСЕТИ и агент; блок «Помощь_ассистент»
-  обслуживает экран-помощник. `nnl_vliw/` и `nnl_isa/` — эксперименты (выбор группы
-  портфеля и класс мнемоники), в CLI не включены.
-- **TINY Fast переименован в TINY Flash.** Класс — `TinyFlashScheduler`; старое имя
-  `TinyFastScheduler` оставлено алиасом для совместимости. Панель НЕЙРОСЕТИ и ядро
-  `nex_core` теперь считают через него.
-- **Документация — маршрут из 13 этапов** с тремя уровнями: понять, запустить, разобраться.
-  Добавлен [`docs/METHOD.md`](docs/METHOD.md) — методика и границы модели на один экран.
+- **TUI, CLI, and core engine.** All Textual screens (`CODE`, `LAB`, `AGENT`, `CORE`, mode picker), CLI output, diagnostics (`doctor`), built-in help, and agent prompts translated into English.
+- **Documentation and visuals.** All documentation (including archive), SVG diagrams, infographics, and README screenshots updated to English with live v1.5 TUI captures.
 
-## 1.3 · экран-помощник и блок помощи NNL
+## 1.4 (2026-11-11)
 
-Экран, который открывается без `textual`, перестал быть справочником. Теперь это
-ассистент: запрос обычными словами или выбор стрелками → короткий план с точными
-командами → согласие → выполнение.
+License change and clarification of NNL's role. Schedulers are unchanged.
 
-- Меню действий: «Установить и запустить», «Проверить окружение», «Что такое
-  NEX CLI», «Задать вопрос», «Выход». Любая напечатанная буква сразу начинает
-  вопрос — искать пункт «Задать вопрос» не обязательно.
-- Планы запуска, починки, проверки, обновления, `venv` и удаления. До согласия
-  ничего не выполняется; удаление не выполняется никогда — только показываются
-  команды. При установке помощник сам ставит `textual`/`rich`, при отсутствии
-  `pip` пробует `ensurepip` и затем открывает `python -m vliw`.
-- Ответы стали короткими: полный текст спрятан за «Подробнее». Для вопросов
-  установки и запуска добавлен обученный блок NNL «Помощь_ассистент» (548
-  вопросов, 13 содержательных тем + беседа + «не тема», dev-точность 0.655).
-  Инференс работает и на чистом Python по копии весов `vliw/help_weights.json`.
-- `--plain` / `--no-color` остаются явным построчным режимом. В пайпе экран
-  печатается статически, с причиной, командами и кодом возврата 1.
+- **No longer MIT-licensed.** The project moved to a source-available license: free for educational and personal use; commercial and corporate use requires a separate paid agreement with the copyright holder. Full text: [LICENSE](LICENSE).
+- **NNL's role documented honestly.** The active core is `nex_core/`: TINY AI is packaged into the scheduler NNL block, which serves the NEURAL NETS panel and the agent; the help assistant NNL block serves the setup assistant screen. `nnl_vliw/` and `nnl_isa/` are experiments (portfolio group selection and mnemonic classification) and are not wired into the CLI.
+- **TINY Fast renamed to TINY Flash.** Class name is now `TinyFlashScheduler`; the old `TinyFastScheduler` name remains as a compatibility alias. The NEURAL NETS panel and `nex_core` now compute through it.
+- **Documentation organized as a 13-stage roadmap** with three levels: understand, run, dive deeper. Added [`docs/METHOD.md`](docs/METHOD.md) — methodology and model boundaries on a single screen.
 
-## 1.3 · ядро NEX (влито в основную ветку)
+## 1.3 · Setup Assistant Screen and NNL Help Block
 
-Номер версии остался 1.3. Прямой вызов крошек в интерфейсе и в контексте агента заменён проходом через ядро NNL.
+The screen shown when `textual` is missing is no longer a static reference page. It is now an interactive assistant: plain-language query or arrow-key selection → short plan with exact commands → confirmation → execution.
 
-- `nex_core/` — одна нейросеть NNL (матплата, процессор тактов, решатель из `nnl_vliw/NNL`, без правок) с одним
-  составным блоком «планировщик»: крошки (`vliw/tiny/`, без изменений) + точное правило границы. Снаружи это
-  обычный блок NNL: паспорт, `веса.npz`, закрытый список ответов; sha256 весов крошек ловит подмену.
-- Язык ядра: граф команд ↔ токены без потерь. Техкарта (`nex_core/техкарта.json`) задаёт блоки, пороги и фразы
-  для рассказчика; новый блок = новая папка и строка в техкарте.
-- Панель НЕЙРОСЕТИ и агент берут расписание крошек у ядра; ядро не собралось — прежний прямой путь.
-- Проверено: линтер NNL принимает блок; результат ядра совпадает с прямым вызовом крошек на всех сценариях;
-  подмена весов отвергается; «блок вынут и возвращён» ничего не меняет; на мусорный запрос — «не знаю».
-  Тесты: `tests/test_nex_core.py` (9), вместе с остальными 259.
-- Пока в ядре один блок: шина почти не работает (блоки ничего друг у друга не читают).
+- Action menu: "Install and launch", "Check environment", "What is NEX CLI", "Ask a question", "Exit". Typing any letter immediately starts a question — no need to select "Ask a question" first.
+- Built-in plans for launching, repairing, checking, updating, `venv` setup, and removal. Nothing executes before confirmation; removal is never executed automatically — only the commands are shown. During installation, the assistant installs `textual`/`rich`, falls back to `ensurepip` if `pip` is missing, and then launches `python -m vliw`.
+- Answers are concise: full text is tucked behind "Details". A trained NNL help-assistant block (548 questions, 13 topic categories + chat + "off-topic", dev accuracy 0.655) handles installation and startup questions. Inference also runs in pure Python using the weight copy in `vliw/help_weights.json`.
+- `--plain` / `--no-color` remain explicit line-by-line modes. When piped, the screen prints statically with the reason, commands, and exit code 1.
 
-## 1.3.1 (10.11.2026)
+## 1.3 · NEX Core (merged into main)
 
-Уборка интерфейса, планировщики не менялись.
+Version number stayed 1.3. Direct calls to TINY AI in the UI and agent context were replaced by routing through the NNL core.
 
-- **Документация переписана.** README, QUICKSTART, CLI и гайды режимов сокращены и сверены с кодом;
-  исторические заметки перенесены в `docs/archive/`; исправлены устаревшие числа, ссылки и версия пакета.
+- `nex_core/` — a single NNL neural network (motherboard, cycle processor, solver from `nnl_vliw/NNL`, unmodified) with one composite scheduler block: TINY AI (`vliw/tiny/`, unmodified) + exact lower-bound rule. Externally it is a standard NNL block: passport, `веса.npz`, closed answer list; SHA-256 of TINY AI weights detects tampering.
+- Core language: lossless conversion between instruction graph and tokens. The routing manifest (`nex_core/техкарта.json`) defines blocks, thresholds, and narrator phrases; adding a new block means adding a folder and a line in the manifest.
+- The NEURAL NETS panel and agent obtain TINY AI schedules from the core; if the core fails to assemble, they fall back to the previous direct path.
+- Verified: the NNL linter accepts the block; core output matches direct TINY AI calls across all scenarios; tampered weights are rejected; removing and restoring the block changes nothing; garbage input yields "don't know". Tests: `tests/test_nex_core.py` (9), 259 total with the rest of the suite.
+- Currently the core has one block, so the bus is largely idle (no inter-block reads yet).
 
-- **NNL AI убран из самой CLI.** Панель НЕЙРОСЕТИ в РАЗБОРе и контекст агента теперь показывают только **TINY AI**
-  (что дали крошки на участке и по блокам файла). Библиотека `nnl_vliw/` и NNL-блок помощника остались — убран
-  только экранный «оценщик», который в CLI был лишним.
-- **Вопросительные знаки вместо глифов.** «Экзотические» символы (`▏ ▶ ▸ ❯ ✓ ✕ ⇄ ★ ● ⏳` и т.п.) заменены на безопасные
-  (`│ > < + - x <> *`); рамки панелей — `solid` вместо `vkey`. Отдельно вылечены источники из самого Textual: поле `Input`
-  рисовало рамку `tall` из тонких блоков (`▊ ▔ ▎ ▁`), а скроллбары — из `▁▂▃…`; теперь это одинарные линии и полный блок `█`.
-  Начертание в старых консольных шрифтах больше не ломается.
-- **Кириллица в свежем `cmd`.** Консоль Windows переключается на UTF-8 и VT-режим до первого вывода — вместо
-  «кракозябр» и ANSI-кодов, напечатанных как текст.
-- Экран-помощник: LEGO-заголовок NNL и сжатая шапка, первый экран влезает в 30 строк.
-- **Помощник отличает вопрос от команды.** «Зачем нужны доп установки» раньше цеплялось за корень «установ» и
-  запускало план установки. Теперь вопросительные формулировки («зачем», «почему», «что такое», «как работает»,
-  «нужно ли», «обязательно ли»…) уходят в объяснение: планировщик работает на чистом Python, а `textual`/`rich`
-  нужны только для полноэкранных панелей. Добавлена тема «как NNL понимает вопрос»: маленькие обученные блоки и
-  keyword-разбор, контекст диалога они не помнят — полноценный агент отдельно и с API-ключом.
-- Тесты: `tests/test_nnl_ai.py` переписан под TINY AI, ожидаемые глифы обновлены в `test_tui_smoke`, `test_ux_walk`,
-  `test_encode`, `test_agent_backends`; `test_setup_screen` — 47 (включая распознавание вопросов).
+## 1.3.1 (2026-11-10)
 
-## 1.3 (22.10.2026)
+UI cleanup; schedulers unchanged.
 
-Планировщики не менялись. Добавлена вторая сетка рядом с крошками и окно, где видно обеих.
+- **Documentation rewritten.** README, QUICKSTART, CLI, and mode guides were trimmed and checked against the code; historical notes moved to `docs/archive/`; stale numbers, links, and package version fixed.
+- **NNL AI removed from the CLI itself.** The NEURAL NETS panel in LAB and the agent context now show only **TINY AI** (what TINY AI achieved on the scenario and across file blocks). The `nnl_vliw/` library and the assistant's NNL block remain — only the on-screen "estimator" that added no value in the CLI was removed.
+- **Question marks replacing glyphs fixed.** "Exotic" Unicode glyphs (`▏ ▶ ▸ ❯ ✓ ✕ ⇄ ★ ● ⏳`, etc.) were replaced with safe characters (`│ > < + - x <> *`); panel borders use `solid` instead of `vkey`. Textual's own glyph sources were also fixed: `Input` drew `tall` borders with thin blocks (`▊ ▔ ▎ ▁`) and scrollbars used `▁▂▃…`; they now use single lines and the full block `█`. Rendering no longer breaks in older console fonts.
+- **Unicode in a fresh `cmd`.** Windows console switches to UTF-8 and VT mode before the first output — no more mojibake or raw ANSI codes printed as text.
+- Setup assistant screen: LEGO-style NNL header and compact top bar so the first screen fits in 30 lines.
+- **Assistant distinguishes questions from commands.** "Why are extra installs needed" previously matched the "install" stem and triggered an install plan. Interrogative phrasing ("why", "what is", "how does", "do I need", "is it required"...) now routes to an explanation: the scheduler runs in pure Python, and `textual`/`rich` are only needed for fullscreen panels. Added a "how NNL understands questions" topic: small trained blocks plus keyword parsing, with no conversation memory — the full agent is separate and requires an API key.
+- Tests: `tests/test_nnl_ai.py` rewritten for TINY AI; expected glyphs updated in `test_tui_smoke`, `test_ux_walk`, `test_encode`, `test_agent_backends`; `test_setup_screen` — 47 tests (including question recognition).
 
-### Две нейросети работают сами, без команд
+## 1.3 (2026-10-22)
 
-- **TINY AI** (крошки) строит расписание участка; **NNL AI** (ядра `nnl_vliw/выигрыш.py`) оценивает,
-  есть ли на участке что улучшать. Считаются на каждом новом участке и на каждом вопросе агенту:
-  `vliw/ai_hints.py`, строка NNL AI в контексте агента (`vliw/agent/context.py`).
-- Панель **НЕЙРОСЕТИ** в экране РАЗБОР: что дали крошки, что сказал NNL AI и, если загружен `.s`,
-  разбор по блокам файла (оценка NNL рядом с реальными тактами крошек). На экране ниже 50 строк панель
-  ужимается и прокручивается, остальное не уезжает за край.
-- Новые блоки: два ядра по два блока (`nnl_vliw/блоки_выигрыш/`), обучены на метках «портфель короче жадного».
+Schedulers unchanged. Added a second network alongside TINY AI and a panel showing both.
 
-### Что показали цифры (честно)
+### Two Neural Networks Running Automatically Without Commands
 
-- **Точное правило, не нейросеть:** baseline на нижней границе — выигрыша нет. На `eval_real` оно снимает
-  883 из 947 графов без единой ошибки; на 15 встроенных сценариях из 17 тоже верно.
-- **Ядра NNL** там, где правило молчит: на синтетике ранжируют (AUC 0,75), на настоящем коде почти
-  случайно (AUC 0,52 на 64 графах, из них 43 с выигрышем). В панели правило и оценка ядер подписаны отдельно.
-- Тесты: `tests/test_nnl_ai.py`; прогон `test_nnl_ai`, `test_nnl_vliw`, `test_agent_grounding`,
-  `test_tui_smoke` — 213 тестов.
+- **TINY AI** builds the block schedule; **NNL AI** (`nnl_vliw/выигрыш.py` cores) estimates whether the block has room for improvement. Computed on every new block and every agent question: `vliw/ai_hints.py`, NNL AI line in agent context (`vliw/agent/context.py`).
+- **NEURAL NETS** panel in LAB: shows TINY AI results, NNL AI's estimate, and — if a `.s` file is loaded — a per-block breakdown (NNL estimate next to actual TINY AI cycles). On terminals shorter than 50 lines, the panel shrinks and scrolls so nothing overflows.
+- New blocks: two cores of two blocks each (`nnl_vliw/блоки_выигрыш/`), trained on labels "portfolio shorter than greedy".
 
-## 1.2.0b1 (22.10.2026)
+### What the Numbers Showed (Honestly)
 
-Только добавления: существующий код планировщиков не менялся.
+- **Exact rule, not a neural network:** if baseline hits the lower bound, no gain is possible. On `eval_real` it filters out 883 of 947 graphs with zero errors; also correct on 15 of 17 built-in scenarios.
+- **NNL cores** where the rule is silent: rank well on synthetic data (AUC 0.75), near random on real code (AUC 0.52 on 64 graphs, 43 of which have a gain). The panel labels the exact rule and core estimate separately.
+- Tests: `tests/test_nnl_ai.py`; suite run (`test_nnl_ai`, `test_nnl_vliw`, `test_agent_grounding`, `test_tui_smoke`) — 213 tests.
 
-### NNL в проекте компилятора (`nnl_vliw/`)
+## 1.2.0b1 (2026-10-22)
 
-- Копия ядра NNL (матплата, процессор, ядро, решатель, линтер, архитектура `мешок_шина`, обучающий код) на
-  коммите 6b0c9e0 репозитория smworklair/NNL и «язык» для графов VLIW.
-- Два ядра по два блока (~100K и ~200K чисел), обучены на выборе группы портфеля крошек, блоки проходят
-  линтер NNL; обучение — секунды на CPU. Подробности и все цифры — `nnl_vliw/README.md`.
-- Честный итог: на уровне обычных классификаторов на тех же признаках, выбор группы слабый, перекрёстная
-  проверка ядер не лучше случайного отказа; на настоящем коде эффекта почти нет (43 трудных из 947).
-- Инструменты: `tools/portfolio_labels.py` (лучший makespan каждой группы), `tools/gen_graphs.py`
-  (сырые графы генератором проекта). Тесты: `tests/test_nnl_vliw.py` (26).
+Additions only: existing scheduler code untouched.
 
-## 1.1.1b1 (21.10.2026)
+### NNL in the Compiler Project (`nnl_vliw/`)
 
-Только добавления: существующий код планировщиков не менялся.
+- Snapshot of the NNL core (motherboard, processor, core, solver, linter, bag-bus architecture, training code) at commit `6b0c9e0` of `smworklair/NNL`, plus a token language for VLIW graphs.
+- Two cores of two blocks each (~100K and ~200K parameters), trained to select a TINY AI portfolio group; blocks pass the NNL linter; training takes seconds on CPU. Details and full numbers: `nnl_vliw/README.md`.
+- Honest outcome: on par with standard classifiers on the same features, weak group selection, cross-core validation no better than random abstention; virtually no effect on real code (43 hard graphs out of 947).
+- Tools: `tools/portfolio_labels.py` (best makespan per group), `tools/gen_graphs.py` (raw graphs from the project generator). Tests: `tests/test_nnl_vliw.py` (26).
 
-### Быстрые крошки
+## 1.1.1b1 (2026-10-21)
 
-- `TinyFastScheduler` (`vliw/tiny/fast.py`) даёт тот же makespan, что
-  `TinyScheduler`: 0 расхождений на 3061 графе, расписания законны,
-  хуже жадного нет. Режим `asm` (без hold/defer) быстрее, но это выбор
-  по замерам, а не гарантия.
-- Время на граф, мс (было → стало): `eval_hard` 63.4 → 2.6,
-  `eval_real` 70.4 → 0.95, `eval_wide` 39 → 0.49.
-- Откуда скорость: остановка на нижней границе, движок списков
-  `ListPlan` (`vliw/core/fastlist.py`), `FastNet` с кэшем строк, ленивая
-  трасса. Награда ES на скорость не влияет.
+Additions only: existing scheduler code untouched.
 
-### Режим «по блокам» и eval_real
+### Fast TINY AI
 
-- `vliw/core/blocks.py`: разбор настоящего `.s` от lcc на базовые блоки и
-  окна. Инструменты: `tools/block_report.py`, `tools/tiny_fast_check.py`,
-  `tools/make_eval_real.py`.
-- `eval_real.jsonl`: 947 графов с доказанным оптимумом;
-  `eval_real_open.jsonl`: 11 графов, где граница не достигнута.
-- На eval_real оптимально: жадный 890, крошки 927, без сетей 919.
-- Запас на настоящем коде в модели невелик: жадный теряет 0.51 % тактов.
-  Это модельные такты, не железо; `loop_mode` не моделируется.
+- `TinyFastScheduler` (`vliw/tiny/fast.py`) produces the same makespan as `TinyScheduler`: 0 discrepancies across 3,061 graphs, all schedules valid, zero regressions vs. greedy. The `asm` mode (without hold/defer) is faster, though chosen empirically rather than guaranteed.
+- Time per graph, ms (before → after): `eval_hard` 63.4 → 2.6, `eval_real` 70.4 → 0.95, `eval_wide` 39 → 0.49.
+- Where the speed comes from: early stop at the lower bound, `ListPlan` list engine (`vliw/core/fastlist.py`), `FastNet` with row caching, lazy trace generation. ES reward does not affect runtime speed.
 
-### Тесты и документация
+### Block Mode and `eval_real`
 
-- 76 новых тестов (`test_fastlist`, `test_tiny_fast`, `test_blocks`,
-  `test_make_eval_real`); подробности и необязательные правки —
-  в `docs/archive/TINY_FAST.md`.
+- `vliw/core/blocks.py`: parses real `lcc` `.s` output into basic blocks and windows. Tools: `tools/block_report.py`, `tools/tiny_fast_check.py`, `tools/make_eval_real.py`.
+- `eval_real.jsonl`: 947 graphs with a proven optimum; `eval_real_open.jsonl`: 11 graphs where the bound was not reached.
+- Optimal count on `eval_real`: greedy 890, TINY AI 927, without networks 919.
+- Headroom on real code in the model is small: greedy loses 0.51% of cycles. These are model cycles, not hardware; `loop_mode` is not modeled.
 
-## 1.1.0b1 (18.09.2026)
+### Tests and Documentation
 
-### Крошки: 219 → 284/300 в оптимуме
+- 76 new tests (`test_fastlist`, `test_tiny_fast`, `test_blocks`, `test_make_eval_real`); details and optional tweaks in `docs/archive/TINY_FAST.md`.
 
-- Портфель вырос: `prio_hold` (держки hold-головы), `rule_hold` /
-  `rule_hold_far` (ручные держки монопольного порта), `beam_d*` (веер
-  по держкам), дефолтный веер 8 → 16.
-- `eval_hard`: гэп 0.270 → 0.053, побед над baseline 203 → 267.
-- Настоящие графы (`tools/tiny_real_eval.py`): 5/13 → 7/13, 0 поражений.
-- Скорость та же по порядку: ~75 мс синтетика, ~2.5 с граф в 386 узлов.
-- Конвейер весов: supervised → ES-доводка (`es.py --mode prio|hold`).
-- Всё при нуле поражений: fuzz 1437/1437, юниты зелёные.
-- Отвергнуто с цифрами: 20 фич (оверфит), подмес hard, веса 140К,
-  gap-гейт, ES-доводка hold — подробности в `docs/TINY.md`.
+## 1.1.0b1 (2026-09-18)
 
-### Агент: штаб и подключение вместо одного окна
+### TINY AI: 219 → 284/300 Optimal
 
-- ШТАБ — отдельный главный блок: сводка и задача в мини, подключения /
-  участок / скрипт / миссии в развороте.
-- ПОДКЛЮЧЕНИЕ — мини-блок: кнопки API + ключ; каталог с честным
-  фильтром — в развороте. 15 провайдеров через `vliw/agent/backends/`.
-- Ключи живут только сессию, каталог мокается в тестах.
-- Новый документ: `docs/ORCHESTRA.md` (диалог / штаб / подключение /
-  крошки, карта файлов).
+- Expanded portfolio: `prio_hold` (hold-head holds), `rule_hold` / `rule_hold_far` (handcrafted monopoly-port holds), `beam_d*` (beam over holds), default beam width 8 → 16.
+- `eval_hard`: gap 0.270 → 0.053, wins over baseline 203 → 267.
+- Real graphs (`tools/tiny_real_eval.py`): 5/13 → 7/13, 0 losses.
+- Same order of magnitude in speed: ~75 ms on synthetic graphs, ~2.5 s on a 386-node graph.
+- Weight pipeline: supervised → ES fine-tuning (`es.py --mode prio|hold`).
+- Zero losses throughout: fuzz 1,437/1,437, unit tests green.
+- Rejected with numbers: 20 features (overfit), hard-set mixing, 140K weights, gap-gate, ES fine-tuning of hold — details in `docs/TINY.md`.
 
-### Чистка
+### Agent: HQ and Connections Instead of a Single Window
 
-- Удалён `.presentation/` (маркетинг, в репозитории ни на что не ссылался).
-- Концы строк нормализованы в LF; мусор (`Zone.Identifier`, выхлоп
-  генераторов) — в `.gitignore`.
+- HQ — dedicated main block: summary and task in compact view; connections / scenario / script / missions in expanded view.
+- CONNECTION — compact block: API buttons + key; catalog with honest filtering in expanded view. 15 providers via `vliw/agent/backends/`.
+- Keys live in session memory only; catalog is mocked in tests.
+- New doc: `docs/ORCHESTRA.md` (dialogue / HQ / connection / TINY AI, file map).
+
+### Cleanup
+
+- Removed `.presentation/` (marketing material, unreferenced anywhere in the repo).
+- Normalized line endings to LF; added junk (`Zone.Identifier`, generator output) to `.gitignore`.
 
 ## 1.0.0b1
 
-Первая публичная бета: ядро (baseline vs oracle), CLI, TUI (КОД / РАЗБОР /
-ЯДРО / АГЕНТ), модель машины e2k-v6 по замерам `lcc`, доки и витрина
-настоящих `.s`.
+First public beta: core (baseline vs. oracle), CLI, TUI (CODE / LAB / CORE / AGENT), `e2k-v6` machine model measured from `lcc`, docs, and showcase of real `.s` files.

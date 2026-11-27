@@ -1,8 +1,8 @@
-"""Общий инструментарий отрисовки: цвет, ширина, рамки, таблицы, панели.
+"""Core terminal rendering primitives: color, width, boxes, tables, panels.
 
-Это фундамент пакета `vliw.ui`. Здесь нет никакой логики планирования — только
-превращение готовых данных (из `vliw.core`) в строки для терминала. Работает на
-голом ANSI; если установлен `rich`, панели оформляются им (graceful fallback).
+Foundation of `vliw.ui`. Contains no scheduling logic — only turns data from
+`vliw.core` into terminal lines. Uses raw ANSI by default and `rich` panels
+when installed (graceful fallback).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sys
 from . import theme as _theme
 
 # --------------------------------------------------------------------------
-# Опциональный rich (единственная опциональная зависимость проекта)
+# Optional rich (the only optional dependency for plain UI)
 # --------------------------------------------------------------------------
 
 try:
@@ -25,25 +25,21 @@ try:
     from rich.panel import Panel as _RichPanel
 
     HAS_RICH = True
-except Exception:  # pragma: no cover - зависит от окружения
+except Exception:  # pragma: no cover - environment-dependent
     HAS_RICH = False
 
 
 # --------------------------------------------------------------------------
-# Ширина отчёта под реальный терминал
+# Report width adapted to the actual terminal
 # --------------------------------------------------------------------------
 
-W = 96  # уточняется под терминал в setup_output()
+W = 96  # updated for the terminal in setup_output()
 W_MIN = 56
 W_MAX = 100
 
 
 def detect_width(default: int = 96) -> int:
-    """Ширина отчёта под терминал, зажатая в разумные пределы.
-
-    Без адаптации на узком терминале (80 колонок и меньше) таблицы, рамки и
-    разбор переносятся по словам и весь вывод «сыпется».
-    """
+    """Clamped terminal width so tables and boxes don't wrap awkwardly."""
     try:
         cols = shutil.get_terminal_size((default, 24)).columns
     except Exception:
@@ -54,7 +50,7 @@ def detect_width(default: int = 96) -> int:
 
 
 def term_cols() -> int:
-    """Реальная ширина терминала (для интерактивного ввода), без зажима."""
+    """Actual unclamped terminal width (for interactive input)."""
     try:
         return max(20, shutil.get_terminal_size((80, 24)).columns)
     except Exception:
@@ -62,17 +58,14 @@ def term_cols() -> int:
 
 
 # --------------------------------------------------------------------------
-# Цвет
+# Color & theme
 # --------------------------------------------------------------------------
 
-
-# Текущая тема. Меняется через apply_theme(); всё оформление ниже спрашивает
-# цвета у неё, поэтому одна строка в JSON перекрашивает весь инструмент.
 THEME = _theme.load_theme()
 
 
 def apply_theme(name: str | None) -> None:
-    """Переключить тему оформления и пересобрать производные константы."""
+    """Switch active theme and rebuild derived color constants."""
     global THEME, OP_CODE, CRIT_CODE, DIVERGE_CODE
     if name:
         THEME = _theme.load_theme(name)
@@ -82,16 +75,12 @@ def apply_theme(name: str | None) -> None:
 
 
 def c(role: str) -> str:
-    """ANSI-код роли темы («accent», «border», «error», …)."""
+    """ANSI code for a theme role ('accent', 'border', 'error', ...)."""
     return THEME.ansi(role)
 
 
 class Style:
-    """Именованные стили. Цвета берутся из активной темы, а не зашиты в код.
-
-    `bold`/`dim` — это атрибуты начертания, а не цвета, поэтому они одинаковы
-    в любой теме; остальное — роли палитры.
-    """
+    """Named terminal styles backed by the active theme."""
 
     enabled = True
 
@@ -137,19 +126,14 @@ class Style:
 
 
 def paint(code: str, s: str) -> str:
-    """Покрасить строку. `code` — имя роли темы либо готовый ANSI-код."""
+    """Colorize a string using a theme role name or raw ANSI code."""
     if not Style.enabled:
         return s
     return f"\033[{_resolve_color(code)}m{s}\033[0m"
 
 
 def utf8_console() -> None:
-    """Переключить консоль Windows на UTF-8 (вывод и ввод).
-
-    Python и так пишет UTF-8, но сама консоль со старой кодовой страницей
-    (cp866/cp1251) показывает кириллицу и рамки как «?». Только для tty:
-    при перенаправлении в файл кодовую страницу не трогаем.
-    """
+    """Switch Windows console input/output code pages to UTF-8 (TTY only)."""
     if os.name != "nt":
         return
     try:
@@ -167,11 +151,7 @@ def utf8_console() -> None:
 
 
 def enable_vt() -> bool:
-    """Включить обработку ANSI-последовательностей в консоли Windows.
-
-    Без этого свежий `cmd` печатает коды цвета как текст («←[1;38;5;135m»),
-    и экран выглядит сломанным. Возвращает False, если режим не включился.
-    """
+    """Enable ANSI VT processing on Windows consoles."""
     if os.name != "nt":
         return True
     try:
@@ -184,12 +164,10 @@ def enable_vt() -> bool:
 
 
 def setup_output(color: bool | None = None, theme_name: str | None = None) -> None:
-    """Настроить кодировку, цвет, тему и ширину под текущий вывод."""
+    """Configure encoding, color support, active theme, and terminal width."""
     global W
     if theme_name:
         apply_theme(theme_name)
-    # Windows: Python пишет UTF-8, а свежий cmd остаётся на cp866/cp1251 —
-    # тогда кириллица и рамки превращаются в «?».
     utf8_console()
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -204,17 +182,14 @@ def setup_output(color: bool | None = None, theme_name: str | None = None) -> No
 
 
 # --------------------------------------------------------------------------
-# Акценты по типу операции (дорогие MUL/DIV — самыми яркими)
+# Operation-type accents (expensive MUL/DIV stand out most)
 # --------------------------------------------------------------------------
 
-# Цвета операций — это ДАННЫЕ, а не украшение: по ним в расписании сразу видно,
-# куда попало деление (единственный порт `,5`) и как разошлись умножения по
-# своим четырём каналам. Значения приходят из темы; здесь только производные.
 OP_CODE: dict[str, str] = {}
-CRIT_CODE = ""     # критический путь
-DIVERGE_CODE = ""  # расхождение baseline/оракул
+CRIT_CODE = ""     # critical path
+DIVERGE_CODE = ""  # baseline vs oracle divergence
 
-apply_theme(None)  # заполнить производные из темы по умолчанию
+apply_theme(None)  # populate derived constants from default theme
 
 
 def op_code(op: str) -> str:
@@ -230,18 +205,18 @@ def op_legend() -> str:
         paint_op("DIV", "DIV"),
         paint_op("MUL", "MUL"),
         paint_op("LOAD", "LOAD/STORE"),
-        paint_op("ADD", "ADD/SUB/лог."),
+        paint_op("ADD", "ADD/SUB/logic"),
     ]
-    return Style.dim("операции: ") + "  ".join(parts)
+    return Style.dim("ops: ") + "  ".join(parts)
 
 
 # --------------------------------------------------------------------------
-# Ширины строк с учётом ANSI и базовые примитивы вёрстки
+# ANSI-aware string widths and layout primitives
 # --------------------------------------------------------------------------
 
 
 def _plain_len(s: str) -> int:
-    """Длина без ANSI-кодов."""
+    """Visible length excluding ANSI escape sequences."""
     out, i = 0, 0
     while i < len(s):
         if s[i] == "\033":
@@ -253,7 +228,7 @@ def _plain_len(s: str) -> int:
     return out
 
 
-vlen = _plain_len  # короткий алиас
+vlen = _plain_len  # short alias
 
 
 def pad(s: str, n: int, align: str = "<") -> str:
@@ -267,7 +242,7 @@ def pad(s: str, n: int, align: str = "<") -> str:
 
 
 def plural(n: int, one: str, few: str, many: str) -> str:
-    """Русское согласование: 1 такт, 2 такта, 5 тактов."""
+    """Pluralization helper (keeps 3-form signature for backward compatibility)."""
     n = abs(n) % 100
     if 11 <= n <= 14:
         return many
@@ -280,7 +255,7 @@ def plural(n: int, one: str, few: str, many: str) -> str:
 
 
 def cycles(n: int) -> str:
-    return f"{n} {plural(n, 'такт', 'такта', 'тактов')}"
+    return f"{n} {'cycle' if abs(n) == 1 else 'cycles'}"
 
 
 def h1(title: str) -> str:
@@ -297,13 +272,7 @@ def rule(title: str) -> str:
 
 
 def wrap(text: str, width: int, indent: str = "") -> list[str]:
-    """Перенос по словам. `width` — итоговая ширина ВМЕСТЕ с отступом.
-
-    Явный `\\n` в тексте — граница абзаца, а не пробел: раньше он съедался
-    вместе с остальными пробелами, и любое описание превращалось в сплошную
-    простыню. Короткие абзацы читаются заметно лучше — особенно в описаниях
-    сценариев, которые печатаются перед каждым расписанием.
-    """
+    """Word wrap preserving explicit newlines. `width` includes `indent`."""
     inner = max(8, width - len(indent))
     lines: list[str] = []
     for para in text.split("\n"):
@@ -323,7 +292,7 @@ def wrap(text: str, width: int, indent: str = "") -> list[str]:
 
 
 def _truncate(s: str, n: int) -> str:
-    """Обрезать видимый текст до n символов с «…», сохраняя ANSI-коды."""
+    """Truncate visible text to n chars with '…' while preserving ANSI codes."""
     if n <= 0:
         return ""
     if _plain_len(s) <= n:
@@ -351,7 +320,7 @@ def _truncate(s: str, n: int) -> str:
 def table(
     headers: list[str], rows: list[list[str]], aligns: str = "", max_width: int | None = None
 ) -> list[str]:
-    """Таблица, автоматически ужимающая широкие столбцы под ширину терминала."""
+    """Table that automatically shrinks wide columns to fit terminal width."""
     cols = len(headers)
     aligns = (aligns + "<" * cols)[:cols]
     widths = [_plain_len(h) for h in headers]
@@ -397,25 +366,21 @@ def two_columns(left: list[str], right: list[str], lw: int, gap: str = " │ ") 
 
 
 # --------------------------------------------------------------------------
-# Рамки и панели
+# Boxes and panels
 # --------------------------------------------------------------------------
 
 
 def _resolve_color(color: str) -> str:
-    """Принять ИМЯ РОЛИ темы («border», «success») либо готовый ANSI-код.
-
-    Двойственность нужна для совместимости: старые вызовы передавали сырые
-    коды вроде «36», новые — роли, которые перекрашиваются вместе с темой.
-    """
+    """Accept either a theme role name ('border', 'success') or a raw ANSI code."""
     if not color:
         return c("border")
     if color in THEME.roles:
         return c(color)
-    return color  # уже готовый ANSI-код
+    return color  # raw ANSI code
 
 
 def ansi_box(lines: list[str], title: str = "", color: str = "border", double: bool = False) -> list[str]:
-    """Рамка вокруг строк. Содержимое может нести собственные ANSI-коды."""
+    """Draw a box around lines (content may contain its own ANSI codes)."""
     color = _resolve_color(color)
     if double:
         tl, tr, bl, br, hz, vt = "┌", "┐", "└", "┘", "─", "│"
@@ -441,8 +406,7 @@ def ansi_box(lines: list[str], title: str = "", color: str = "border", double: b
     return out
 
 
-# Роли/старые коды -> цвета rich. rich работает своей палитрой, поэтому здесь
-# отдельное соответствие; 256-цветные индексы темы передаём как «color(N)».
+# Legacy ANSI codes -> rich color names; 256-color theme roles use color(N).
 _RICH_STYLE = {
     "32": "green", "33": "yellow", "36": "cyan",
     "31": "red", "35": "magenta", "1;36": "cyan", "1;35": "magenta",
@@ -456,7 +420,7 @@ def _rich_color(color: str) -> str:
 
 
 def rich_markup_panel(markup: str, title: str = "", color: str = "border", double: bool = False):
-    """Отрендерить rich-разметку в панель → список строк, либо None если нет rich."""
+    """Render rich markup into a panel -> list of lines, or None if rich is absent."""
     if not (HAS_RICH and Style.enabled):
         return None
     try:
@@ -481,7 +445,7 @@ def rich_markup_panel(markup: str, title: str = "", color: str = "border", doubl
 
 
 def panel(lines: list[str], title: str = "", color: str = "border", double: bool = False) -> list[str]:
-    """Панель из ПЛОСКОГО текста (без ANSI внутри). С rich — его панель, иначе ANSI."""
+    """Render a panel from PLAIN text (no embedded ANSI). Uses rich if available."""
     rich_lines = rich_markup_panel("\n".join(lines), title, color, double)
     if rich_lines is not None:
         return rich_lines

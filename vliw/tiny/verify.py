@@ -1,19 +1,19 @@
-"""Батарея проверок крошки. Один harness на все будущие крошки-2..N.
+"""Tiny verification suite. One harness for Tiny-1..N.
 
-Запуск:  python -m vliw.tiny.verify --weights vliw/tiny/weights.json
+Usage:  python -m vliw.tiny.verify --weights vliw/tiny/weights.json
          python -m vliw.tiny.verify --weights vliw/tiny/weights.json --fuzz 500 --train-sample 1000
 
-Проверки (каждая — PASS/FAIL + числа, без исключений наружу):
-  V1 valid на eval_hard / eval_wide / сценариях / семпле train / фуззе
-  V2 never-worse: tiny.makespan <= baseline.makespan везде
-  V3 детерминизм: два прогона дают одинаковый makespan и placements
-  V4 робастность: UNKNOWN-опкоды, 1 узел, цепочка, большой граф n=120
-  V5 веса: бюджет <=150К, roundtrip save/load бит-в-бит по скорам
-  V6 статистика: wins/losses/ties, средний зазор, знаковый тест (p-value)
-  V7 латентность: mean/p95 мс на schedule
-  V8 фолбэк без весов == baseline бит-в-бит
+Checks (each reports PASS/FAIL + numbers, no uncaught exceptions):
+  V1 valid on eval_hard / eval_wide / scenarios / train sample / fuzz
+  V2 never-worse: tiny.makespan <= baseline.makespan everywhere
+  V3 determinism: two runs yield identical makespan and placements
+  V4 robustness: UNKNOWN opcodes, 1 node, chain, large graph n=120
+  V5 weights: <=150K budget, bit-exact save/load roundtrip on scores
+  V6 statistics: wins/losses/ties, mean gap, sign test (p-value)
+  V7 latency: mean/p95 ms per schedule
+  V8 fallback without weights: never worse than baseline
 
-Выход — код 0 если все PASS, иначе 1. Отчет печатается таблицей.
+Exit code 0 if all PASS, else 1. Prints a summary table.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _load_jsonl(path: str, limit: int = 0) -> list[dict]:
 
 
 def _check_graphs(sched, base, prof, dags, tag, rows) -> dict:
-    """Прогон списка DAG: valid / never-worse / зазоры / латентность."""
+    """Run a list of DAGs: valid / never-worse / gaps / latency."""
     n = valid = win = loss = tie = opt_known = opt_hit = 0
     gap_t = gap_b = 0.0
     lat: list[float] = []
@@ -65,7 +65,7 @@ def _check_graphs(sched, base, prof, dags, tag, rows) -> dict:
         if not errs and res.schedule.complete:
             valid += 1
         else:
-            rows.append(("V1", tag, "FAIL", f"невалид на {dag.key}: {errs[:2]}"))
+            rows.append(("V1", tag, "FAIL", f"invalid on {dag.key}: {errs[:2]}"))
         if t > b:
             loss += 1
             rows.append(("V2", tag, "FAIL", f"{dag.key}: tiny {t} > base {b}"))
@@ -91,8 +91,8 @@ def _check_graphs(sched, base, prof, dags, tag, rows) -> dict:
 
 
 def _sign_test_p(wins: int, losses: int) -> float:
-    """Двусторонний знаковый тест (биномиальный, нормальная аппроксимация
-    с поправкой на непрерывность). H0: tiny и baseline равны."""
+    """Two-sided sign test (binomial, normal approximation with
+    continuity correction). H0: tiny and baseline are equal."""
     n = wins + losses
     if n == 0:
         return 1.0
@@ -100,17 +100,17 @@ def _sign_test_p(wins: int, losses: int) -> float:
     mean = n / 2.0
     sd = math.sqrt(n / 4.0)
     z = (mean - k - 0.5) / sd if sd else 0.0
-    # Phi через erf
+    # Phi via erf
     p_one = 0.5 * (1.0 - math.erf(z / math.sqrt(2.0))) if z > 0 else 0.5
     return min(1.0, 2.0 * p_one)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Батарея проверок крошки")
+    ap = argparse.ArgumentParser(description="Tiny verification suite")
     ap.add_argument("--weights", default="vliw/tiny/weights.json")
     ap.add_argument("--eval-hard", default="eval_hard.jsonl")
     ap.add_argument("--eval-dev", default="eval_hard_dev.jsonl",
-                    help="DEV трудных для отбора (сиды 20300xxx, без пересечения с eval_hard)")
+                    help="hard DEV set for selection (seeds 20300xxx, disjoint from eval_hard)")
     ap.add_argument("--eval-wide", default="eval_wide.jsonl")
     ap.add_argument("--train", default="train_merged.jsonl")
     ap.add_argument("--train-sample", type=int, default=500)
@@ -127,9 +127,9 @@ def main() -> int:
     base = GreedyListScheduler()
     ok = True
 
-    # V5: бюджет весов + roundtrip
+    # V5: weight budget + roundtrip
     if sched.tiny is None:
-        rows.append(("V5", "weights", "FAIL", "веса не загрузились: " + sched.load_error))
+        rows.append(("V5", "weights", "FAIL", "failed to load weights: " + sched.load_error))
         ok = False
         nparams = -1
     else:
@@ -147,19 +147,19 @@ def main() -> int:
         s0, s1 = sched.tiny.scores(X), t2.scores(X)
         same = all(x == y for x, y in zip(s0, s1))
         rows.append(("V5", "roundtrip", "PASS" if same else "FAIL",
-                     "save/load бит-в-бит" if same else "расхождение скоров"))
+                     "save/load bit-exact" if same else "score mismatch"))
         if not same:
             ok = False
         finite = all(math.isfinite(v) for v in s0)
         rows.append(("V5", "finite", "PASS" if finite else "FAIL",
-                     "скоры конечны" if finite else f"NaN/inf: {s0}"))
+                     "scores finite" if finite else f"NaN/inf: {s0}"))
         if not finite:
             ok = False
 
-    # V8: фолбэк не хуже baseline. Именно «не хуже», а не «ровно»: веер
-    # вокруг height работает и без весов (deliberate, см. tiny/README), и
-    # при широком веере на slotclash честно выигрывает. Контракт проекта —
-    # «хуже baseline не бывает», бит-в-бит никто не обещал.
+    # V8: fallback never worse than baseline (not strictly equal: the beam
+    # around height runs without weights by design, see tiny/README, and
+    # legitimately wins on slotclash with a wide beam. The contract is
+    # never-worse-than-baseline, not bit-exact equality).
     fb = TinyScheduler(weights="/nonexistent/weights.json")
     fb_same = True
     for key in ("simple4", "slotclash", "memstream"):
@@ -169,11 +169,11 @@ def main() -> int:
         if r1.makespan > r2.makespan or r1.validate():
             fb_same = False
     rows.append(("V8", "fallback", "PASS" if fb_same else "FAIL",
-                 "без весов не хуже baseline" if fb_same else "фолбэк хуже baseline"))
+                 "no-weights never worse than baseline" if fb_same else "fallback worse than baseline"))
     if not fb_same:
         ok = False
 
-    # V1/V2/V6/V7: наборы данных
+    # V1/V2/V6/V7: datasets
     sets: list[tuple[str, list]] = []
     hard = _load_jsonl(rp(a.eval_hard))
     sets.append(("hard", [(build_dag(parse_graph_entries(e["prompt"])),
@@ -213,16 +213,16 @@ def main() -> int:
             ok = False
         rows.append(("V1+V2", tag, stat, line))
 
-    # V6: знаковый тест по всем наборам
+    # V6: sign test across all sets
     p = _sign_test_p(total["win"], total["loss"])
     rows.append(("V6", "sign_test",
                  "PASS" if total["loss"] == 0 else "FAIL",
                  f"wins={total['win']} losses={total['loss']} ties={total['tie']} "
-                 f"p={p:.4f} (H0: равны)"))
+                 f"p={p:.4f} (H0: equal)"))
     if total["loss"] != 0:
         ok = False
 
-    # V3: детерминизм
+    # V3: determinism
     det = True
     for key in ("slotclash", "memstream"):
         dag = get_scenario(key)
@@ -233,11 +233,11 @@ def main() -> int:
         if p1 != p2:
             det = False
     rows.append(("V3", "determinism", "PASS" if det else "FAIL",
-                 "два прогона идентичны" if det else "расхождение!"))
+                 "two runs identical" if det else "mismatch!"))
     if not det:
         ok = False
 
-    # V4: робастность
+    # V4: robustness
     try:
         b = DagBuilder("unknown_ops", "", "")
         b.op("FADD", "a"); b.op("PRED", "p"); b.op("PACK", "q", 0)
@@ -245,7 +245,7 @@ def main() -> int:
         r = sched.schedule(b.build(), prof)
         r4a = (r.schedule.validate() == [] and r.schedule.complete)
     except Exception as e:  # noqa: BLE001
-        r4a = f"исключение: {e}"
+        r4a = f"exception: {e}"
     rows.append(("V4", "unknown_ops", "PASS" if r4a is True else "FAIL", str(r4a)))
     try:
         b = DagBuilder("single", "", "")
@@ -253,7 +253,7 @@ def main() -> int:
         r = sched.schedule(b.build(), prof)
         r4b = (r.schedule.validate() == [] and r.schedule.makespan == 1)
     except Exception as e:  # noqa: BLE001
-        r4b = f"исключение: {e}"
+        r4b = f"exception: {e}"
     rows.append(("V4", "single_node", "PASS" if r4b is True else "FAIL", str(r4b)))
     try:
         big = random_dag(123456789, n=120)
@@ -266,7 +266,7 @@ def main() -> int:
         if not r4c:
             ok = False
     except Exception as e:  # noqa: BLE001
-        rows.append(("V4", "n=120", "FAIL", f"исключение: {e}"))
+        rows.append(("V4", "n=120", "FAIL", f"exception: {e}"))
         ok = False
     if r4a is not True or r4b is not True:
         ok = False

@@ -1,80 +1,79 @@
-# Шаг 1: событийный контракт планировщика
+# Step 1: Scheduler Event Contract
 
-Составлено 20.08.2026 по коду, а не по памяти. Каждое утверждение ниже
-проверяется в репозитории — ссылки на файл и строку прилагаются.
+Compiled on 20.08.2026 from the code, not from memory. Every claim below is verifiable
+in the repository — file and line references are included.
 
-## Что чиним и почему это не «подключить /learned к Textual»
+## What we are fixing and why it is not "hook up /learned to Textual"
 
-Претензия снаружи звучит так: обученная модель встроена не в тот интерфейс, в
-основном она не работает и не отображается. Причина глубже.
+From the outside, the complaint sounds like: the trained model is wired into the wrong
+interface, and in the main one it neither works nor renders. The root cause runs deeper.
 
-Контракт между ядром и любым из интерфейсов (Textual `vliw/tui/`,
-построчный REPL) сегодня один: **команда печатает
-готовые ANSI-строки в stdout**. Для baseline, oracle и doctor это работает —
-они считают миллисекунды.
+The contract between the core and every interface (Textual `vliw/tui/`, line-by-line
+REPL) is currently just one thing: **a command prints pre-formatted ANSI strings to
+stdout**. For baseline, oracle, and doctor this works — they run in milliseconds.
 
-Локальная модель — первое, что считает 30..60 секунд и выдаёт ответ по частям.
-И контракт её не держит:
+The local model is the first thing that takes 30..60 seconds and emits its answer piece
+by piece. And the contract cannot hold it:
 
-- `vliw/tui/bridge.py:41` `run_command` заворачивает выполнение в
-  `redirect_stdout` и отдаёт буфер **только когда команда закончилась**.
-- `vliw/cli.py:925-940` при этом честно стримит токены через `print` +
-  `sys.stdout.flush()` — ради этого сделан коммит 98d8f05 «видно, как модель
-  пишет расписание, а не тишина на 30 секунд».
+- `vliw/tui/bridge.py:41` `run_command` wraps execution in `redirect_stdout` and returns
+  the buffer **only after the command finishes**.
+- Meanwhile, `vliw/cli.py:925-940` faithfully streams tokens via `print` +
+  `sys.stdout.flush()` — commit 98d8f05 was made specifically for this ("show the model
+  writing the schedule instead of 30 seconds of silence").
 
-То есть стриминг в основном интерфейсе **невидим по построению**. Экран
-замирает, потом вываливается стена текста. С `/learned --bench 15` — то же
-самое, только восемь минут.
+So streaming in the main interface is **invisible by construction**. The screen freezes,
+then dumps a wall of text. With `/learned --bench 15`, it is the same thing, except for
+eight minutes.
 
-Сопутствующее, из того же корня:
+Collateral symptoms from the same root:
 
-- `grep learned vliw/tui/` даёт **ноль совпадений**. У облачного агента
-  (Mistral/Gemini) есть целый экран со стримингом, трассой и панелью оснований;
-  у локальной модели экрана нет, и в подсказках `lab_screen.py:111` её нет.
-- Расписание модели рисуется текстом (`ui/learned_view.render_result`), а не в
-  ту решётку, где живут baseline и oracle. Сравнить глазами в одной сетке
-  нельзя, хотя весь смысл инструмента именно в ней.
-- Корень: `LearnedScheduler.schedule(dag, machine, on_text=...)` — лишний
-  kwarg, которого нет в протоколе `Scheduler` (`vliw/core/api.py`). В протоколе
-  нет ни прогресса, ни стриминга, ни отмены. Модель не поместилась в контракт,
-  и её прибили сбоку.
+- `grep learned vliw/tui/` returns **zero matches**. The cloud agent (Mistral/Gemini)
+  has a full screen with streaming, a trace, and a grounding panel; the local model has
+  no screen, and it is missing from the hints in `lab_screen.py:111`.
+- The model's schedule is rendered as plain text (`ui/learned_view.render_result`), not
+  in the grid where baseline and oracle live. You cannot compare them visually in one
+  grid, even though that is the entire point of the tool.
+- Root cause: `LearnedScheduler.schedule(dag, machine, on_text=...)` — an extra kwarg
+  that does not exist in the `Scheduler` protocol (`vliw/core/api.py`). The protocol has
+  no progress, no streaming, and no cancellation. The model did not fit the contract, so
+  it was bolted onto the side.
 
-**Вывод: чиним контракт, а не проводку.**
+**Conclusion: fix the contract, not the wiring.**
 
-## Находка, которая упростила дизайн
+## The finding that simplified the design
 
-Бэкенд модели — уже подпроцесс. `vliw/learned/runtime.py:436-458` запускает
-`llama-completion` через `Popen` и читает stdout по одному символу в цикле
-`while True`.
+The model backend is already a subprocess. `vliw/learned/runtime.py:436-458` launches
+`llama-completion` via `Popen` and reads stdout one character at a time in a
+`while True` loop.
 
-Отсюда три следствия:
+Three consequences follow:
 
-1. Превратить это в генератор — заменить `on_text(chunk)` на `yield Token(chunk)`.
-   Цикл уже нужной формы; ни потоков, ни очередей не требуется.
-2. Отмена **уже написана**: в `finally` стоит `proc.kill()`. У генератора
-   `gen.close()` бросает `GeneratorExit` в точке `yield`, дальше отрабатывает
-   тот же `finally`. Отмена достаётся бесплатно и корректно.
-3. `on_text` был не архитектурой, а следствием печати в stdout.
+1. Turning it into a generator means replacing `on_text(chunk)` with `yield Token(chunk)`.
+   The loop already has the right shape; no threads or queues are needed.
+2. Cancellation is **already written**: `finally` calls `proc.kill()`. On a generator,
+   `gen.close()` raises `GeneratorExit` at the `yield` point, and the same `finally`
+   runs. Cancellation comes for free and cleanly.
+3. `on_text` was not architecture — it was a side effect of printing to stdout.
 
-## Контракт
+## Contract
 
-Добавка в `vliw/core/api.py`. Ничего существующего не меняет.
+Addition to `vliw/core/api.py`. Changes nothing existing.
 
 ```python
 @dataclass(frozen=True)
 class Started:   who: str; note: str = ""
 @dataclass(frozen=True)
-class Note:      text: str; level: str = "dim"      # то, что сейчас Style.dim(...)
+class Note:      text: str; level: str = "dim"      # what is currently Style.dim(...)
 @dataclass(frozen=True)
-class Token:     text: str                          # сырой поток модели
+class Token:     text: str                          # raw model stream
 @dataclass(frozen=True)
-class Step:      step: DecisionStep; live: bool     # решение планировщика
+class Step:      step: DecisionStep; live: bool     # scheduler decision
 @dataclass(frozen=True)
-class Placed:    placement: Placement; live: bool   # заливка решётки
+class Placed:    placement: Placement; live: bool   # grid fill
 @dataclass(frozen=True)
-class Repaired:  instr: int; frm: int; to: int      # починка канала
+class Repaired:  instr: int; frm: int; to: int      # channel repair
 @dataclass(frozen=True)
-class Progress:  done: int; total: int; note: str   # bench, потом qemu
+class Progress:  done: int; total: int; note: str   # bench, later qemu
 @dataclass(frozen=True)
 class Done:      result: SchedulingResult
 @dataclass(frozen=True)
@@ -82,13 +81,13 @@ class Failed:    error: str
 
 
 def stream(scheduler, dag, model) -> Iterator[SchedulerEvent]:
-    """Единый вход. Планировщик без schedule_events() оборачивается адаптером."""
+    """Single entry point. A scheduler without schedule_events() is wrapped by an adapter."""
     fn = getattr(scheduler, "schedule_events", None)
     if fn is not None:
         yield from fn(dag, model)
         return
     yield Started(scheduler.short)
-    res = scheduler.schedule(dag, model)      # старый контракт — как был
+    res = scheduler.schedule(dag, model)      # old contract — unchanged
     for st in res.trace:
         yield Step(st, live=False)
     for p in res.schedule.placements.values():
@@ -96,117 +95,116 @@ def stream(scheduler, dag, model) -> Iterator[SchedulerEvent]:
     yield Done(res)
 ```
 
-Четыре свойства, ради которых это именно так.
+Four properties this design is built to guarantee:
 
-1. **Протокол `Scheduler` не меняется.** Докстринг `core/api.py` и README:43
-   обещают: заверни свой планировщик в класс с `schedule()` — и всё заработает.
-   Адаптер в `stream()` это обещание сохраняет. Baseline и oracle не трогаем.
-2. **`Placed` отдельно от `Step`.** У модели нет рассуждения по тактам,
-   `DecisionStep` она не производит; размещения производит. Виджету решётки
-   нужен ровно `Placed`, и он один работает для всех трёх планировщиков.
-3. **`live: bool` внутри события.** У baseline/oracle анимация — переигровка
-   готового `trace`, а не «смотрим, как оно думает». Флаг едет в самом событии,
-   чтобы интерфейс физически не мог соврать про это.
-4. **`Repaired` — отдельное событие.** Иначе починенный канал молча выглядит
-   как работа модели. Ровно то отмывание результата, против которого написан
-   докстринг `learned/scheduler.py`.
+1. **The `Scheduler` protocol does not change.** The `core/api.py` docstring and
+   README:43 promise: wrap your scheduler in a class with `schedule()` and everything
+   works. The adapter in `stream()` preserves that promise. Baseline and oracle are
+   untouched.
+2. **`Placed` is separate from `Step`.** The model has no cycle-by-cycle reasoning and
+   does not produce `DecisionStep`; it produces placements. The grid widget needs only
+   `Placed`, and that single event works for all three schedulers.
+3. **`live: bool` inside the event.** For baseline/oracle, animation is a replay of a
+   finished `trace`, not "watching it think". The flag travels inside the event itself
+   so the UI physically cannot lie about it.
+4. **`Repaired` is a separate event.** Otherwise a repaired channel silently looks like
+   the model's own work — the exact result-laundering that the `learned/scheduler.py`
+   docstring warns against.
 
-Построчный режим после этого — `for ev in stream(...): print(render_event(ev))`,
-поведение бит в бит сегодняшнее. Textual — воркер крутит тот же генератор и
-делает `call_from_thread` на каждое событие; паттерн уже используется в
-`lab_screen.py:219`. `bridge.py` остаётся, но только для отчётных команд
-(`/doctor`, `/compare`, `/asm`): отчёты — текст, планировщики — события.
+Line-by-line mode after this is `for ev in stream(...): print(render_event(ev))`,
+bit-for-bit identical to current behavior. In Textual, a worker iterates the same
+generator and calls `call_from_thread` per event; this pattern is already used in
+`lab_screen.py:219`. `bridge.py` stays, but only for report commands (`/doctor`,
+`/compare`, `/asm`): reports are text, schedulers are events.
 
-## Постоянный процесс модели: llama-server — СДЕЛАНО
+## Persistent model process: llama-server — DONE
 
-Реализовано в `vliw/learned/server.py`, подключено в `runtime.make_backend()`
-первым по приоритету. Ниже — замеры, а не ожидания. Машина: 12 логических
-ядер, 7.5 ГБ ОЗУ, WSL2. Участок `slotclash`, адаптер `lora-eos`.
+Implemented in `vliw/learned/server.py`, wired into `runtime.make_backend()` as first
+priority. Below are measurements, not expectations. Machine: 12 logical cores, 7.5 GB
+RAM, WSL2. Block `slotclash`, adapter `lora-eos`.
 
-| | процесс на команду | постоянный сервер |
+| | process per command | persistent server |
 |---|---|---|
-| прогон целиком | 32 с | **12.3 с** |
-| первый токен | ~20 с | **0.09 с** (тёплый кэш) |
-| первый прогон в сессии | 32 с | 19.5 с (7 с уходит на старт) |
-| отмена | процесс убит, следующий прогон снова 32 с | сервер жив, следующий 12.5 с |
-| RSS | 3.5 ГБ на время прогона | 3.5 ГБ постоянно |
+| full run | 32 s | **12.3 s** |
+| first token | ~20 s | **0.09 s** (warm cache) |
+| first run in session | 32 s | 19.5 s (7 s startup) |
+| cancellation | process killed, next run 32 s again | server stays alive, next run 12.5 s |
+| RSS | 3.5 GB during run | 3.5 GB resident |
 
-Ответ совпадает до строки: та же сборка llama.cpp, те же веса,
-`temperature=0`.
+Output matches line for line: same llama.cpp build, same weights, `temperature=0`.
 
-Что подтвердилось на практике:
+Confirmed in practice:
 
-- `--host <путь>.sock` — UNIX-сокет работает, портов нет вовсе.
-- `--lora-init-without-apply` + `POST /lora-adapters` — горячая смена адаптера
-  подтверждена (`{"success":true}`, шкалы меняются). Все неактивные гасим в
-  ноль явно: два включённых адаптера сложились бы, и получилась бы модель,
-  которую никто не обучал.
-- Сервер отдаёт **только продолжение**. Эвристика отсечения эха промпта
-  (`tail = prompt[-40:]`) на этом пути не нужна вовсе.
-- Обрыв соединения снимает задачу на сервере, сам сервер остаётся жив.
-  Проверено: отмена на пятом размещении, затем нормальный прогон.
-- `atexit` убирает процесс за собой: после выхода — ноль осиротевших серверов.
+- `--host <path>.sock` — UNIX socket works, no network ports at all.
+- `--lora-init-without-apply` + `POST /lora-adapters` — hot adapter switching confirmed
+  (`{"success":true}`, scales update). All inactive adapters are explicitly zeroed: two
+  enabled adapters would add together, yielding a model nobody ever trained.
+- The server returns **only the continuation**. The prompt-echo stripping heuristic
+  (`tail = prompt[-40:]`) is not needed at all on this path.
+- Dropping the connection cancels the task on the server while the server itself stays
+  alive. Verified: cancel on the fifth placement, followed by a normal run.
+- `atexit` cleans up the process: zero orphaned servers after exit.
 
-### Побочная находка: потоков надо вдвое меньше, чем ядер
+### Side finding: use half as many threads as cores
 
-Прежний код брал `os.cpu_count()` целиком. Замер (тёплый кэш промпта):
+The previous code used `os.cpu_count()` in full. Measurement (warm prompt cache):
 
-| потоков | время |
+| threads | time |
 |---|---|
-| 4 | 14.2 с |
-| 6 | **12.5 с** |
-| 8 | 12.8 с |
-| 12 (было) | 20.0 с |
+| 4 | 14.2 s |
+| 6 | **12.5 s** |
+| 8 | 12.8 s |
+| 12 (before) | 20.0 s |
 
-Все логические ядра — худший вариант из проверенных, и с большим отрывом:
-гипертрединг не даёт вторых АЛУ, а потоки дерутся за кэш и память. Теперь
-`default_threads()` = половина логических ядер, не больше восьми. Исправлено
-для обоих путей llama.cpp, не только для сервера.
+All logical cores was the worst option tested, by a wide margin: hyperthreading does
+not add extra ALUs, and threads fight over cache and memory. Now `default_threads()` =
+half of logical cores, capped at eight. Fixed for both llama.cpp paths, not just the
+server.
 
-## Принятые решения по интерфейсу
+## UI decisions made
 
-Приняты 20.08.2026.
+Made on 20.08.2026.
 
-- **Модель живёт и колонкой, и своим экраном.** Колонка в РАЗБОРЕ рядом с
-  baseline и oracle — база для сравнения; экран МОДЕЛЬ — глубокий разбор, bench,
-  статус адаптеров.
-- **Незаконное расписание показываем сырым, с красными ячейками.** Починка —
-  явное действие по клавише; после неё строка статуса меняется на «гибрид».
-- **Анимация baseline/oracle — по команде, с подписью «переигровка готового
-  разбора».** По умолчанию решётка появляется сразу.
+- **The model lives both as a column and as its own screen.** A column in LAB alongside
+  baseline and oracle is the basis for comparison; the MODEL screen provides deep
+  analysis, bench, and adapter status.
+- **Illegal schedules are shown raw, with red cells.** Repair is an explicit keypress
+  action; afterward the status line changes to "hybrid".
+- **Baseline/oracle animation is on demand, labeled "replay of completed analysis".**
+  By default, the grid appears immediately.
 
-### Последствие, которое надо принять осознанно
+### Consequence that must be accepted consciously
 
-Сегодня в CLI умолчание обратное: `repair` включён по умолчанию, чистый ответ
-модели прячется за `--pure` (`cli.py:857-860`). Решение «показываем сырое»
-переворачивает это. Чтобы не было двух правд в двух режимах, умолчание надо
-перевернуть **везде**: сырой ответ по умолчанию, `--repair` — явный флаг.
+Today in the CLI the default is inverted: `repair` is on by default, and the model's raw
+output hides behind `--pure` (`cli.py:857-860`). The "show raw" decision flips this.
+To avoid having two truths in two modes, the default must be flipped **everywhere**:
+raw output by default, `--repair` as an explicit flag.
 
-Это меняет наблюдаемое поведение существующей команды. Записано здесь, чтобы
-изменение было решением, а не побочным эффектом.
+This changes the observable behavior of an existing command. Recorded here so the change
+is a deliberate decision rather than a side effect.
 
-## Порядок работ
+## Order of work
 
-1. **Событийный контракт + llama-server.** `core/api.py` (+события, +`stream()`),
-   `learned/runtime.py` (генератор вместо callback, сервер вместо процесса на
-   команду), `cli.py::cmd_learned` поверх `stream()`, новый путь для
-   команд-планировщиков в `tui/screens/base.py`. Тесты: генератор, отмена
-   через `close()`, живучесть сервера.
-2. **Модель первым классом:** третья колонка в РАЗБОРЕ + экран МОДЕЛЬ.
-   Выпадает из шага 1 почти целиком.
-3. **L1 — замкнутый круг:** сторона записи в `asm_parser` (сегодня он только
-   читает), выдача валидного `.s` со своим расписанием, прогон под
-   `qemu-e2k-static`, измерение реальных тактов. Отдельный документ.
+1. **Event contract + llama-server.** `core/api.py` (+events, +`stream()`),
+   `learned/runtime.py` (generator instead of callback, server instead of process per
+   command), `cli.py::cmd_learned` on top of `stream()`, new path for scheduler commands
+   in `tui/screens/base.py`. Tests: generator, cancellation via `close()`, server
+   liveness.
+2. **Model as a first-class citizen:** third column in LAB + MODEL screen. Falls out
+   of step 1 almost entirely.
+3. **L1 — closed loop:** write side in `asm_parser` (currently read-only), emitting
+   valid `.s` with our own schedule, running under `qemu-e2k-static`, measuring real
+   cycles. Separate document.
 
-Про C: единственное место, где язык вообще заметен, — точный поиск в
-`core/oracle.py`. Это точечная замена одной функции по результатам замера, а не
-переписывание проекта, и делается после пункта 3, а не до.
+About C: the only place where the language is noticeable at all is exact search in
+`core/oracle.py`. That is a surgical replacement of one function guided by profiling,
+not a project rewrite, and comes after item 3, not before.
 
-## Чего этот план НЕ решает
+## What this plan does NOT solve
 
-- Не улучшает качество модели. Доля законных расписаний (33..79% на широком
-  эвале, см. ROADMAP.md) от смены контракта не меняется никак.
-- Не делает проект компилятором. После шага 3 он станет оптимизирующим
-  проходом над выводом `lcc` — это честное название, и это не то же самое.
-- Не отвечает, окупится ли постоянный сервер по памяти на слабой машине.
-  Мерить после, а не обещать до.
+- Does not improve model quality. The share of legal schedules (33..79% on the wide
+  eval, see ROADMAP.md) is completely unaffected by changing the contract.
+- Does not turn the project into a compiler. After step 3 it becomes an optimizing pass
+  over `lcc` output — that is the honest name, and it is not the same thing.
+- Does not answer whether a persistent server pays for its memory on a weak machine.
+  Measure afterward rather than promising beforehand.

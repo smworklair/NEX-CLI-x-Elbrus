@@ -1,7 +1,7 @@
-"""Штаб агентов: области, сборка промпта, вызов снимка подключения.
+"""Agent HQ: focus areas, prompt assembly, and connection snapshot dispatch.
 
-Без сети: backend подменяется записью вызовов. Сессия — настоящая
-(`cli.Session`), чтобы промпт собирался из тех же фактов, что у диалога.
+Runs offline: the backend is replaced with a call recorder, while `cli.Session`
+is real so prompts are built from the same scheduling facts as live dialogue.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ class FakeBackend:
 
     def complete(self, system: str, question: str, temperature: float = 0.3) -> str:
         self.calls.append((system, question))
-        return "готово"
+        return "done"
 
 
 def _session():
@@ -32,20 +32,20 @@ class TestAreas(unittest.TestCase):
         self.assertTrue(by_id["doctor"])
         self.assertTrue(by_id["compare"])
         self.assertEqual(by_id["free"], "")
-        self.assertEqual(len(by_id), len(hq.AREAS), "id областей уникальны")
+        self.assertEqual(len(by_id), len(hq.AREAS), "area IDs must be unique")
 
     def test_mission_system_appends_area_and_script(self) -> None:
-        system = hq.mission_system(_session(), "doctor", "отвечай списком")
-        self.assertIn("потери", system)
-        self.assertIn("отвечай списком", system)
+        system = hq.mission_system(_session(), "doctor", "reply as a bullet list")
+        self.assertIn("losses", system)
+        self.assertIn("reply as a bullet list", system)
         plain = hq.mission_system(_session(), "free", "")
-        self.assertNotIn("СКРИПТ МИССИИ", plain)
+        self.assertNotIn("MISSION SCRIPT", plain)
 
     def test_run_mission_routes_to_backend_snapshot(self) -> None:
         be = FakeBackend()
-        out = hq.run_mission(be, "SYS", "что медленно?")
-        self.assertEqual(out, "готово")
-        self.assertEqual(be.calls, [("SYS", "что медленно?")])
+        out = hq.run_mission(be, "SYS", "what is slow?")
+        self.assertEqual(out, "done")
+        self.assertEqual(be.calls, [("SYS", "what is slow?")])
 
 
 try:
@@ -56,7 +56,7 @@ except Exception:  # pragma: no cover
     HAS_TEXTUAL = False
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed")
 class TestHQDispatch(unittest.TestCase):
     def test_run_sends_task_and_shows_answer(self) -> None:
         import asyncio
@@ -75,7 +75,7 @@ class TestHQDispatch(unittest.TestCase):
             tmp, a, b, c = TestModelCatalogPanel._isolated()
             with a, b, c, \
                     mock.patch("vliw.agent.hq.run_mission",
-                               return_value="разбор готов") as mission:
+                               return_value="analysis ready") as mission:
                 app, session = _make_app("mind")
                 with redirect_stdout(io.StringIO()):
                     async with app.run_test(size=(120, 40)) as pilot:
@@ -94,7 +94,7 @@ class TestHQDispatch(unittest.TestCase):
                             task = sc.query_one("#hq-task", Input)
                             await pilot.click(task, offset=(2, 0))
                             await pilot.pause()
-                            await pilot.press(*"что медленно?", "enter")
+                            await pilot.press(*"what is slow?", "enter")
                             await app.workers.wait_for_complete()
                             await pilot.pause()
                             return (list(sc._hq_tasks),
@@ -104,8 +104,8 @@ class TestHQDispatch(unittest.TestCase):
         tasks, question = asyncio.run(go())
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["status"], "done")
-        self.assertEqual(tasks[0]["answer"], "разбор готов")
-        self.assertIn("что медленно?", question)
+        self.assertEqual(tasks[0]["answer"], "analysis ready")
+        self.assertIn("what is slow?", question)
 
 
 if __name__ == "__main__":

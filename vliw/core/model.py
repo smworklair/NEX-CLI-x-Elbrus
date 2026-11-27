@@ -1,62 +1,11 @@
-"""Игрушечная модель VLIW-машины.
+"""VLIW machine model for Elbrus (e2k-v6).
 
-Числа сняты с настоящего компилятора e2k (`lcc-1.29.16`, кросс-сборка под
-`e2k-v6`) тремя независимыми способами — у каждого параметра ниже проставлено,
-каким именно:
+Parameters are empirically probed from `lcc-1.29.16` (e2k-v6 cross-toolchain)
+via three independent methods: assembler port-encoding matrix, dependent-chain
+latencies, and independent-burst occupancies. Each parameter carries its source.
 
-  1. МАТРИЦА ПОРТОВ — спрошена у АССЕМБЛЕРА, а не угадана по одному листингу.
-     Для каждой пары (операция, канал) собирается крошечный `.s` с этой
-     операцией ровно в этом канале. Если аппаратно так нельзя, ассемблер
-     отвечает прямым отказом вида `'muls' cannot be encoded in ALC2`. Это
-     ответ про САМО ЖЕЛЕЗО (кодировку широкой команды), а не про то, что
-     решил сделать планировщик компилятора.
-
-  2. ЛАТЕНТНОСТИ — по ЦЕПОЧКЕ ЗАВИСИМЫХ операций (`x = x * b` пять раз
-     подряд). Каждая следующая обязана ждать результат предыдущей, поэтому
-     компилятор ВЫНУЖДЕН развести их ровно на латентность, и разница номеров
-     bundle читается напрямую.
-
-  3. ЗАНЯТИЕ ПОРТА (occupancy) — по ПОТОКУ НЕЗАВИСИМЫХ операций (8–16 штук,
-     операнды готовы заранее). Шаг между выдачами и есть темп, с которым
-     устройство принимает новую работу.
-
-ПОЧЕМУ ЭТО ВАЖНО: ПЕРВАЯ ВЕРСИЯ МОДЕЛИ БЫЛА НЕВЕРНА. Она построена по одному
-листингу `probe.c` с четырьмя независимыми делениями и четырьмя умножениями. В
-нём все `muls` легли на канал `,0` подряд — и это прочли как «умножитель один,
-держит порт 8 тактов». На самом деле четырёх операций просто не хватило, чтобы
-у планировщика lcc появился повод разложить их по каналам: он жадный и не
-парадлелит, пока и так укладывается. Проверка ассемблером показала, что
-умножение исполнимо на ЧЕТЫРЁХ каналах, а поток из 16 независимых умножений
-идёт по одному в такт. Мораль общая: по выводу компилятора видно то, что
-компилятор ЗАХОТЕЛ сделать, а не то, что железо МОЖЕТ.
-
-Что получилось в итоге (всё проверено, см. источники у каждого параметра):
-
-  * умножение (`muls`/`muld`) — каналы `,0 ,1 ,3 ,4`; четыре штуки собираются
-    в ОДНУ широкую команду; латентность 4, порт свободен уже в следующем такте;
-  * деление (`sdivs`) — ЕДИНСТВЕННЫЙ канал `,5` (ассемблер отвергает все
-    остальные пять); латентность 11, новое деление принимается раз в 2 такта;
-  * простая арифметика и логика (`adds`/`subs`/`ands`/`shls`) — все шесть
-    каналов, латентность 1;
-  * загрузка (`ldw`/`ldd`) — каналы `,0 ,2 ,3 ,5`, латентность 5;
-  * запись (`stw`/`std`) — только `,2` и `,5`.
-
-Вывод, ради которого модель и существует: у e2k не «шесть взаимозаменяемых
-АЛУ», а МАТРИЦА ВОЗМОЖНОСТЕЙ порт → допустимые операции. Но узкое место в ней
-ровно одно и настоящее — делитель. Умножитель, вопреки первой версии, узким
-местом не является.
-
-ЧЕГО ЗДЕСЬ СОЗНАТЕЛЬНО НЕТ: запретов на СОЧЕТАНИЯ операций в одной широкой
-команде. Ресурс описан как матрица «порт → операции», по одной операции за
-раз. У настоящей машины есть и второй класс ограничений: `tools/probe_matrix.py`
-находит у ассемблера ровно два запрета — запись в `,2` не сочетается с
-загрузкой в `,3`, а запись в `,5` — с загрузкой в `,0` (это «швы» между
-кластерами каналов `,0 ,1 ,2` и `,3 ,4 ,5`). Ни модель, ни планировщики их не
-учитывают. Пробел ИЗМЕРЕН и зафиксирован, а не забыт: проба печатает его при
-каждом прогоне, разбор — в examples/probes/README.md.
-
-Модель намеренно маленькая. Её задача — не воспроизвести e2k, а дать честный
-полигон, на котором видно разницу между эвристикой и оптимальным расписанием.
+Intentionally omits cross-cluster pair bans (`,2` store + `,3` load, `,5` store
++ `,0` load), documented in `examples/probes/README.md`.
 """
 
 from __future__ import annotations
@@ -64,76 +13,40 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Mapping
 
-# Источники параметров — печатаются в отчёте, чтобы демо не выглядело
-# как набор магических констант. Разные способы проверки — разная сила
-# утверждения, и это видно прямо в таблице `/model`.
-ASM = "проверено ассемблером (кодировка ALC)"
-CHAIN = "измерено (цепочка зависимых, lcc -O3)"
-BURST = "измерено (поток независимых, lcc -O3)"
-ASSUMED = "допущение"
+# Parameter provenance labels shown in /model reports.
+#
+#
+ASM = "verified by assembler (ALC encoding)"
+CHAIN = "measured (dependent chain, lcc -O3)"
+BURST = "measured (independent burst, lcc -O3)"
+ASSUMED = "assumed"
 
-# Оставлено ради обратной совместимости со старыми отчётами/текстами.
+# Retained for backwards compatibility with older reports.
 MEASURED = CHAIN
 PROBED = BURST
 
 
 @dataclass(frozen=True)
 class OpClass:
-    """Класс операций: сколько ждать результата и сколько держать порт."""
+    """Operation class: result latency, port occupancy, and provenance."""
 
     name: str
 
     latency: int
-    """Через сколько тактов результат доступен потребителю.
-
-    Если операция выдана в такте t, то зависимая может быть выдана не раньше
-    t + latency.
-    """
+    """Cycles until result is ready (consumer may issue at t + latency)."""
 
     occupancy: int = 1
-    """Сколько тактов операция удерживает свой порт монопольно.
+    """Cycles the operation holds its port exclusively (1 = fully pipelined).
 
-    1 = порт полностью конвейеризован и свободен уже в следующем такте.
-    >1 = устройство занято, следующая такая операция на этом порту ждёт
-    (наблюдалось у деления и умножения: единственный делитель/умножитель).
-
-    ИЗВЕСТНОЕ УПРОЩЕНИЕ, найденное 02.09.2026 на настоящем коде. Здесь одним
-    числом описаны две РАЗНЫЕ вещи: занятость исполнительного УСТРОЙСТВА и
-    занятость СЛОТА широкой команды. У деления они не совпадают.
-
-    Измерение `div8.c` (поток независимых делений, шаг 2) меряет устройство:
-    делитель принимает новое деление раз в два такта. Но в настоящем выводе
-    lcc (`examples/probes/fma_kernel.s`) `fdivd,5` стоит в такте 19, а
-    `aaurwd,5` — уже в такте 20. Компилятор незаконного кода не порождает,
-    значит СЛОТ `,5` освобождается через такт, и два такта занят только сам
-    делитель.
-
-    Модель сейчас блокирует и то и другое на 2 такта — то есть ПЕССИМИСТИЧНА:
-    запрещает законные расписания, а не разрешает незаконные. Это безопасная
-    сторона ошибки (оптимум получается не короче настоящего), но всё же
-    ошибка: разбор настоящего кода из-за неё показывает один ложный конфликт.
-
-    Развести их — структурная правка планировщика: `ChannelState` должен
-    держать два ресурса вместо одного. Она обесценит все снятые замеры разом,
-    поэтому отложена сознательно, а не забыта.
+    Known conservative simplification: for DIV/FDIV this blocks both the divider
+    unit and ALC slot `,5` for 2 cycles, whereas real e2k frees slot `,5` in 1.
     """
 
     latency_source: str = ASSUMED
     occupancy_source: str = ASSUMED
 
     free_slot: bool = False
-    """Операция кодируется ОТДЕЛЬНЫМ слогом и канал ALC не занимает.
-
-    Измерено 02.09.2026 у ассемблера на настоящем коде: `fmul_addd,0` и
-    `movad,0` в ОДНОЙ широкой команде принимаются, `adds,0` и `adds,0` —
-    нет. То есть номер после запятой у семейства `movaX` означает не тот же
-    ресурс, что у арифметики. У соседей по AAU это не так: `adds,2` со
-    `staad,2` ассемблер отвергает («several instructions into ALC2»), значит
-    запись в массив канал занимает по-настоящему.
-
-    Без этого различения модель находила конфликты там, где их нет, и не
-    могла воспроизвести расписание самого lcc.
-    """
+    """True if encoded in a separate syllable that does not consume an ALC slot (e.g. `movaX`)."""
 
     def blocks_channel(self) -> bool:
         return self.occupancy > 1
@@ -141,12 +54,7 @@ class OpClass:
 
 @dataclass(frozen=True)
 class Port:
-    """Один порт (слот) широкой команды и что он умеет исполнять.
-
-    `label` — как порт называется в `.s`-выводе lcc (например, `,5`).
-    `ops` — множество классов операций, которые физически исполнимы на порту.
-    Это и есть строка матрицы возможностей.
-    """
+    """Single wide-instruction port/slot (`label`, e.g. `,5`) and supported `ops`."""
 
     index: int
     label: str
@@ -158,12 +66,7 @@ class Port:
 
 @dataclass(frozen=True)
 class MachineModel:
-    """Конфигурация широкой команды: набор операций + матрица возможностей.
-
-    Ресурс машины описывается не числом «одинаковых каналов», а списком портов,
-    у каждого — свой набор допустимых операций (`Port.ops`). Ширина широкой
-    команды = число портов.
-    """
+    """Wide-instruction machine configuration: operation classes and port capability matrix."""
 
     name: str
     description: str
@@ -171,21 +74,21 @@ class MachineModel:
     ports: tuple[Port, ...]
     matrix_source: str = ASSUMED
 
-    # --- размеры ----------------------------------------------------------
+    # --- dimensions -------------------------------------------------------
 
     @property
     def width(self) -> int:
         return len(self.ports)
 
-    # --- запросы к модели -------------------------------------------------
+    # --- model queries ----------------------------------------------------
 
     def op(self, op_name: str) -> OpClass:
         try:
             return self.ops[op_name]
         except KeyError:
             raise KeyError(
-                f"операция {op_name!r} не описана в модели {self.name!r}; "
-                f"известны: {', '.join(sorted(self.ops))}"
+                f"operation {op_name!r} is not defined in model {self.name!r}; "
+                f"known: {', '.join(sorted(self.ops))}"
             ) from None
 
     def latency(self, op_name: str) -> int:
@@ -195,7 +98,7 @@ class MachineModel:
         return self.op(op_name).occupancy
 
     def channels_for(self, op_name: str) -> tuple[int, ...]:
-        """Индексы портов, на которых операция вообще исполнима."""
+        """Port indices capable of executing `op_name`."""
         return tuple(p.index for p in self.ports if op_name in p.ops)
 
     def port_label(self, index: int) -> str:
@@ -205,11 +108,7 @@ class MachineModel:
         return f",{index}"
 
     def sole_host_ops(self) -> dict[int, list[str]]:
-        """Порт → операции, для которых он ЕДИНСТВЕННЫЙ исполнитель.
-
-        Именно эти порты нельзя занимать посторонним: другого места для их
-        монопольных операций в машине нет.
-        """
+        """Map port index -> ops for which it is the EXCLUSIVE port."""
         out: dict[int, list[str]] = {}
         for op_name in self.ops:
             hosts = [p.index for p in self.ports if op_name in p.ops]
@@ -218,28 +117,22 @@ class MachineModel:
         return out
 
     def uniform_channels(self) -> bool:
-        """Все ли операции исполнимы на любом порту."""
+        """True if every operation can execute on every port."""
         return all(len(self.channels_for(o)) == self.width for o in self.ops)
 
     def has_blocking_ops(self) -> bool:
         return any(o.blocks_channel() for o in self.ops.values())
 
     def with_width(self, width: int) -> "MachineModel":
-        """Та же матрица, но суженная/расширенная до `width` портов.
-
-        Незаменимые порты (единственные носители какой-либо операции —
-        умножитель, делитель) сохраняются всегда, иначе часть графов стала бы
-        непланируемой. Урезаются/добираются только универсальные порты.
-        Нужно для массовых прогонов на машинах разной ширины (sweep, selfcheck).
-        """
+        """Return a copy scaled to `width` ports while preserving exclusive-port coverage."""
         if width == self.width:
             return self
 
         sole = set(self.sole_host_ops())
         specialized = [p for p in self.ports if p.index in sole]
         generic = [p for p in self.ports if p.index not in sole]
-        # Набор операций «универсального» порта — то, что доступно не на одном
-        # порту (на случай, если придётся достраивать порты сверх исходного).
+        # Ops for synthesized generic ports when widening beyond original width.
+        #
         generic_ops = frozenset(
             op for op in self.ops
             if sum(op in p.ops for p in self.ports) != 1
@@ -254,11 +147,11 @@ class MachineModel:
             else:
                 kept.append(Port(0, "", generic_ops))
 
-        # Страховка: после сужения у КАЖДОЙ операции должен остаться хотя бы
-        # один исполнитель, иначе часть графов станет непланируемой. Операции с
-        # узкой матрицей (запись — всего два порта, умножение — четыре) легко
-        # теряют все свои порты при width 1-2, поэтому недостающее доводим
-        # руками, а не надеемся, что «обычно везёт».
+        # Safety check: ensure every op class retains at least one capable port.
+        #
+        #
+        #
+        #
         homeless = [op for op in self.ops if not any(op in p.ops for p in kept)]
         if homeless:
             kept[-1] = Port(kept[-1].index, kept[-1].label,
@@ -271,193 +164,193 @@ class MachineModel:
 
 
 # --------------------------------------------------------------------------
-# Классы операций (латентности и монопольное занятие)
+# Operation classes (latencies and port occupancy)
 # --------------------------------------------------------------------------
 
 _OPS: dict[str, OpClass] = {
-    # Операция, которой в словаре нет. Нужна, чтобы разбор настоящего `.s`
-    # мог СКАЗАТЬ «не знаю» вместо того, чтобы выдать чужую операцию за
-    # сложение. Прежде парсер подменял незнакомое на ADD (иначе `model.op()`
-    # бросал KeyError и падало всё ниже по цепочке) — и `fdivd` уезжал в
-    # отчёт как арифметика с латентностью 1.
+    # Placeholder class for unknown mnemonics (latency 1, any channel).
     #
-    # Числа здесь — ЗАГЛУШКА, а не измерение: латентность 1 и любой канал.
-    # Расписание, посчитанное по ним, физике не соответствует; смысл класса
-    # в том, что теперь это видно в каждом отчёте, а не спрятано под ADD.
-    # Чинится не подкруткой этих чисел, а пополнением MNEMONICS настоящими
-    # классами (плавающая точка, предикаты, SIMD) с замером портов.
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
     "UNKNOWN": OpClass("UNKNOWN", latency=1, latency_source=ASSUMED),
 
-    # --- Классы, снятые 30.08.2026 на настоящем коде -------------------------
+    # --- Op classes probed 2026-08-30 on real lcc -O3 code -------------------
     #
-    # Появились потому, что на выводе `lcc -O3` обычной программы 37% операций
-    # не попадали ни в один класс и получали заглушку UNKNOWN. Мерены тем же
-    # способом, что и целочисленные: каналы — опросом ассемблера («cannot be
-    # encoded in ALC0»), латентность — шагом цепочки зависимых операций в
-    # выводе `lcc -O3`, занятость — шагом потока независимых.
     #
-    # Существующие восемь классов НЕ ТРОГАЛИСЬ ни на бит: обучающие данные и
-    # все три прогона используют только их, и добавление новых классов их не
-    # обесценивает.
+    #
+    #
+    #
+    #
+    #
+    # Existing 8 core classes remain bit-identical for training/eval parity.
+    #
+    #
 
-    # Сложение и умножение плавающей точки. Латентность 4 у обоих — цепочка
-    # из восьми операций разложилась ровно с шагом 4 (семь совпавших шагов),
-    # и одинарная точность не быстрее двойной. Поток независимых умножений
-    # идёт по одному в такт: устройство конвейеризовано.
+    # FP add and multiply: latency 4, occupancy 1 (pipelined).
+    #
+    #
+    #
     "FADD": OpClass("FADD", latency=4, occupancy=1,
                     latency_source=CHAIN, occupancy_source=BURST),
     "FMUL": OpClass("FMUL", latency=4, occupancy=1,
                     latency_source=CHAIN, occupancy_source=BURST),
 
-    # Сращённое умножение-сложение (fmul_addd и родня). Заведено 02.09.2026,
-    # когда разбор НАСТОЯЩЕГО вывода lcc -O3 показал: 16 операций из 138 в
-    # обычном числовом ядре — именно FMA, и модель их не знала вовсе
-    # (класс UNKNOWN, заглушка «латентность 1, любой канал»).
+    # FMA (fmul_addd etc.): latency 8, occupancy 1, all 6 channels.
     #
-    # Латентность 8 измерена по зависимым парам в том же настоящем листинге:
-    # из 12 пар «FMA → потребитель её результата» девять дали шаг ровно 8
-    # тактов, минимум по всем — тоже 8. Сходится со смыслом операции:
-    # умножение (4) и сложение (4), сплавленные в одну. Выигрыш FMA не во
-    # времени, а в СЛОТЕ широкой команды — она занимает один канал вместо двух.
     #
-    # Каналы и занятие спрошены у ассемблера (сильный метод, см. шапку файла):
-    # все шесть каналов принимают fmul_addd/adds/subd/subs/rsubd, и две FMA
-    # в одной широкой команде тоже кодируются — значит порт не общий.
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
     "FMA": OpClass("FMA", latency=8, occupancy=1,
                    latency_source=CHAIN, occupancy_source=ASM),
 
-    # Деление плавающей точки. ОДИНАРНАЯ точность быстрее двойной: цепочка
-    # fdivs дала шаг 11, fdivd — 14. Здесь взято 14 (худшее), чтобы
-    # планировщик не обещал того, чего машина не сделает; разделить на два
-    # класса можно, когда это начнёт стоить тактов.
-    # Поток независимых делений идёт с шагом 2 — делитель держит свой порт
-    # два такта, ровно как целочисленный.
+    # FP division: fdivs=11, fdivd=14 (using worst-case 14), occupancy 2.
+    #
+    #
+    #
+    #
+    #
     "FDIV": OpClass("FDIV", latency=14, occupancy=2,
                     latency_source=CHAIN, occupancy_source=BURST),
 
-    # Вычисление предикатов — основа if-conversion, самый частый класс в
-    # настоящем коде после арифметики. Латентность не мерена цепочкой
-    # (предикат не подставишь операндом сам себе), взята за 1.
+    # Predicate comparisons (if-conversion): latency 1 assumed.
+    #
+    #
     "PRED": OpClass("PRED", latency=1, latency_source=ASSUMED),
 
-    # Упакованные операции (SIMD), АРИФМЕТИКА: сложение, вычитание,
-    # сравнение, min/max. Всего два канала — самый узкий класс после
-    # делителя. Латентность не мерена, допущение.
+    # Packed SIMD arithmetic: 2 channels (,0 ,3); latency assumed.
+    #
+    #
     "PACK": OpClass("PACK", latency=1, latency_source=ASSUMED),
 
-    # Упакованные ЛОГИКА И СДВИГИ. Отдельный класс не из педантизма:
-    # ассемблер принимает `qpor`/`qpsllw` в четырёх каналах, а `qpaddw` —
-    # в двух. Считать их одним классом значило бы запретить планировщику
-    # половину законных мест.
+    # Packed SIMD logic/shifts: 4 channels (,0 ,1 ,3 ,4).
+    #
+    #
+    #
     "PACKLOG": OpClass("PACKLOG", latency=1, latency_source=ASSUMED),
 
-    # Устройство доступа к массивам (AAU) — аппаратная предподкачка цикла,
-    # фирменная черта e2k: `aaurw`/`aaurr` (обмен с регистрами устройства),
-    # `staa*` (запись через него). Живёт на ,2 и ,5 — ТЕХ ЖЕ каналах, что и
-    # обычная запись в память, и это не совпадение: устройство одно.
+    # Array Access Unit (AAU): `aaurw`/`aaurr`/`staa*` on channels ,2 ,5.
+    #
+    #
+    #
     "AAU": OpClass("AAU", latency=1, latency_source=ASSUMED),
 
-    # Чтение из буфера асинхронной предподкачки (APB), семейство `movaX`.
-    # Каналы измерены у ассемблера, латентность — НЕТ: изолированную пробу
-    # цепочкой собрать не удалось, а гадать в проекте не принято. Данные к
-    # моменту чтения уже подкачаны, поэтому единица правдоподобна — но это
-    # именно допущение, и в справочнике оно помечено как допущение.
+    # APB reads (`movaX`): separate syllable (free_slot=True); latency assumed.
+    #
+    #
+    #
+    #
     "MOVA": OpClass("MOVA", latency=1, latency_source=ASSUMED, free_slot=True),
     "MOVAQ": OpClass("MOVAQ", latency=1, latency_source=ASSUMED, free_slot=True),
     "INCR": OpClass("INCR", latency=1, latency_source=ASSUMED, free_slot=True),
 
-    # Преобразования формата: istofd (целое→вещественное), fdtoistr
-    # (вещественное→целое с округлением), fdtofs (двойная→одинарная) и родня.
-    # Заведены 02.09.2026: в настоящем коде они попадались как UNKNOWN, и это
-    # было видно прямо в интерфейсе — «UNKNOWN лат.1» в строке состояния.
+    # Format conversions (istofd, fdtoistr, fdtofs): channels ,0 ,1 ,3 ,4, lat 4.
     #
-    # Каналы ,0 ,1 ,3 ,4 — сняты у ассемблера у всех девяти мнемоник семейства.
-    # Совпадает с описанием из главы 4 руководства МЦСТ: вещественные
-    # устройства стоят в АЛУ0, АЛУ1, АЛУ3 и АЛУ4.
     #
-    # Латентность 4 — измерена цепочкой (examples/probes/conv_latency.c):
-    # fdtoistr -> istofd -> faddd -> fdtoistr, все шаги ровно по 4 такта.
-    # Совпадает с классом Fp официальной таблицы.
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
     "CONV": OpClass("CONV", latency=4, occupancy=1,
                     latency_source=CHAIN, occupancy_source=ASSUMED),
 
-    # Сращённые операции вида `shl_adds`, `getf_adds` — сдвиг и сложение за
-    # один такт. Только ,1 и ,4: их умеют не все арифметические устройства.
+    # Combined shift+add (`shl_adds`, `getf_adds`): channels ,1 ,4 only.
+    #
     "COMBO": OpClass("COMBO", latency=1, latency_source=ASSUMED),
 
-    # Работа с битовыми полями: `insf*` вставляет поле (четыре канала),
-    # `getf*`/`merge*` читают и выбирают (все шесть). Разные каналы —
-    # разные классы.
+    # Bitfield ops: `insf*` (4 channels), `getf*`/`merge*` (all 6).
+    #
+    #
     "INSF": OpClass("INSF", latency=1, latency_source=ASSUMED),
     "MERGE": OpClass("MERGE", latency=1, latency_source=ASSUMED),
 
-    # Запись в регистры состояния (`rwd`/`rws`, например %lsr — счётчик
-    # цикла). Единственный канал ,0.
+    # State register writes (`rwd`/`rws`, e.g. %lsr): exclusive channel ,0.
+    #
     "RW": OpClass("RW", latency=1, latency_source=ASSUMED),
     "ADD": OpClass("ADD", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "SUB": OpClass("SUB", latency=1, latency_source=CHAIN, occupancy_source=BURST),
     "AND": OpClass("AND", latency=1, latency_source=ASSUMED),
     "SHL": OpClass("SHL", latency=1, latency_source=ASSUMED),
-    # Умножение. Цепочка `x = x * b` разложилась с шагом 4 такта — это и есть
-    # латентность. Поток из 16 независимых умножений вышел ПО ОДНОМУ В ТАКТ
-    # подряд, без единого разрыва, значит устройство конвейеризовано и порт
-    # свободен уже в следующем такте (occupancy = 1).
-    # ВНИМАНИЕ: в первой версии здесь стояло 8/8 «по probe.c» — неверно, см.
-    # разбор в шапке файла.
+    # Multiply: latency 4, occupancy 1 (pipelined across 4 channels).
+    #
+    #
+    #
+    #
+    #
     "MUL": OpClass(
         "MUL", latency=4, occupancy=1,
         latency_source=CHAIN, occupancy_source=BURST,
     ),
-    # Деление. Цепочка зависимых делений дала шаг 11 тактов (латентность), а
-    # поток независимых — шаг 2 такта (темп приёма). То есть делитель ДЕРЖИТ
-    # свой единственный порт всего 2 такта, а не 13, как считалось раньше;
-    # единственность канала `,5` при этом подтвердилась.
+    # Division: latency 11, occupancy 2, exclusive port ,5.
+    #
+    #
+    #
     "DIV": OpClass(
         "DIV", latency=11, occupancy=2,
         latency_source=CHAIN, occupancy_source=BURST,
     ),
-    # Загрузка. Цепочка разыменований (`p = *p`) дала шаг 5 тактов. Раньше
-    # стояло 2 — это была нижняя оценка «не меньше двух», снятая с листинга,
-    # где загрузка и её потребитель просто оказались рядом.
+    # Load: latency 5 (pointer-chase probe), occupancy 1.
+    #
+    #
     "LOAD": OpClass("LOAD", latency=5, latency_source=CHAIN, occupancy_source=BURST),
-    # Запись. Раньше оба числа стояли допущением: «результат никто не
-    # потребляет, латентность из листингов не читается». Это верно для
-    # регистрового потребителя, но не единственный способ спросить машину.
+    # Store: occupancy 1 (burst + assembler pair probe), latency 2 (store->load same-addr probe).
     #
-    # ЗАНЯТИЕ КАНАЛА — измерено двумя независимыми способами, они совпали.
-    # 1) Поток независимых записей (examples/probes/store_burst.c, метод как
-    #    у mul_burst.c/div8.c): шестнадцать записей по разным адресам, сперва
-    #    все чтения в регистры, потом все записи — шаг между bundle равен 1.
-    # 2) Сильнее: спрошено у ассемблера напрямую (tools/probe_matrix.py,
-    #    тем же приёмом, что матрица портов) — `stw,2` и `stw,5` в ОДНОЙ
-    #    широкой команде ассемблер принимает. Значит порт не общий на все
-    #    каналы записи, и одна запись не блокирует другую даже в тот же
-    #    такт. Про компилятор здесь речи нет вообще — отвечает кодировка.
     #
-    # ЛАТЕНТНОСТЬ — измерена цепочкой, но другого рода, чем у остальных
-    # классов: `examples/probes/store_latency.c` пишет и тут же читает ОДНУ
-    # volatile-ячейку восемь раз подряд. volatile запрещает компилятору
-    # переставить запись и чтение или исключить обращение к памяти, поэтому
-    # шаг store→load в листинге — не выбор планировщика, а вынужденная
-    # видимость записи. Шаг оказался 2 такта (не 1, которым до сих пор
-    # подставлялась заглушка).
     #
-    # ОГОВОРКА, которую нельзя терять: это латентность «запись → чтение ТОГО
-    # ЖЕ адреса». В синтетическом генераторе графов (tools/vliw_gen.py) ребро
-    # от STORE к другой операции — структурное, не привязанное к реальному
-    # адресу: генератор не моделирует, что случайный потомок STORE обязан
-    # читать именно ту же ячейку. Число 2 в этом смысле не «латентность STORE
-    # вообще», а лучшая измеренная оценка того же порядка величины — надёжнее
-    # прежней единицы, но не такая же по силе, как измерение LOAD/MUL/DIV
-    # цепочкой через регистр, где потребитель — buквально та же операция.
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
     "STORE": OpClass("STORE", latency=2, occupancy=1,
                      latency_source=CHAIN, occupancy_source=BURST),
 }
 
 # --------------------------------------------------------------------------
-# Матрица портов: спрошена у ассемблера (см. шапку файла).
+# Port capability matrix verified via assembler.
 #
-#     операция              каналы          отказ ассемблера на остальных
+#     op                    channels        assembler error on others
 #     adds/subs/ands/shls   0 1 2 3 4 5     —
 #     muls / muld           0 1   3 4       "cannot be encoded in ALC2/ALC5"
 #     sdivs                         5       "cannot be encoded in ALC0..ALC4"
@@ -465,41 +358,41 @@ _OPS: dict[str, OpClass] = {
 #     stw / std               2       5     "cannot be encoded in ALC0/1/3/4"
 # --------------------------------------------------------------------------
 
-_ALU_PORTS = (0, 1, 2, 3, 4, 5)     # простая арифметика и логика — везде
-MUL_PORTS = (0, 1, 3, 4)            # умножитель НЕ один: четыре канала
-DIV_PORTS = (5,)                    # делитель действительно единственный
+_ALU_PORTS = (0, 1, 2, 3, 4, 5)     # basic ALU/logic — all 6 ports
+MUL_PORTS = (0, 1, 3, 4)            # multiplier is NOT exclusive: 4 channels
+DIV_PORTS = (5,)                    # divider is truly exclusive (,5)
 LOAD_PORTS = (0, 2, 3, 5)
 STORE_PORTS = (2, 5)
 
-# Каналы новых классов — СНЯТЫ У АССЕМБЛЕРА, не предположены. Способ тот же,
-# которым получена основная матрица: собрать операцию в каждом канале по
-# очереди и посмотреть, что он отвергнет («cannot be encoded in ALCn»).
-FADD_PORTS = (0, 1, 2, 3, 4, 5)     # сложение/умножение ПТ — во всех каналах
-FDIV_PORTS = (5,)                   # делитель ПТ — тот же единственный порт,
-                                    # что у целочисленного деления
-PRED_PORTS = (0, 1, 3, 4)           # предикаты: НЕ на ,2 и ,5
-PACK_PORTS = (0, 3)                 # упакованная арифметика: два канала
-PACKLOG_PORTS = (0, 1, 3, 4)        # упакованные логика и сдвиги — шире
-AAU_PORTS = (2, 5)                  # доступ к массивам: как у записи в память
-COMBO_PORTS = (1, 4)                # сращённые shl_adds / getf_adds
-INSF_PORTS = (0, 1, 3, 4)           # вставка битового поля
-MERGE_PORTS = (0, 1, 2, 3, 4, 5)    # выбор по предикату и чтение поля
-RW_PORTS = (0,)                     # запись в регистры состояния
+# Additional op-class channels verified with assembler.
+#
+#
+FADD_PORTS = (0, 1, 2, 3, 4, 5)     # FP add/mul — all 6 channels
+FDIV_PORTS = (5,)                   # FP divider — same exclusive port ,5 as INT DIV
+                                    #
+PRED_PORTS = (0, 1, 3, 4)           # predicates: not on ,2 or ,5
+PACK_PORTS = (0, 3)                 # packed arithmetic: 2 channels
+PACKLOG_PORTS = (0, 1, 3, 4)        # packed logic/shifts: 4 channels
+AAU_PORTS = (2, 5)                  # AAU: same channels as STORE
+COMBO_PORTS = (1, 4)                # combined shl_adds / getf_adds
+INSF_PORTS = (0, 1, 3, 4)           # bitfield insert
+MERGE_PORTS = (0, 1, 2, 3, 4, 5)    # predicate merge / bitfield extract
+RW_PORTS = (0,)                     # state register write
 
 _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
-    "UNKNOWN": _ALU_PORTS,          # заглушка: где стоит, там и считаем
+    "UNKNOWN": _ALU_PORTS,          # placeholder: any channel
     "FADD": FADD_PORTS,
     "FMUL": FADD_PORTS,
-    "FMA": FADD_PORTS,          # сращённое умножение-сложение — тоже везде
+    "FMA": FADD_PORTS,          # FMA — all 6 channels
     "FDIV": FDIV_PORTS,
     "PRED": PRED_PORTS,
     "PACK": PACK_PORTS,
     "PACKLOG": PACKLOG_PORTS,
     "AAU": AAU_PORTS,
-    "MOVA": (0, 1, 2, 3),       # movab/h/w/d/qp — сняты у ассемблера
-    "MOVAQ": (0, 2),            # четверной уже: ассемблер отвергает ,1 и ,3
-    "INCR": (0, 1, 2, 3, 4, 5), # канал не занимает (free_slot), см. asm_parser
-    "CONV": (0, 1, 3, 4),       # преобразования формата — сняты у ассемблера
+    "MOVA": (0, 1, 2, 3),       # movab/h/w/d/qp — verified with assembler
+    "MOVAQ": (0, 2),            # quad narrower: assembler rejects ,1 and ,3
+    "INCR": (0, 1, 2, 3, 4, 5), # does not occupy ALC slot (free_slot)
+    "CONV": (0, 1, 3, 4),       # format conversions — verified with assembler
     "COMBO": COMBO_PORTS,
     "INSF": INSF_PORTS,
     "MERGE": MERGE_PORTS,
@@ -514,30 +407,17 @@ _PORTS_FOR_OP: dict[str, tuple[int, ...]] = {
     "STORE": STORE_PORTS,
 }
 
-# Оставлено ради старых ссылок в тексте: «тот самый» порт делителя.
+# Kept for legacy references: the exclusive divider port.
 DIV_PORT = DIV_PORTS[0]
 
 
 # --------------------------------------------------------------------------
-# Профили
+# Machine profiles
 # --------------------------------------------------------------------------
 
 
 def _measured_ports() -> tuple[Port, ...]:
-    """Матрица возможностей, подтверждённая ассемблером (см. шапку файла).
-
-        порт    ADD SUB AND SHL  LOAD STORE  MUL  DIV
-        ,0       •   •   •   •    •            •
-        ,1       •   •   •   •                 •
-        ,2       •   •   •   •    •     •
-        ,3       •   •   •   •    •            •
-        ,4       •   •   •   •                 •
-        ,5       •   •   •   •    •     •           •   ← единственный делитель
-
-    Умножение исполнимо на четырёх портах (и четыре штуки собираются в одну
-    широкую команду), поэтому монополии умножителя НЕТ. Единственное настоящее
-    узкое место — делитель на `,5`.
-    """
+    """Assembler-verified capability matrix for e2k-v6 (6 ports, exclusive divider on `,5`)."""
     ports = []
     for idx in range(6):
         ops = {op for op, chans in _PORTS_FOR_OP.items() if idx in chans}
@@ -548,16 +428,16 @@ def _measured_ports() -> tuple[Port, ...]:
 E2K_V6_MEASURED = MachineModel(
     name="e2k-v6-measured",
     description=(
-        "Матрица возможностей, спрошенная у ассемблера lcc: 6 портов "
-        "(`,0`…`,5`). Простая арифметика и логика — на всех шести; умножение — "
-        "на четырёх (`,0 ,1 ,3 ,4`), загрузка — на четырёх (`,0 ,2 ,3 ,5`), "
-        "запись — на двух (`,2 ,5`), а деление — на ЕДИНСТВЕННОМ порту `,5`. "
-        "Делитель и есть единственное настоящее узкое место машины: умножитель "
-        "конвейеризован и монополии не создаёт. Второе узкое место найдено "
-        "измерением 30.08.2026: запись в регистры состояния (`rwd`) ассемблер "
-        "принимает ТОЛЬКО в `,0`. Там же выяснилось, что на `,5` делителей "
-        "два — целочисленный и с плавающей точкой, — а устройство доступа к "
-        "массивам делит порты `,2 ,5` с записью в память."
+        "Assembler-verified lcc capability matrix: 6 ports (`,0`..`,5`). "
+        "Basic ALU/logic on all 6; MUL on 4 (`,0 ,1 ,3 ,4`); LOAD on 4 "
+        "(`,0 ,2 ,3 ,5`); STORE on 2 (`,2 ,5`); DIV and FDIV on exclusive "
+        "port `,5`; state writes (`rwd`) on exclusive port `,0`; AAU shares "
+        "`,2 ,5` with STORE."
+        ""
+        ""
+        ""
+        ""
+        ""
     ),
     ops=_OPS,
     ports=_measured_ports(),
@@ -565,10 +445,10 @@ E2K_V6_MEASURED = MachineModel(
 )
 
 
-# Старый наивный профиль: шесть полностью равноправных каналов. Оставлен как
-# явный baseline для контраста — на нём видно, как выглядела бы задача, если бы
-# все порты действительно были взаимозаменяемы (и почему тогда планировать
-# нечего: любой свободный порт подошёл бы).
+# Naive uniform profile (6 symmetric ports), kept as a contrast baseline.
+#
+#
+#
 def _homogeneous_ports() -> tuple[Port, ...]:
     allops = frozenset(_OPS)
     return tuple(Port(idx, f",{idx}", allops) for idx in range(6))
@@ -577,11 +457,11 @@ def _homogeneous_ports() -> tuple[Port, ...]:
 NAIVE_HOMOGENEOUS = MachineModel(
     name="naive_homogeneous",
     description=(
-        "УСТАРЕВШЕЕ допущение (оставлено для контраста): 6 полностью "
-        "равноправных каналов, любая операция на любом канале. Ассемблер это "
-        "опровергает: деление кодируется только в `,5`, умножение — в четырёх "
-        "каналах, запись — в двух. Профиль полезен как baseline: показывает "
-        "вырожденный случай, где выбор порта вообще не является решением."
+        "LEGACY contrast profile: 6 fully symmetric channels (every op on "
+        "every port). Refuted by assembler probing, kept as a degenerate baseline."
+        ""
+        ""
+        ""
     ),
     ops=_OPS,
     ports=_homogeneous_ports(),
@@ -590,9 +470,9 @@ NAIVE_HOMOGENEOUS = MachineModel(
 
 
 # --------------------------------------------------------------------------
-# ОПРОВЕРГНУТЫЙ профиль первой версии. Оставлен НАМЕРЕННО, а не забыт: на нём
-# видно, как одна неверно прочитанная проба меняет все выводы. Именно из него
-# следовала «монополия умножителя», которой в железе нет.
+# REFUTED v1 profile (kept intentionally to show how model errors skew results).
+#
+#
 # --------------------------------------------------------------------------
 
 _FIRSTPROBE_OPS: dict[str, OpClass] = dict(_OPS) | {
@@ -613,7 +493,7 @@ def _firstprobe_ports() -> tuple[Port, ...]:
     for idx in range(6):
         ops = set(universal)
         if idx == 0:
-            ops.add("MUL")      # «единственный умножитель» — как считалось
+            ops.add("MUL")      # assumed exclusive multiplier
         if idx == 5:
             ops.add("DIV")
         ports.append(Port(idx, f",{idx}", frozenset(ops)))
@@ -623,14 +503,14 @@ def _firstprobe_ports() -> tuple[Port, ...]:
 E2K_V6_FIRSTPROBE = MachineModel(
     name="e2k-v6-firstprobe",
     description=(
-        "ОПРОВЕРГНУТАЯ первая версия модели — оставлена, чтобы было с чем "
-        "сравнить. Построена по одному листингу probe.c с четырьмя умножениями: "
-        "все легли на `,0` подряд, и это прочли как «умножитель один, держит "
-        "порт 8 тактов». Проверка ассемблером показала, что умножение "
-        "кодируется в четырёх каналах, а поток независимых умножений идёт по "
-        "одному в такт. Здесь же завышены латентности DIV (13 против 11) и "
-        "занижена LOAD (2 против 5). Прогоните один сценарий на обоих профилях "
-        "— увидите, насколько выводы зависят от качества модели."
+        "REFUTED v1 model (kept for comparison): misread probe.c as a single "
+        "8-cycle multiplier on `,0`, overestimated DIV (13 vs 11), and "
+        "underestimated LOAD (2 vs 5)."
+        ""
+        ""
+        ""
+        ""
+        ""
     ),
     ops=_FIRSTPROBE_OPS,
     ports=_firstprobe_ports(),
@@ -652,37 +532,26 @@ def get_profile(name: str) -> MachineModel:
         return PROFILES[name]
     except KeyError:
         raise SystemExit(
-            f"неизвестный профиль {name!r}; доступны: {', '.join(PROFILES)}"
+            f"unknown profile {name!r}; available: {', '.join(PROFILES)}"
         ) from None
 
 
 def describe_model(model: MachineModel) -> list[tuple[str, str, str]]:
-    """Таблица параметров модели: (параметр, значение, источник)."""
+    """Model parameter table: (parameter, value, source)."""
     rows: list[tuple[str, str, str]] = [
-        ("портов в команде", str(model.width), model.matrix_source),
+        ("ports per wide instruction", str(model.width), model.matrix_source),
     ]
     for name in sorted(model.ops, key=lambda n: (model.ops[n].latency, n)):
         op = model.ops[name]
-        val = f"{op.latency} т."
+        val = f"{op.latency} cyc"
         if op.blocks_channel():
-            val += f", порт занят {op.occupancy}"
-        rows.append((f"латентность {name}", val, op.latency_source))
+            val += f", occupancy {op.occupancy}"
+        rows.append((f"latency {name}", val, op.latency_source))
     return rows
 
 
 def capability_matrix(model: MachineModel) -> tuple[list[str], list[list[bool]]]:
-    """Матрица возможностей в виде (порядок операций, строки-порты).
-
-    Возвращает список операций (столбцы) и для каждого порта — булев вектор
-    «умеет / не умеет». Отдельно от описания — для табличной/цветной отрисовки.
-
-    ПОРЯДОК СТОЛБЦОВ — по УЗОСТИ, самые ограниченные слева. Пока классов было
-    восемь, годился любой порядок; на девятнадцати таблица перестала читаться,
-    а сортировка по латентности уводила единственное настоящее узкое место —
-    делитель — в дальний конец строки. Планировщику важно не «сколько тактов
-    стоит операция», а «сколько у неё мест»: класс с одним каналом определяет
-    расписание сильнее, чем медленный класс с шестью.
-    """
+    """Return `(op_order, port_rows)` capability matrix sorted narrowest-first."""
     op_names = sorted(model.ops,
                       key=lambda n: (len(model.channels_for(n)),
                                      -model.ops[n].latency, n))

@@ -1,9 +1,9 @@
-"""Полноэкранный интерфейс NEX на Textual.
+"""Full-screen NEX interface built on Textual.
 
-Единственный полноэкранный интерфейс: если Textual не установлен,
-`vliw.cli` откатывается на построчный режим (или сразу `--plain`).
-Логика планирования сюда не переезжает: здесь только интерфейс, данные
-по-прежнему приходят из `vliw.core`.
+The sole full-screen UI: if Textual is not installed, `vliw.cli` falls back to
+line-oriented mode (or directly to `--plain`). Scheduling logic does not live
+here: this package handles presentation only, while data still comes from
+`vliw.core`.
 """
 
 from __future__ import annotations
@@ -11,21 +11,21 @@ from __future__ import annotations
 import os
 import sys
 
-# Терминалы, про которые известно, что 24-битный цвет они понимают. WSL и
-# большинство дистрибутивов выставляют TERM=xterm-256color и НЕ выставляют
-# COLORTERM — библиотека вывода из-за этого честно считает, что цветов 256,
-# и сводит поверхности интерфейса (полотно, панель, активная панель) в один
-# почти чёрный: между #0b0d12 и #141822 в палитре из 256 цветов разницы нет.
+# Terminals known to support 24-bit color. WSL and most Linux distributions set
+# TERM=xterm-256color without setting COLORTERM — the output library then
+# assumes 256 colors and collapses UI surfaces (canvas, panel, active panel)
+# into one near-black shade, since #0b0d12 and #141822 map to the same 256-color
+# palette entry.
 _TRUECOLOR_HINTS = ("256color", "kitty", "alacritty", "wezterm", "ghostty",
                     "contour", "foot", "truecolor", "direct")
 
 
 def prefer_truecolor() -> None:
-    """Разрешить 24-битный цвет, если терминал на него похож.
+    """Enable 24-bit color when the terminal appears to support it.
 
-    Ничего не делает, если COLORTERM уже задан (пользователь или терминал
-    сказали своё слово) или если TERM не похож на современный: на линуксовой
-    консоли и в `dumb` 24-битные последовательности только испортят вывод.
+    Does nothing if COLORTERM is already set (the user or terminal has already
+    decided) or if TERM does not look modern: on the Linux console or `dumb`,
+    24-bit escape sequences would only corrupt output.
     """
     if os.environ.get("COLORTERM"):
         return
@@ -35,7 +35,7 @@ def prefer_truecolor() -> None:
 
 
 def available() -> bool:
-    """Можно ли поднять полноэкранный интерфейс в этом окружении."""
+    """Return whether the full-screen interface can start in this environment."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return False
     try:

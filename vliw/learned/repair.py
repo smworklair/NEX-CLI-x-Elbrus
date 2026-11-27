@@ -1,31 +1,24 @@
-"""Починка каналов в ответе модели: такты её, каналы — законные.
+"""Channel repair for model output: keep its cycles, assign valid channels.
 
-Зачем
------
-Замер показал ровное разделение: когда модель не путает канал, она попадает
-ТОЧНО в оптимум (разрыв 0.00 такта на всех законных расписаниях). А когда
-путает — почти всегда это STORE, поставленный на канал, который его не
-исполняет. В обучающих данных прогона 1 не было ни одной операции STORE,
-и модель просто не знает, что её исполняют только `,2` и `,5`.
+WHY
+---
+Evaluation showed a clean split: when the model does not pick an invalid
+channel, it hits the EXACT optimum (0.00 cycle gap on all valid schedules).
+When it errs, it is almost always STORE placed on an unsupported channel
+(run-1 training data had zero STOREs, so the model did not know STORE only
+executes on `,2` and `,5`).
 
-То есть модель ошибается не в ПЛАНИРОВАНИИ, а в знании матрицы машины. План
-— распределение инструкций по тактам — у неё хороший. Матрица же известна
-точно и лежит в `vliw/core/model.py`.
+The model is strong at scheduling across cycles and weak on the hardware
+channel matrix, which is known exactly in `vliw/core/model.py`. Leaving cycles
+untouched and reassigning only channels preserves makespan (determined purely
+by cycles) and fixes channel validity.
 
-Отсюда решение: оставить такты модели нетронутыми и переназначить только
-каналы, законным образом. Это не подгонка метрики: makespan определяется
-ТАКТАМИ, а такты мы не трогаем вообще. Меняется лишь то, на какой порт внутри
-своего такта попадёт операция.
+HONESTY. A repaired schedule is a hybrid, not pure model output. `repair()`
+returns a detailed report of every moved channel so the UI surfaces it.
 
-ЧЕСТНОСТЬ. Результат после починки — уже не «что выдала модель», а гибрид, и
-называть его надо гибридом. Поэтому `repair()` возвращает подробный отчёт:
-сколько каналов переставлено и каких именно. Интерфейс это печатает, а не
-прячет: видно, где модель справилась сама, а где её починили.
-
-ЧЕГО ЗДЕСЬ НЕТ. Такты не двигаются никогда. Если модель нарушила зависимость
-(потребитель раньше производителя) или занятость порта во времени — почининть
-это, не меняя тактов, нельзя, и мы честно не пытаемся: такие нарушения
-остаются, и `Schedule.validate()` их покажет.
+NON-GOALS. Cycles are never moved. Dependency or multi-cycle port-occupancy
+violations cannot be fixed without moving cycles and are left for
+`Schedule.validate()` to report.
 """
 
 from __future__ import annotations
@@ -38,12 +31,12 @@ from ..core.schedule import Schedule
 
 @dataclass
 class RepairReport:
-    """Что именно пришлось переставить."""
+    """Exact record of channel reassignments."""
 
     moved: list[tuple[int, int, int]] = field(default_factory=list)
-    """(инструкция, канал модели, канал после починки)."""
+    """(instruction, model_channel, repaired_channel)."""
     impossible: list[int] = field(default_factory=list)
-    """Инструкции, которым законного канала в их такте не нашлось вовсе."""
+    """Instructions for which no valid channel existed in their cycle."""
 
     @property
     def touched(self) -> int:
@@ -56,19 +49,16 @@ class RepairReport:
 
 def _assign_cycle(ops: list[tuple[int, tuple[int, ...], int]],
                   width: int) -> dict[int, int] | None:
-    """Раздать каналы инструкциям одного такта. None — раздать нельзя.
+    """Assign channels to instructions in a single cycle. Returns None if impossible.
 
-    Двудольное паросочетание Куна, тот же приём, что в точном поиске
-    (`vliw/core/oracle.py`). Жадно «первый свободный подходящий» здесь не
-    годится: операция с широкой матрицей может занять единственный канал,
-    нужный операции с узкой (например ADD сядет на `,2`, и STORE, которому
-    доступны только `,2` и `,5`, останется без места, хотя решение было).
+    Uses Kuhn bipartite matching (same technique as `vliw/core/oracle.py`).
+    Greedy "first free" fails when a flexible op takes the sole port needed by
+    a narrow op (e.g. ADD takes `,2`, stranding STORE which only runs on `,2,5`).
 
-    `ops` — (инструкция, допустимые каналы, канал по мнению модели). Порядок
-    предпочтения внутри инструкции: сначала канал модели, потом остальные, —
-    чтобы не переставлять то, что и так законно.
+    `ops` is (instruction, allowed_channels, model_channel). Preference order
+    tries the model channel first so already-valid channels stay unchanged.
     """
-    owner: dict[int, int] = {}          # канал -> инструкция
+    owner: dict[int, int] = {}          # channel -> instruction
 
     def augment(op: int, allowed: tuple[int, ...], seen: set[int],
                 prefer: int) -> bool:
@@ -91,8 +81,7 @@ def _assign_cycle(ops: list[tuple[int, tuple[int, ...], int]],
     holders: dict[int, tuple[tuple[int, ...], int]] = {
         i: (allowed, prefer) for i, allowed, prefer in ops
     }
-    # Сначала те, кому выбирать не из чего: у них меньше всего вариантов, и
-    # если начать с «широких», узкие останутся без места.
+    # Most constrained ops first: starting with flexible ops can starve narrow ones.
     for i, allowed, prefer in sorted(ops, key=lambda t: len(t[1])):
         if not augment(i, allowed, set(), prefer):
             return None
@@ -100,9 +89,9 @@ def _assign_cycle(ops: list[tuple[int, tuple[int, ...], int]],
 
 
 def repair(sched: Schedule, model: MachineModel) -> tuple[Schedule, RepairReport]:
-    """Новое расписание с теми же тактами и законными каналами.
+    """Return a new schedule with the same cycles and valid channels.
 
-    Исходное расписание не меняется — возвращается копия.
+    Does not mutate the input schedule.
     """
     dag = sched.dag
     report = RepairReport()
@@ -120,9 +109,8 @@ def repair(sched: Schedule, model: MachineModel) -> tuple[Schedule, RepairReport
 
         got = _assign_cycle(ops, model.width)
         if got is None:
-            # Раздать законно нельзя — в этом такте больше операций, чем
-            # подходящих портов. Такты мы не двигаем, значит оставляем как
-            # было: пусть validate() покажет настоящую проблему.
+            # Cannot assign validly — more ops in this cycle than compatible ports.
+            # We never move cycles, so leave as-is for validate() to report.
             for i, _, prefer in ops:
                 fixed.place(i, cycle, prefer)
                 report.impossible.append(i)

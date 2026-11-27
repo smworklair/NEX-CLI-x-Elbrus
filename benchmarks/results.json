@@ -15,13 +15,13 @@
       "compiler_cycles": 12,
       "compiler_schedule": false,
       "compiler_problem": [
-        "расписание компилятора не восстановлено",
-        "раскладка по каналам не сходится с моделью"
+        "compiler schedule could not be reconstructed",
+        "channel layout conflicts with machine model"
       ],
       "lower_bound": 8,
       "critical_path": 7,
       "resource_bound": 8,
-      "binding": "ресурсы",
+      "binding": "resources",
       "baseline": 8,
       "tiny": 8,
       "oracle": 8,
@@ -32,38 +32,38 @@
         "oracle": true
       },
       "ms": {
-        "baseline": 0.429,
-        "tiny": 0.812,
-        "oracle": 0.8
+        "baseline": 0.382,
+        "tiny": 1.588,
+        "oracle": 1.0
       },
       "problems": [
         {
           "line": 5,
           "kind": "channel",
           "severity": "error",
-          "text": "muls в канале ,2 — этого канала у операции нет",
-          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+          "text": "muls on channel ,2 — unsupported channel for MUL",
+          "hint": "MUL executes on: ,0 ,1 ,3 ,4"
         },
         {
           "line": 6,
           "kind": "busy",
           "severity": "error",
-          "text": "канал ,3 в такте 0 уже занят: muls из строки 5",
-          "hint": "порт освободится в такте 1"
+          "text": "channel ,3 in cycle 0 is already busy: muls on line 5",
+          "hint": "port frees in cycle 1"
         },
         {
           "line": 11,
           "kind": "channel",
           "severity": "error",
-          "text": "muls в канале ,2 — этого канала у операции нет",
-          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+          "text": "muls on channel ,2 — unsupported channel for MUL",
+          "hint": "MUL executes on: ,0 ,1 ,3 ,4"
         },
         {
           "line": 12,
           "kind": "busy",
           "severity": "error",
-          "text": "канал ,3 в такте 1 уже занят: muls из строки 11",
-          "hint": "порт освободится в такте 2"
+          "text": "channel ,3 in cycle 1 is already busy: muls on line 11",
+          "hint": "port frees in cycle 2"
         }
       ],
       "errors": 4,
@@ -82,13 +82,13 @@
       "compiler_cycles": 7,
       "compiler_schedule": false,
       "compiler_problem": [
-        "расписание компилятора не восстановлено",
-        "раскладка по каналам не сходится с моделью"
+        "compiler schedule could not be reconstructed",
+        "channel layout conflicts with machine model"
       ],
       "lower_bound": 9,
       "critical_path": 8,
       "resource_bound": 9,
-      "binding": "ресурсы",
+      "binding": "resources",
       "baseline": 9,
       "tiny": 9,
       "oracle": 9,
@@ -99,108 +99,108 @@
         "oracle": true
       },
       "ms": {
-        "baseline": 0.452,
-        "tiny": 0.576,
-        "oracle": 0.9
+        "baseline": 0.36,
+        "tiny": 0.479,
+        "oracle": 0.7
       },
       "problems": [
         {
           "line": 6,
           "kind": "channel",
           "severity": "error",
-          "text": "muls в канале ,2 — этого канала у операции нет",
-          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+          "text": "muls on channel ,2 — unsupported channel for MUL",
+          "hint": "MUL executes on: ,0 ,1 ,3 ,4"
         },
         {
           "line": 7,
           "kind": "busy",
           "severity": "error",
-          "text": "канал ,3 в такте 0 уже занят: muls из строки 6",
-          "hint": "порт освободится в такте 1"
+          "text": "channel ,3 in cycle 0 is already busy: muls on line 6",
+          "hint": "port frees in cycle 1"
         },
         {
           "line": 13,
           "kind": "channel",
           "severity": "error",
-          "text": "muls в канале ,2 — этого канала у операции нет",
-          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+          "text": "muls on channel ,2 — unsupported channel for MUL",
+          "hint": "MUL executes on: ,0 ,1 ,3 ,4"
         },
         {
           "line": 14,
           "kind": "busy",
           "severity": "error",
-          "text": "канал ,3 в такте 1 уже занят: muls из строки 13",
-          "hint": "порт освободится в такте 2"
+          "text": "channel ,3 in cycle 1 is already busy: muls on line 13",
+          "hint": "port frees in cycle 2"
         },
         {
           "line": 20,
           "kind": "ready",
           "severity": "error",
-          "text": "%r20 читается в такте 2, а muls из строки 4 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r20 read in cycle 2, but muls on line 4 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 20,
           "kind": "ready",
           "severity": "error",
-          "text": "%r21 читается в такте 2, а muls из строки 5 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r21 read in cycle 2, but muls on line 5 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 21,
           "kind": "ready",
           "severity": "error",
-          "text": "%r22 читается в такте 2, а muls из строки 6 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r22 read in cycle 2, but muls on line 6 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 21,
           "kind": "ready",
           "severity": "error",
-          "text": "%r23 читается в такте 2, а muls из строки 7 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r23 read in cycle 2, but muls on line 7 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 25,
           "kind": "ready",
           "severity": "error",
-          "text": "%r24 читается в такте 3, а muls из строки 11 отдаст его только в такте 5",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r24 read in cycle 3, but muls on line 11 produces it only in cycle 5",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 25,
           "kind": "ready",
           "severity": "error",
-          "text": "%r25 читается в такте 3, а muls из строки 12 отдаст его только в такте 5",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r25 read in cycle 3, but muls on line 12 produces it only in cycle 5",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 26,
           "kind": "ready",
           "severity": "error",
-          "text": "%r26 читается в такте 3, а muls из строки 13 отдаст его только в такте 5",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r26 read in cycle 3, but muls on line 13 produces it only in cycle 5",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 26,
           "kind": "ready",
           "severity": "error",
-          "text": "%r27 читается в такте 3, а muls из строки 14 отдаст его только в такте 5",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r27 read in cycle 3, but muls on line 14 produces it only in cycle 5",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 31,
           "kind": "ready",
           "severity": "error",
-          "text": "%r28 читается в такте 4, а muls из строки 18 отдаст его только в такте 6",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r28 read in cycle 4, but muls on line 18 produces it only in cycle 6",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 31,
           "kind": "ready",
           "severity": "error",
-          "text": "%r29 читается в такте 4, а muls из строки 19 отдаст его только в такте 6",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r29 read in cycle 4, but muls on line 19 produces it only in cycle 6",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         }
       ],
       "errors": 14,
@@ -222,13 +222,13 @@
       "compiler_cycles": 3,
       "compiler_schedule": false,
       "compiler_problem": [
-        "расписание компилятора не восстановлено",
-        "раскладка по каналам не сходится с моделью"
+        "compiler schedule could not be reconstructed",
+        "channel layout conflicts with machine model"
       ],
       "lower_bound": 8,
       "critical_path": 8,
       "resource_bound": 8,
-      "binding": "и то, и другое",
+      "binding": "both",
       "baseline": 8,
       "tiny": 8,
       "oracle": 8,
@@ -239,80 +239,80 @@
         "oracle": true
       },
       "ms": {
-        "baseline": 0.278,
-        "tiny": 0.353,
-        "oracle": 0.6
+        "baseline": 0.212,
+        "tiny": 0.276,
+        "oracle": 0.4
       },
       "problems": [
         {
           "line": 6,
           "kind": "channel",
           "severity": "error",
-          "text": "muls в канале ,2 — этого канала у операции нет",
-          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+          "text": "muls on channel ,2 — unsupported channel for MUL",
+          "hint": "MUL executes on: ,0 ,1 ,3 ,4"
         },
         {
           "line": 7,
           "kind": "busy",
           "severity": "error",
-          "text": "канал ,3 в такте 0 уже занят: muls из строки 6",
-          "hint": "порт освободится в такте 1"
+          "text": "channel ,3 in cycle 0 is already busy: muls on line 6",
+          "hint": "port frees in cycle 1"
         },
         {
           "line": 11,
           "kind": "ready",
           "severity": "error",
-          "text": "%r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r20 read in cycle 1, but muls on line 6 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 11,
           "kind": "ready",
           "severity": "error",
-          "text": "%r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r21 read in cycle 1, but muls on line 7 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 12,
           "kind": "ready",
           "severity": "error",
-          "text": "%r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r20 read in cycle 1, but muls on line 6 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 12,
           "kind": "ready",
           "severity": "error",
-          "text": "%r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r21 read in cycle 1, but muls on line 7 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 13,
           "kind": "channel",
           "severity": "error",
-          "text": "muls в канале ,2 — этого канала у операции нет",
-          "hint": "MUL исполним на: ,0 ,1 ,3 ,4"
+          "text": "muls on channel ,2 — unsupported channel for MUL",
+          "hint": "MUL executes on: ,0 ,1 ,3 ,4"
         },
         {
           "line": 13,
           "kind": "ready",
           "severity": "error",
-          "text": "%r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r20 read in cycle 1, but muls on line 6 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 14,
           "kind": "busy",
           "severity": "error",
-          "text": "канал ,3 в такте 1 уже занят: muls из строки 13",
-          "hint": "порт освободится в такте 2"
+          "text": "channel ,3 in cycle 1 is already busy: muls on line 13",
+          "hint": "port frees in cycle 2"
         },
         {
           "line": 14,
           "kind": "ready",
           "severity": "error",
-          "text": "%r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r21 read in cycle 1, but muls on line 7 produces it only in cycle 4",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         }
       ],
       "errors": 10,
@@ -331,13 +331,13 @@
       "compiler_cycles": 6,
       "compiler_schedule": false,
       "compiler_problem": [
-        "расписание компилятора не принято проверкой",
-        "8 замечаний, первое: r40 выдана в такте 1, но операнд r20 готов только к такту 5. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно"
+        "compiler schedule failed validation",
+        "8 issues, first: r40 issued in cycle 1, but operand r20 is not ready until cycle 5. Common cause on -O3 code is a software-pipelined loop: values carry from the previous iteration while the parser reads the block linearly"
       ],
       "lower_bound": 15,
       "critical_path": 15,
       "resource_bound": 15,
-      "binding": "и то, и другое",
+      "binding": "both",
       "baseline": 15,
       "tiny": 15,
       "oracle": 15,
@@ -348,66 +348,66 @@
         "oracle": true
       },
       "ms": {
-        "baseline": 1.056,
-        "tiny": 0.537,
-        "oracle": 1.0
+        "baseline": 0.298,
+        "tiny": 0.358,
+        "oracle": 0.6
       },
       "problems": [
         {
           "line": 10,
           "kind": "ready",
           "severity": "error",
-          "text": "%r20 читается в такте 1, а ldw из строки 3 отдаст его только в такте 5",
-          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+          "text": "%r20 read in cycle 1, but ldw on line 3 produces it only in cycle 5",
+          "hint": "LOAD latency is 5 cyc; requires a 5-cycle gap"
         },
         {
           "line": 13,
           "kind": "ready",
           "severity": "error",
-          "text": "%r40 читается в такте 2, а muls из строки 10 отдаст его только в такте 5",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r40 read in cycle 2, but muls on line 10 produces it only in cycle 5",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 13,
           "kind": "ready",
           "severity": "error",
-          "text": "%r21 читается в такте 2, а ldw из строки 4 отдаст его только в такте 5",
-          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+          "text": "%r21 read in cycle 2, but ldw on line 4 produces it only in cycle 5",
+          "hint": "LOAD latency is 5 cyc; requires a 5-cycle gap"
         },
         {
           "line": 17,
           "kind": "ready",
           "severity": "error",
-          "text": "%r31 читается в такте 3, а muls из строки 14 отдаст его только в такте 6",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r31 read in cycle 3, but muls on line 14 produces it only in cycle 6",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 18,
           "kind": "ready",
           "severity": "error",
-          "text": "%r22 читается в такте 3, а ldw из строки 8 отдаст его только в такте 6",
-          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+          "text": "%r22 read in cycle 3, but ldw on line 8 produces it only in cycle 6",
+          "hint": "LOAD latency is 5 cyc; requires a 5-cycle gap"
         },
         {
           "line": 21,
           "kind": "ready",
           "severity": "error",
-          "text": "%r43 читается в такте 4, а muls из строки 18 отдаст его только в такте 7",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r43 read in cycle 4, but muls on line 18 produces it only in cycle 7",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         },
         {
           "line": 21,
           "kind": "ready",
           "severity": "error",
-          "text": "%r23 читается в такте 4, а ldw из строки 9 отдаст его только в такте 6",
-          "hint": "латентность LOAD — 5 т.; нужен разрыв в 5 т."
+          "text": "%r23 read in cycle 4, but ldw on line 9 produces it only in cycle 6",
+          "hint": "LOAD latency is 5 cyc; requires a 5-cycle gap"
         },
         {
           "line": 24,
           "kind": "ready",
           "severity": "error",
-          "text": "%r42 читается в такте 5, а muls из строки 17 отдаст его только в такте 7",
-          "hint": "латентность MUL — 4 т.; нужен разрыв в 4 т."
+          "text": "%r42 read in cycle 5, but muls on line 17 produces it only in cycle 7",
+          "hint": "MUL latency is 4 cyc; requires a 4-cycle gap"
         }
       ],
       "errors": 8,

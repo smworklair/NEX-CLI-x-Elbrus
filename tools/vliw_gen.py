@@ -1,43 +1,10 @@
-"""Генератор синтетических примеров планирования для e2k-v6-measured.
+"""Synthetic VLIW scheduling dataset generator for e2k-v6-measured (CP-SAT optimal).
 
-Зачем это нужно
----------------
-Модель учится не «знаниям об Эльбрусе», а структурной задаче: по графу
-зависимостей выдать законное расписание широкой команды. Тексты и статьи про
-Эльбрус такой модели не помогают вообще — ей нужны ПАРЫ «граф → расписание».
-Этот скрипт их и делает.
+Imports machine parameters directly from `vliw.core.model` and validates every
+generated schedule with `Schedule.validate()`.
 
-Матрица портов, латентности, occupancy и ширина НЕ дублируются: они берутся
-импортом из `vliw.core.model` — единственного источника истины по профилю.
-Профиль выбирается ключом `--profile` (по умолчанию e2k-v6-measured).
-Проверка расписаний идёт настоящим `Schedule.validate()` из `vliw.core`, а не
-копией логики.
-
-(Первая версия этого файла лежала вне проекта и дублировала константы из
-validate_kaggle.py. Дубли убраны — расхождение профиля теперь невозможно.)
-
-Расписания считаются через CP-SAT и **доказуемо оптимальны** (не эвристика):
-meta.makespan — истинный минимум, поэтому «разрыв до оптимума» в валидации
-остаётся честной метрикой.
-
-Формат берётся из твоего существующего датасета
------------------------------------------------
-Первые 2 строки промпта validate_kaggle.py пропускает (`splitlines()[2:]`),
-то есть это шапка. Что в ней написано — знает только твой генератор, поэтому
-скрипт НЕ придумывает её сам, а считывает из образца:
-
-    python vliw_gen.py --format-from train.jsonl --n 20000 --out train_extra.jsonl
-
-Он же определит по образцу, в каком порядке идут строки расписания
-(по id или по такту). Без --format-from будет использована шапка по умолчанию
-(--header), и это почти наверняка НЕ совпадёт с твоим форматом.
-
-Проверка
---------
+    python tools/vliw_gen.py --format-from train.jsonl --n 20000 --out train_extra.jsonl
     python -m tools.vliw_gen --selftest
-
-Прогоняет сгенерированное через `Schedule.validate()` из vliw.core:
-все примеры обязаны быть законны и с разрывом до оптимума 0.
 """
 
 from __future__ import annotations
@@ -50,7 +17,7 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:      # запуск и как `python tools/vliw_gen.py`
+if str(_ROOT) not in sys.path:      # support running directly as `python tools/vliw_gen.py`
     sys.path.insert(0, str(_ROOT))
 
 from vliw.core.dag import DAG, Instr as DagInstr          # noqa: E402
@@ -58,9 +25,9 @@ from vliw.core.model import DEFAULT_PROFILE, get_profile  # noqa: E402
 from vliw.core.schedule import Schedule                   # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Профиль. Источник истины — vliw.core.model, здесь только ссылка на него.
-# Модуль-глобальные CHANNELS/LATENCY/OCCUPANCY/WIDTH — производные кэши для
-# горячих циклов CP-SAT; переключаются через set_profile().
+# Machine profile sourced from vliw.core.model (cached for CP-SAT loops).
+#
+#
 # ---------------------------------------------------------------------------
 
 MODEL = get_profile(DEFAULT_PROFILE)
@@ -71,7 +38,7 @@ OCCUPANCY: dict[str, int] = {}
 
 
 def set_profile(name: str) -> None:
-    """Переключить профиль машины и пересобрать производные таблицы."""
+    """Switch machine profile and rebuild cached tables."""
     global MODEL, WIDTH, CHANNELS, LATENCY, OCCUPANCY
     MODEL = get_profile(name)
     WIDTH = MODEL.width
@@ -87,8 +54,8 @@ def occupancy(op: str) -> int:
     return OCCUPANCY.get(op, 1)
 
 
-# Как часто встречается операция. Дешёвая арифметика — костяк, DIV — редкость
-# (он занимает единственный канал 5 на 2 такта и тянет makespan на 11).
+# Default op frequency weights (cheap ALU common, DIV rare).
+#
 OP_WEIGHTS = {
     "ADD": 26, "SUB": 16, "AND": 12, "SHL": 10,
     "LOAD": 14, "STORE": 8, "MUL": 11, "DIV": 3,
@@ -96,12 +63,12 @@ OP_WEIGHTS = {
 _OPS = list(OP_WEIGHTS)
 _W = [OP_WEIGHTS[o] for o in _OPS]
 
-# Смесь с давлением на монопольный канал `,5`. Замер 31.08.2026: на обычных
-# весах зазор «жадный хуже оптимума» есть у 1% графов, на этих — у 6%.
-# Причина в том, что трудность создаёт не размер графа, а КОНКУРЕНЦИЯ за
-# узкий порт: DIV живёт только на `,5`, STORE — на `,2` и `,5`, LOAD — на
-# `,0 ,2 ,3 ,5`. Пока DIV встречается в 3% операций, до конкуренции дело не
-# доходит и жадная эвристика оптимальна. См. `vliw/core/hardness.py`.
+# High exclusive-port-,5 pressure mix (increases hard-graph yield 1% -> 6%).
+#
+#
+#
+#
+#
 PRESSURE_WEIGHTS = {
     "ADD": 10, "SUB": 6, "AND": 4, "SHL": 4,
     "LOAD": 20, "STORE": 26, "MUL": 10, "DIV": 20,
@@ -109,7 +76,7 @@ PRESSURE_WEIGHTS = {
 
 
 # ---------------------------------------------------------------------------
-# Разбор формата + проверка настоящим валидатором проекта
+# Format parsing + core Schedule.validate() verification
 # ---------------------------------------------------------------------------
 
 class Instr:
@@ -122,13 +89,13 @@ class Instr:
 
 
 _GRAPH_LINE = re.compile(r"^(\d+)\s+(\w+)(?:\s+<-\s+(.*))?$")
-_COMPLETION_LINE = re.compile(r"(\d+):\s*такт=(\d+)\s*канал=(\d+)")
+_COMPLETION_LINE = re.compile(r"(\d+):\s*(?:cycle|\u0442\u0430\u043a\u0442)=(\d+)\s*(?:channel|\u043a\u0430\u043d\u0430\u043b)=(\d+)")
 
 
 def parse_prompt(prompt: str) -> list[Instr]:
     instrs = []
     for line in prompt.strip().splitlines()[2:]:
-        if line.strip() == "расписание:":
+        if line.strip() in ("schedule:", "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435:"):
             break
         m = _GRAPH_LINE.match(line.strip())
         if not m:
@@ -144,7 +111,7 @@ def decode_completion(text: str) -> dict[int, tuple[int, int]]:
 
 
 def to_dag(instrs: list[Instr], key: str = "gen") -> DAG:
-    """Локальные Instr → настоящий DAG проекта (для Schedule.validate)."""
+    """Convert local Instr list to a core DAG for Schedule.validate."""
     return DAG(key, key, "", [
         DagInstr(ins.id, f"n{ins.id}", ins.op, ins.preds, f"n{ins.id}")
         for ins in instrs
@@ -160,17 +127,12 @@ def build_schedule(instrs: list[Instr],
 
 
 def validate(instrs: list[Instr], placements: dict[int, tuple[int, int]]) -> list[str]:
-    """Проверка НАСТОЯЩИМ валидатором проекта (vliw.core.schedule.Schedule).
-
-    Единственное, что добавлено сверху, — отсев id вне диапазона: Schedule
-    хранит размещения в словаре и на мусорных id падал бы по KeyError, а нам
-    нужен внятный текст ошибки.
-    """
+    """Validate placements with core `Schedule.validate()`, guarding out-of-range IDs."""
     errs: list[str] = []
     n = len(instrs)
     bad_ids = sorted(i for i in placements if not (0 <= i < n))
     if bad_ids:
-        errs.append(f"несуществующие id инструкций в ответе модели: {bad_ids}")
+        errs.append(f"nonexistent instruction IDs in model output: {bad_ids}")
         placements = {i: p for i, p in placements.items() if 0 <= i < n}
 
     return errs + build_schedule(instrs, placements).validate()
@@ -181,23 +143,16 @@ def makespan(instrs: list[Instr], placements: dict[int, tuple[int, int]]) -> int
 
 
 # ---------------------------------------------------------------------------
-# Генерация графа
+# DAG generation
 # ---------------------------------------------------------------------------
 
 def gen_graph(rng: random.Random, n: int, shape: str,
               weights: dict[str, int] | None = None) -> list[Instr]:
-    """Случайный DAG в топологическом порядке (preds всегда < id).
-
-    shape задаёт «характер» графа, чтобы датасет не был однообразным:
-      wide   — много независимых операций, мало связей (проверяет ширину/каналы)
-      chain  — длинные цепочки (проверяет латентности и критический путь)
-      mixed  — среднее между ними
-      layer  — слоями, каждый слой зависит от предыдущего (типично для циклов)
-    """
+    """Generate a random topological DAG (preds < id) with shape wide/chain/mixed/layer."""
     instrs: list[Instr] = []
-    # Веса параметром, а не только модульной переменной: `/hard` подмешивает
-    # свою смесь, и делать это присваиванием в чужой модуль — напрашиваться
-    # на состояние, которое переживёт вызов.
+    # Accept op_weights as a parameter to avoid mutating module globals.
+    #
+    #
     ops = list(weights) if weights else _OPS
     w = [weights[o] for o in ops] if weights else _W
 
@@ -233,7 +188,7 @@ def gen_graph(rng: random.Random, n: int, shape: str,
         if idx > 0 and rng.random() < p_dep:
             k = min(idx, rng.randint(1, max_deps))
             if shape == "chain" and rng.random() < 0.7:
-                # тянем зависимость от свежих — получаются длинные цепочки
+                # bias predecessors toward recent nodes to form long chains
                 lo = max(0, idx - 3)
                 pool = list(range(lo, idx))
                 k = min(k, len(pool))
@@ -245,11 +200,11 @@ def gen_graph(rng: random.Random, n: int, shape: str,
 
 
 # ---------------------------------------------------------------------------
-# Оптимальное расписание через CP-SAT
+# Optimal scheduling via CP-SAT
 # ---------------------------------------------------------------------------
 
 def schedule_optimal(instrs: list[Instr], time_limit: float = 10.0):
-    """Возвращает (placements, makespan) с ДОКАЗАННЫМ оптимумом или None."""
+    """Return `(placements, makespan)` if proven optimal, else None."""
     from ortools.sat.python import cp_model
 
     n = len(instrs)
@@ -261,12 +216,12 @@ def schedule_optimal(instrs: list[Instr], time_limit: float = 10.0):
     for i, ins in enumerate(instrs):
         m.Add(end[i] == start[i] + LATENCY[ins.op])
 
-    # зависимости: операнд должен быть готов
+    # dependencies: operand must be ready
     for ins in instrs:
         for p in ins.preds:
             m.Add(start[ins.id] >= end[p])
 
-    # канал: ровно один из разрешённых
+    # channel: choose exactly one allowed port
     on_ch: dict[tuple[int, int], object] = {}
     for i, ins in enumerate(instrs):
         allowed = CHANNELS[ins.op]
@@ -277,7 +232,7 @@ def schedule_optimal(instrs: list[Instr], time_limit: float = 10.0):
             lits.append(b)
         m.AddExactlyOne(lits)
 
-    # занятость канала: интервалы не пересекаются
+    # channel occupancy: non-overlapping intervals
     for c in range(WIDTH):
         ivs = []
         for i, ins in enumerate(instrs):
@@ -291,13 +246,13 @@ def schedule_optimal(instrs: list[Instr], time_limit: float = 10.0):
         if ivs:
             m.AddNoOverlap(ivs)
 
-    # Ширина (<= WIDTH выдач в такте) отдельным ограничением НЕ задаётся:
-    # каналов ровно WIDTH=6, NoOverlap разрешает на каждом канале не больше
-    # одной операции в такте, а выданные в такте t — подмножество занимающих
-    # канал в такте t. Значит выдач в такте не может быть больше 6 по
-    # построению. Явная запись через n x horizon булевых переменных замедляла
-    # решатель на порядок и ничего не добавляла. Валидатор всё равно проверяет
-    # это условие на выходе, а selftest подтверждает, что нарушений нет.
+    # Width (<= WIDTH issues/cycle) is implied by NoOverlap on WIDTH channels.
+    #
+    #
+    #
+    #
+    #
+    #
 
     ms = m.NewIntVar(0, horizon + 12, "makespan")
     m.AddMaxEquality(ms, end)
@@ -308,7 +263,7 @@ def schedule_optimal(instrs: list[Instr], time_limit: float = 10.0):
     solver.parameters.num_search_workers = 8
     status = solver.Solve(m)
     if status != cp_model.OPTIMAL:
-        return None  # берём только доказанный оптимум
+        return None  # accept proven optimal solutions only
 
     placements: dict[int, tuple[int, int]] = {}
     for i, ins in enumerate(instrs):
@@ -318,14 +273,14 @@ def schedule_optimal(instrs: list[Instr], time_limit: float = 10.0):
 
 
 # ---------------------------------------------------------------------------
-# Формат
+# Formatting
 # ---------------------------------------------------------------------------
 
-DEFAULT_HEADER = ["ширина 6, каналы 0-5", "граф:"]
+DEFAULT_HEADER = ["width 6, channels 0-5", "graph:"]
 
 
 def sniff_format(path: Path) -> tuple[list[str], str]:
-    """Достаёт шапку (2 строки) и порядок строк расписания из образца."""
+    """Infer 2-line header and completion line order from a sample JSONL."""
     line = path.read_text(encoding="utf-8").splitlines()[0]
     row = json.loads(line)
     header = row["prompt"].strip().splitlines()[:2]
@@ -347,17 +302,17 @@ def render(instrs, placements, header: list[str], order: str) -> tuple[str, str]
             lines.append(f"{ins.id} {ins.op} <- {' '.join(str(p) for p in ins.preds)}")
         else:
             lines.append(f"{ins.id} {ins.op}")
-    lines.append("расписание:")
-    # БЕЗ завершающего перевода строки — так кодирует training/encode.py
-    # (`"\n".join(lines)`), и так лежит во всех 20 000 строк dataset.jsonl.
-    # Лишний '\n' в конце промпта и ответа — не косметика: он меняет
-    # токенизацию стыка и то, на чём стоит EOS.
+    lines.append("schedule:")
+    # NO trailing newline — matches training/encode.py tokenization/EOS.
+    #
+    #
+    #
     prompt = "\n".join(lines)
 
     items = sorted(placements.items(),
                    key=(lambda kv: (kv[1][0], kv[1][1])) if order == "cycle"
                    else (lambda kv: kv[0]))
-    completion = "\n".join(f"{i}: такт={c} канал={ch}" for i, (c, ch) in items)
+    completion = "\n".join(f"{i}: cycle={c} channel={ch}" for i, (c, ch) in items)
     return prompt, completion
 
 
@@ -387,7 +342,7 @@ def generate(n_examples: int, lo: int, hi: int, seed: int,
             placements, ms = res
 
             errs = validate(instrs, placements)
-            if errs:  # страховка: сами себе не доверяем
+            if errs:  # self-check every generated example
                 skipped += 1
                 continue
 
@@ -406,19 +361,14 @@ def generate(n_examples: int, lo: int, hi: int, seed: int,
                 print(f"  ...{written}/{n_examples}", flush=True)
 
     if not quiet:
-        print(f"записано {written} примеров в {out}"
-              + (f" (пропущено {skipped}: оптимум не доказан за {time_limit}s)"
+        print(f"wrote {written} examples to {out}"
+              + (f" (skipped {skipped}: optimum not proven within {time_limit}s)"
                  if skipped else ""))
     return written
 
 
 def rehead(src: Path, dst: Path, header: list[str], order: str) -> None:
-    """Переписывает шапку (и, если надо, порядок строк) в готовом jsonl.
-
-    Нужно, если файл уже сгенерирован с шапкой по умолчанию, а потом выяснилось,
-    какая шапка на самом деле. Пересчитывать расписания заново не требуется —
-    они от шапки не зависят.
-    """
+    """Rewrite header (and optionally line order) of an existing JSONL without re-solving."""
     n = 0
     with dst.open("w", encoding="utf-8") as out:
         for line in src.read_text(encoding="utf-8").splitlines():
@@ -429,14 +379,14 @@ def rehead(src: Path, dst: Path, header: list[str], order: str) -> None:
             row["prompt"], row["completion"] = prompt, completion
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
             n += 1
-    print(f"переписано {n} примеров: {src} -> {dst}")
-    print(f"  шапка:  {header}")
-    print(f"  порядок строк расписания: по {order}")
+    print(f"rewrote {n} examples: {src} -> {dst}")
+    print(f"  header: {header}")
+    print(f"  schedule line order: by {order}")
 
 
 def selftest() -> None:
-    print(f"selftest: профиль {MODEL.name}, ширина {WIDTH}")
-    print("генерируем 40 примеров и проверяем их Schedule.validate() из vliw.core\n")
+    print(f"selftest: profile {MODEL.name}, width {WIDTH}")
+    print("generating 40 examples and checking with core Schedule.validate()\n")
     tmp = Path("/tmp/_vliw_selftest.jsonl")
     generate(40, 6, 14, seed=1, header=DEFAULT_HEADER, order="id",
              out=tmp, time_limit=10.0, quiet=True)
@@ -452,21 +402,21 @@ def selftest() -> None:
         errs = validate(instrs, placements)
         if errs:
             bad += 1
-            print("  ОШИБКА:", errs[:2])
+            print("  ERROR:", errs[:2])
             continue
         gaps.append(makespan(instrs, placements) - row["meta"]["makespan"])
         per_shape[row["meta"]["shape"]] = per_shape.get(row["meta"]["shape"], 0) + 1
         if len(instrs) != row["meta"]["n"]:
-            print("  ОШИБКА: граф не разобрался целиком")
+            print("  ERROR: incomplete DAG parse")
             bad += 1
 
-    print(f"примеров:            {len(rows)}")
-    print(f"невалидных:          {bad}")
-    print(f"разрыв до оптимума:  min={min(gaps)} max={max(gaps)}")
-    print(f"по типам графов:     {per_shape}")
-    print("\nОК" if bad == 0 and max(gaps) == 0 else "\nЕСТЬ ПРОБЛЕМЫ")
+    print(f"examples:            {len(rows)}")
+    print(f"invalid:             {bad}")
+    print(f"gap to optimum:      min={min(gaps)} max={max(gaps)}")
+    print(f"by graph shape:      {per_shape}")
+    print("\nOK" if bad == 0 and max(gaps) == 0 else "\nISSUES FOUND")
 
-    print("\nпример промпта:\n" + "-" * 50)
+    print("\nsample prompt:\n" + "-" * 50)
     row = json.loads(rows[0])
     print(row["prompt"] + row["completion"], end="")
     print("-" * 50)
@@ -475,21 +425,21 @@ def selftest() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--n", type=int, default=5000, help="сколько примеров")
+    ap.add_argument("--n", type=int, default=5000, help="number of examples")
     ap.add_argument("--min-instr", type=int, default=6)
     ap.add_argument("--max-instr", type=int, default=16)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, default=Path("train_extra.jsonl"))
     ap.add_argument("--format-from", type=Path, default=None,
-                    help="jsonl твоего датасета — с него снимаются шапка и порядок строк")
+                    help="sample dataset jsonl to infer header and line order")
     ap.add_argument("--header", default=None,
-                    help="шапка вручную, 2 строки через '||'")
+                    help="manual 2-line header separated by '||'")
     ap.add_argument("--time-limit", type=float, default=10.0)
     ap.add_argument("--profile", default=DEFAULT_PROFILE,
-                    help="профиль машины из vliw.core.model")
+                    help="machine profile from vliw.core.model")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--rehead", type=Path, default=None,
-                    help="готовый jsonl: переписать в нём шапку (нужен --format-from)")
+                    help="existing jsonl to rehead (requires --format-from)")
     args = ap.parse_args()
     set_profile(args.profile)
 
@@ -499,7 +449,7 @@ def main() -> None:
 
     if args.rehead:
         if not args.format_from:
-            raise SystemExit("--rehead требует --format-from")
+            raise SystemExit("--rehead requires --format-from")
         header, order = sniff_format(args.format_from)
         rehead(args.rehead, args.out, header, order)
         return
@@ -507,19 +457,19 @@ def main() -> None:
     order = "id"
     if args.format_from:
         header, order = sniff_format(args.format_from)
-        print(f"формат снят с {args.format_from}:")
-        print(f"  шапка:  {header}")
-        print(f"  порядок строк расписания: по {order}")
+        print(f"format inferred from {args.format_from}:")
+        print(f"  header: {header}")
+        print(f"  schedule line order: by {order}")
     elif args.header:
         header = args.header.split("||")
     else:
         header = DEFAULT_HEADER
-        print("!! ВНИМАНИЕ: шапка по умолчанию, почти наверняка не совпадёт")
-        print("!! с твоим датасетом. Лучше запусти с --format-from train.jsonl")
+        print("!! WARNING: using default header; likely differs from your dataset.")
+        print("!! Prefer passing --format-from train.jsonl")
 
     if len(header) != 2:
-        raise SystemExit("шапка должна быть ровно 2 строки (validate_kaggle.py "
-                         "пропускает splitlines()[:2])")
+        raise SystemExit("header must be exactly 2 lines (validate_kaggle.py "
+                         "skips splitlines()[:2])")
 
     generate(args.n, args.min_instr, args.max_instr, args.seed,
              header, order, args.out, args.time_limit)

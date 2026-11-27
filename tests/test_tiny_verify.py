@@ -1,8 +1,7 @@
-"""Быстрый CI-инвариант крошки: валидность + never-worse на малом наборе.
+"""Fast CI invariant for TINY Flash: legality + never-worse-than-baseline on a small subset.
 
-Полная батарея (1317+ графов, ~2 мин) — отдельно:
-    python -m vliw.tiny.verify --weights vliw/tiny/weights.json
-Здесь — то, что должно лететь за секунды на каждый коммит.
+The full 1317+ graph battery runs via `python -m vliw.tiny.verify`; this test
+runs in seconds on every commit.
 """
 
 import json
@@ -28,10 +27,10 @@ class TestTinyVerifyFast(unittest.TestCase):
 
     def _assert_never_worse_and_valid(self, dag, tag):
         res = self.sched.schedule(dag, self.prof)
-        self.assertEqual(res.schedule.validate(), [], f"невалид: {tag}")
-        self.assertTrue(res.schedule.complete, f"неполно: {tag}")
+        self.assertEqual(res.schedule.validate(), [], f"illegal schedule: {tag}")
+        self.assertTrue(res.schedule.complete, f"incomplete schedule: {tag}")
         b = self.base.schedule(dag, self.prof).schedule.makespan
-        self.assertLessEqual(res.schedule.makespan, b, f"хуже baseline: {tag}")
+        self.assertLessEqual(res.schedule.makespan, b, f"worse than baseline: {tag}")
 
     def test_scenarios(self):
         for key, dag in SCENARIOS.items():
@@ -40,7 +39,7 @@ class TestTinyVerifyFast(unittest.TestCase):
     def test_dev_sample(self):
         p = ROOT / "eval_hard_dev.jsonl"
         if not p.exists():
-            self.skipTest("нет eval_hard_dev.jsonl")
+            self.skipTest("eval_hard_dev.jsonl not present")
         with open(p, encoding="utf-8") as f:
             lines = f.readlines()[:20]
         for i, line in enumerate(lines):
@@ -57,7 +56,7 @@ class TestTinyVerifyFast(unittest.TestCase):
             self._assert_never_worse_and_valid(dag, f"fuzz/{k}")
 
     def test_slotclash_regress(self):
-        # Ловушка монополиста: крошка обязана не проиграть baseline.
+        # Exclusive-port trap: TINY Flash must never trail greedy baseline.
         dag = get_scenario("slotclash")
         res = self.sched.schedule(dag, self.prof)
         b = self.base.schedule(dag, self.prof).schedule.makespan

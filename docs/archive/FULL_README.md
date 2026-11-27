@@ -1,665 +1,645 @@
-> Это полная версия README со всеми подробностями. Краткая — в [корне репозитория](../../README.md).
+> This is the full README with all details. The short version is in the [repository root](../../README.md).
 
 <p align="center">
-  <img src="../cover.png" alt="NEX CLI — планировщик широких команд для Эльбруса e2k" width="100%">
+  <img src="../cover.png" alt="NEX CLI — VLIW bundle scheduler for Elbrus e2k" width="100%">
 </p>
 
 <p align="center">
-  <b>Точный расчёт расписаний для VLIW (Эльбрус e2k)</b> · TINY AI ~30K параметров · модульная архитектура NNL
+  <b>Exact schedule computation for VLIW (Elbrus e2k)</b> · TINY AI ~30K parameters · modular NNL architecture
 </p>
 
 <p align="center">
-  <img alt="версия 1.3" src="https://img.shields.io/badge/версия-1.3-2C5C99?style=for-the-badge">
+  <img alt="version 1.3" src="https://img.shields.io/badge/version-1.3-2C5C99?style=for-the-badge">
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-4B86CF?style=for-the-badge">
-  <img alt="лицензия MIT" src="https://img.shields.io/badge/лицензия-MIT-6C97C9?style=for-the-badge">
+  <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-6C97C9?style=for-the-badge">
 </p>
 
-> ### Текущая версия: 1.3.1 (10.11.2026)
-> **TINY AI** строит расписание участка и честно не делает его хуже baseline. В основную ветку влито ядро NEX
-> (`nex_core/`): один блок NNL «планировщик» вместо прямого вызова TINY AI.
-> Проверить: `python3 -m vliw --version` → `NEX CLI 1.3`.
+> ### Current version: 1.3.1 (10.11.2026)
+> **TINY AI** builds block schedules and honestly never makes them worse than baseline. The NEX core
+> (`nex_core/`) has been merged into main: a single NNL "scheduler" block instead of a direct TINY AI call.
+> Verify: `python3 -m vliw --version` → `NEX CLI 1.3`.
 
-## Коротко
+## In Brief
 
-NEX CLI считает расписание широких команд для Эльбруса на откалиброванной модели машины и сравнивает его с
-доказанным оптимумом. **TINY AI** (сети по ~30 тысяч чисел, в прежних версиях «крошки») выбирает, в каком порядке и
-с какими отсрочками ставить операции; **расписание законно по построению**, потому что его собирает
-детерминированный планировщик, а сеть только подсказывает порядок. NNL (Neural Network Lego) — отдельная модульная
-архитектура блоков, которую здесь проверяют на задачах процессора; пока она работает в фоне и не строит расписания.
+NEX CLI computes wide-instruction schedules for Elbrus on a calibrated machine model and compares them
+against a proven optimum. **TINY AI** (networks of ~30k weights, formerly "tiny schedulers") chooses the
+order and deferrals for placing operations; **the schedule is legal by construction** because a
+deterministic scheduler assembles it while the network only suggests the order. NNL (Neural Network Lego)
+is a separate modular block architecture being tested here on processor tasks; for now it runs in the
+background and does not build schedules.
 
-## Что нового
+## What's New
 
-| Версия | Что дала | Цифры |
+| Version | What it delivered | Numbers |
 |---|---|---|
-| **1.3.1** (текущая) | **TINY AI строит расписание.** Окно НЕЙРОСЕТИ в РАЗБОРе показывает, что дали крошки, и разбор блоков `.s` (NNL AI из CLI убран — он был лишним); безопасные глифы и UTF-8 в консоли Windows | модельные такты; на настоящем коде выигрыш крошек небольшой — см. [`CHANGELOG.md`](../../CHANGELOG.md) |
-| | **Ядро NEX.** Один блок NNL «планировщик» (TINY AI + правило границы), паспорт и веса со сверкой sha256; панель НЕЙРОСЕТИ и агент берут расписание у ядра | результат совпадает с прямым вызовом TINY AI на всех сценариях; подмена весов отвергается |
-| **1.2 beta** | **NNL на задаче процессора.** Два ядра по два блока выбирают группу портфеля и проверяют друг друга | работает технически, по качеству на уровне обычных классификаторов, в боевой путь не включено — см. [`nnl_vliw/README.md`](../../nnl_vliw/README.md) |
-| **1.1.1 beta** | **Быстрые крошки (TINY Fast).** `TinyFastScheduler` даёт тот же результат, что `TinyScheduler`, но в десятки раз быстрее: можно считать каждый блок кода на лету | граф `eval_real`: 70,4 → 0,95 мс; `eval_hard`: 63,4 → 2,6 мс; расхождений с прежним ответом 0 на 3061 графе |
-| | **Режим «по блокам».** Настоящий `.s` от `lcc` режется на базовые блоки, каждый считается отдельно, как делает компилятор | `eval_real`: 947 настоящих блоков с доказанным оптимумом |
-| | **Первая проверка на настоящем коде** | оптимально: жадный 890, TINY AI 927 из 947; жадный теряет 0,51 % тактов |
+| **1.3.1** (current) | **TINY AI builds schedules.** The NEURAL NET panel in LAB shows what tiny achieved plus `.s` block breakdown (NNL AI removed from CLI — it was redundant); safe glyphs and UTF-8 in the Windows console | model cycles; on real code the tiny gain is small — see [`CHANGELOG.md`](../../CHANGELOG.md) |
+| | **NEX Core.** Single NNL "scheduler" block (TINY AI + lower-bound rule), passport and weights with sha256 verification; NEURAL NET panel and agent pull schedules from the core | matches direct TINY AI calls on all scenarios; tampered weights are rejected |
+| **1.2 beta** | **NNL on a processor task.** Two cores of two blocks each select a portfolio group and cross-check each other | works technically, quality on par with ordinary classifiers, not enabled in the production path — see [`nnl_vliw/README.md`](../../nnl_vliw/README.md) |
+| **1.1.1 beta** | **Fast tiny schedulers (TINY Fast).** `TinyFastScheduler` gives the exact same result as `TinyScheduler`, dozens of times faster: every code block can be scheduled on the fly | `eval_real` graph: 70.4 → 0.95 ms; `eval_hard`: 63.4 → 2.6 ms; 0 mismatches against prior output on 3,061 graphs |
+| | **Block mode.** Real `.s` from `lcc` is split into basic blocks, each scheduled separately as the compiler does | `eval_real`: 947 real blocks with proven optima |
+| | **First check on real code** | optimal: greedy 890, TINY AI 927 of 947; greedy loses 0.51% of cycles |
 
-Это модельные такты, а не замеры на железе; режим `loop_mode` (аппаратная конвейеризация циклов) пока не моделируется.
+These are model cycles, not hardware measurements; `loop_mode` (hardware loop pipelining) is not yet modeled.
 
-## Куда смотреть дальше
+## Where to Look Next
 
-- [`docs/TINY_FAST.md`](TINY_FAST.md) — откуда взялась скорость;
-- [`docs/ISA.md`](../ISA.md) — во что обходятся операции e2k-v6;
-- [`docs/REAL_VS_SYNTH.md`](../REAL_VS_SYNTH.md) — настоящий код против синтетики (документ от 29.08, часть словаря с тех пор закрыта);
-- [`nnl_vliw/README.md`](../../nnl_vliw/README.md) — ядра NNL на задаче планировщика;
-- [`CHANGELOG.md`](../../CHANGELOG.md) — история версий.
+- [`docs/TINY_FAST.md`](TINY_FAST.md) — where the speed came from;
+- [`docs/ISA.md`](../ISA.md) — what `e2k-v6` operations cost;
+- [`docs/REAL_VS_SYNTH.md`](../REAL_VS_SYNTH.md) — real code vs. synthetic (written 29.08; part of the vocabulary gap has since been closed);
+- [`nnl_vliw/README.md`](../../nnl_vliw/README.md) — NNL cores on the scheduling task;
+- [`CHANGELOG.md`](../../CHANGELOG.md) — version history.
 
 ---
 
-# Планировщик инструкций для VLIW (Эльбрус e2k)
+# VLIW Instruction Scheduler (Elbrus e2k)
 
-Прототип к исследовательскому проекту «ИИ-планировщик инструкций для
-VLIW-архитектур» — но то, чем стоит пользоваться и что реально работает
-здесь, это не обученная модель, а точный расчёт на откалиброванной модели
-машины. Главный тезис проекта:
+A prototype for the research project "AI Instruction Scheduler for VLIW Architectures" —
+though what is actually worth using and works here is not a trained model, but exact
+computation on a calibrated machine model. Core thesis of the project:
 
-> **планировщик широких команд принимает жадные необратимые решения, и на
-> реалистичной модели машины у стандартной эвристики есть измеримый,
-> доказуемый разрыв до оптимума — вот бюджет, за который имеет смысл
-> бороться обученной моделью.**
+> **a wide-instruction scheduler makes greedy, irreversible decisions, and on a realistic
+> machine model the standard heuristic has a measurable, provable gap to the optimum —
+> that gap is the budget worth fighting for with a trained model.**
 
-ИИ-трек в проекте есть и работает (обучен, веса опубликованы), но
-результат самой этой борьбы — отрицательный, и это не спрятано: подробно
-и с методикой — в разделе [«Что здесь измеряется»](#что-здесь-измеряется)
-ниже.
+The AI track exists and works in this project (trained, weights published), but the
+outcome of that fight is negative and is not hidden: details and methodology are in
+[What Is Measured Here](#what-is-measured-here) below.
 
-Работает на голом Python 3.10+. Ни `lcc`, ни `qemu-e2k-static`, ни LLVM здесь
-не нужны и не вызываются. Единственная **опциональная** зависимость — `rich`
-(см. [ниже](#про-опциональный-rich)); без неё всё полностью работает на ANSI.
+Runs on plain Python 3.10+. Neither `lcc`, nor `qemu-e2k-static`, nor LLVM is needed
+or invoked here. The only **optional** dependency is `rich` (see
+[below](#about-optional-dependencies)); without it, everything works in full over ANSI.
 
-**Один режим, два способа вызова.** Без аргументов — логотип, дефолтный вывод
-и интерактивный цикл; с командой — один запуск и выход (быстрый режим для
-скриптов). Команды одни и те же: снаружи без «/», внутри цикла с «/».
+**One mode, two ways to invoke.** With no arguments — logo, default output, and
+interactive loop; with a command — single run and exit (fast mode for scripts). The
+commands are identical: without `/` outside, with `/` inside the loop.
 
 ```bash
-cd vliw-ai-scheduler-demo      # ВАЖНО: команды ниже — из папки проекта
-pip install -e ".[tui]"        # рабочее место (textual) — так задумано
-python3 -m vliw                # рабочее место: экран выбора, дальше РАЗБОР/КОД/АГЕНТ
-python3 -m vliw run slotclash  # то же самое, сразу на участке slotclash
+cd vliw-ai-scheduler-demo      # IMPORTANT: run commands below from the project folder
+pip install -e ".[tui]"        # workspace (textual) — intended setup
+python3 -m vliw                # workspace: mode picker, then LAB/CODE/AGENT
+python3 -m vliw run slotclash  # same, opening directly on the slotclash block
 ```
 
-`run`, `load`, `compare`, `doctor`, `bounds`, `path`, `analyze` — команды про
-ОДИН участок, и открывают рабочее место на нём, а не печатают отчёт текстом.
-Так они ведут себя всегда, когда есть терминал и рабочее место установлено.
+`run`, `load`, `compare`, `doctor`, `bounds`, `path`, `analyze` are single-block
+commands and open the workspace on that block rather than printing a text report. That
+is always how they behave when a terminal is attached and the workspace is installed.
 
-Массовые прогоны по многим графам разом печатают текст — им нечего показывать
-одним экраном:
+Batch runs over many graphs at once print text — they have nothing to display on a
+single screen:
 
 ```bash
-python3 -m vliw all            # сводка по всем сценариям
-python3 -m vliw scenarios      # список сценариев
-python3 -m vliw sweep          # массовый прогон по случайным графам
-python3 -m vliw selfcheck      # сверить оракул полным перебором
+python3 -m vliw all            # summary across all scenarios
+python3 -m vliw scenarios      # list of scenarios
+python3 -m vliw sweep          # batch run across random graphs
+python3 -m vliw selfcheck      # verify oracle via brute-force search
 ```
 
-Текстовый вывод остаётся и для команд про один участок — это путь для
-скриптов, пайпов и CI, а не альтернативный способ пользоваться инструментом:
-`python3 -m vliw --no-color run slotclash > out.txt` или в перенаправленном
-выводе (`| grep`, отсутствие терминала) — тогда рабочее место не открывается
-физически, потому что открывать его некуда.
+Text output remains available for single-block commands too — it is the path for
+scripts, pipes, and CI, not an alternate way to use the tool interactively:
+`python3 -m vliw --no-color run slotclash > out.txt` or in redirected output (`| grep`,
+no TTY), where the workspace physically cannot open because there is nowhere to open it.
 
-> Если видите `No module named vliw` — вы не в папке проекта, сначала `cd`.
-> Если `python: command not found` — на вашей системе интерпретатор
-> называется `python3` (используется во всех примерах выше). Больше типичных
-> проблем и полный разбор каждой команды — в **[docs/CLI.md](../CLI.md)**.
-> На Windows — **[docs/WINDOWS.md](../WINDOWS.md)**: установка, `py`
-> вместо `python3`, и отдельно — что делать, если АГЕНТ отвечает «нет сети».
+> If you see `No module named vliw`, you are not in the project folder — `cd` first.
+> If `python: command not found`, your interpreter is named `python3` (used in all
+> examples above). More common issues and a full breakdown of every command are in
+> **[docs/CLI.md](../CLI.md)**.
+> On Windows — **[docs/WINDOWS.md](../WINDOWS.md)**: installation, `py` instead of
+> `python3`, and what to do if AGENT says "no network".
 
-**Рабочее место подробно, режим за режимом:** [КОД](../CODE_MODE.md) —
-каждая клавиша и проводник; [РАЗБОР](../LAB_MODE.md) — решётка и все семь
-панелей; [ЯДРО](../CORE_MODE.md) — коротко, это калькулятор с историей;
-[промты для АГЕНТА](../AGENT_PROMPTS.md) — готовые вопросы и честная
-оговорка про точность ответов. Полное оглавление документации, включая
-журнал исследования, — **[docs/README.md](../README.md)**.
+**Workspace in detail, mode by mode:** [CODE](../CODE_MODE.md) — every key and the
+explorer; [LAB](../LAB_MODE.md) — the grid and all seven panels;
+[CORE](../CORE_MODE.md) — brief, it is a calculator with history;
+[prompts for AGENT](../AGENT_PROMPTS.md) — ready-made questions and an honest caveat on
+answer accuracy. Full documentation index, including the research journal —
+**[docs/README.md](../README.md)**.
 
-**Хотите покопаться в коде, а не только пользоваться** — начните с
-[docs/ENTHUSIAST.md](../ENTHUSIAST.md): что можно менять в интерфейсе, как
-обучить свою модель, как писать скрипты — и честно про то, что закрыто и
-почему.
+**Want to dig into the code, not just use it** — start with
+[docs/ENTHUSIAST.md](../ENTHUSIAST.md): what you can change in the UI, how to train your
+own model, how to write scripts — and honestly what is closed and why.
 
-## Установка для разработки
+## Development Setup
 
 ```bash
 git clone <your-fork-url> vliw-ai-scheduler
 cd vliw-ai-scheduler
-pip install -e ".[tui]"   # ядро работает и без extras; TUI — с ними
+pip install -e ".[tui]"   # core works without extras too; TUI needs them
 python -m unittest discover -s tests
 ```
 
-Короткий старт на английском — в [QUICKSTART.md](../../QUICKSTART.md),
-правила для контрибьюторов — в [CONTRIBUTING.md](../../CONTRIBUTING.md).
+Short English start in [QUICKSTART.md](../../QUICKSTART.md), contributor rules in
+[CONTRIBUTING.md](../../CONTRIBUTING.md).
 
-## Что здесь измеряется
+## What Is Measured Here
 
-Единственная метрика — **число тактов** (makespan) на одном и том же графе
-зависимостей и одной и той же модели машины:
+The sole metric is **cycle count** (makespan) on the exact same dependency DAG and the
+exact same machine model:
 
 | | |
 |---|---|
-| **baseline** | жадный list scheduler с приоритетом по длине остаточного критического пути — то, что стоит в реальных компиляторах (`kind="heuristic"`) |
-| **oracle** | точный поиск (branch-and-bound с итеративным углублением) — недостижимый на практике теоретический *потолок* (`kind="exact"`) |
+| **baseline** | greedy list scheduler prioritized by remaining critical-path length — what real compilers use (`kind="heuristic"`) |
+| **oracle** | exact search (iterative-deepening branch-and-bound) — a practically unreachable theoretical *ceiling* (`kind="exact"`) |
 
-**Про терминологию.** Оракул — это НЕ «ИИ» и не обученная модель, а точный
-математический поиск оптимума. Обученная модель (LoRA поверх Qwen2.5-3B,
-веса на [Hugging Face](https://huggingface.co/Shmonika/nex-vliw-lora), запуск
-— [`vliw/learned/`](../../vliw/learned/README.md)) в проекте есть и работает, но
-результат измерения — отрицательный, и это не спрятано: на настоящем выводе
-`lcc` (графы 112–386 узлов) модель не обошла обычный случайный перебор ни на
-одном графе из 13, суммарно +0 тактов (методика и `VERIFY.sh` —
+**On terminology.** The oracle is NOT "AI" and not a trained model, but exact
+mathematical optimal search. A trained model (LoRA on top of Qwen2.5-3B, weights on
+[Hugging Face](https://huggingface.co/Shmonika/nex-vliw-lora), runner in
+[`vliw/learned/`](../../vliw/learned/README.md)) exists and runs in this project, but
+the benchmark result is negative and is not hidden: on real `lcc` output (graphs of
+112–386 nodes), the model did not beat plain random search on a single graph out of 13,
+total +0 cycles (methodology and `VERIFY.sh` in
 [`real_candidates_100_400/model_eval/`](../../real_candidates_100_400/model_eval/REPORT.md)).
-Оракул остаётся верхней планкой качества и источником эталонных расписаний
-независимо от того, как ведёт себя модель.
+The oracle remains the upper quality bar and source of reference schedules regardless of
+how the model behaves.
 
-## Результаты
-
-```
-  сценарий      N  модель           нижн.гр.  baseline  oracle  выигрыш  оптимум
-  simple4       7  e2k-v6-measured        13        13      13  —        доказан
-  loadchain    16  e2k-v6-measured        12        12      12  —        доказан
-  mixed18      19  e2k-v6-measured        23        23      23  —        доказан
-  slotclash    13  e2k-v6-measured        22        23      22  -1 (4%)  доказан
-  mulclash     12  e2k-v6-measured        21        21      21  —        доказан
-  divpressure  19  e2k-v6-measured        14        20      20  —        доказан
-  wide_ilp     63  e2k-v6-measured        11        13      13  —        не доказан
-  memstream    24  e2k-v6-measured         7        11      10  -1 (9%)  доказан
-```
-
-> **Эти числа — вторая редакция.** Первая версия модели была неверна, и в
-> README стояли совсем другие цифры (`slotclash −9 тактов, 22%`,
-> `mulclash −7, 21%`). Разбор ошибки — в разделе
-> [«Как модель оказалась неверной»](#как-модель-оказалась-неверной-и-что-это-меняет)
-> ниже; он важнее самих чисел.
-
-Два вывода, оба важные и оба честные:
-
-**1. Разрыв у эвристики есть, но он маленький, и источник у него ровно один —
-дефицитный порт.** По-настоящему монопольный исполнитель на e2k один: делитель
-(порт `,5`, ассемблер отказывается кодировать `sdivs` где-либо ещё). Плюс
-дефицитна запись — она кодируется только в `,2` и `,5`. Жадный планировщик
-work-conserving: если дефицитный порт свободен, а какая-то операция для него
-готова, он её выдаёт — даже если результат никому не нужен срочно. `slotclash`
-ловит это на делителе, `memstream` — на канале записи. Оба разрыва по одному
-такту и оба доказаны точным поиском; честный масштаб проблемы — единицы
-процентов, а не десятки.
-
-**2. Размер разрыва почти целиком определяется тем, насколько точно описана
-машина, — и это проверяемо.** `python3 -m vliw sweep` гоняет случайные графы
-по всем конфигурациям машины, включая **опровергнутую первую версию модели**,
-оставленную в проекте специально для такого сравнения (ниже вывод `sweep
---seeds 20 --sizes 10,12,14`, 60 графов на строку):
+## Results
 
 ```
-  модель                кан.  слоты          с разрывом  доля  средний разрыв  макс, тактов
-  e2k-v6-measured          6  неравноправны        1/60    2%              3%             1
-  e2k-v6-measured/w4       4  неравноправны        1/60    2%              3%             1
-  e2k-v6-measured/w3       3  неравноправны        1/60    2%              3%             1
-  e2k-v6-firstprobe        6  неравноправны        4/60    7%             18%            15
-  e2k-v6-firstprobe/w4     4  неравноправны        4/60    7%             18%            15
-  e2k-v6-firstprobe/w3     3  неравноправны        6/60   10%             12%             9
-  naive_homogeneous        6  равноправны          0/60    0%               —             —
-  naive_homogeneous/w4     4  равноправны          0/60    0%               —             —
-  naive_homogeneous/w3     3  равноправны          0/60    0%               —             —
+  scenario      N  model            lower_b.  baseline  oracle  gain     optimum
+  simple4       7  e2k-v6-measured        13        13      13  —        proven
+  loadchain    16  e2k-v6-measured        12        12      12  —        proven
+  mixed18      19  e2k-v6-measured        23        23      23  —        proven
+  slotclash    13  e2k-v6-measured        22        23      22  -1 (4%)  proven
+  mulclash     12  e2k-v6-measured        21        21      21  —        proven
+  divpressure  19  e2k-v6-measured        14        20      20  —        proven
+  wide_ilp     63  e2k-v6-measured        11        13      13  —        not proven
+  memstream    24  e2k-v6-measured         7        11      10  -1 (9%)  proven
 ```
 
-Читать так: на **неверной** модели (`firstprobe`, где умножителю ошибочно
-приписана монополия) жадная эвристика «проигрывает» в 7% графов на 18% тактов.
-На **проверенной** — в 2% графов на 3%, максимум один такт. На модели
-«все порты равноправны» — не проигрывает вовсе. То есть большая часть «разрыва,
-за который стоило бы бороться обученной моделью», существовала не в железе, а
-в ошибке описания железа.
+> **These numbers are the second edition.** The first version of the model was wrong,
+> and the README showed completely different figures (`slotclash −9 cycles, 22%`,
+> `mulclash −7, 21%`). Post-mortem of the error is in
+> [How the Model Turned Out to Be Wrong](#how-the-model-turned-out-to-be-wrong-and-what-that-changes)
+> below; it matters more than the numbers themselves.
 
-Механизм оставшегося разрыва виден на `slotclash` (23 такта против 22
-оптимальных):
+Two conclusions, both important and both honest:
 
-- тупиковое деление `z0` независимо и готово в такте 0, но его результат
-  никому не нужен срочно; критическое деление `dc` ждёт свой операнд `a0` и
-  готово лишь к такту 1;
-- эвристика в такте 0 видит свободный делитель и готовое `z0` — и занимает им
-  единственный делитель;
-- критическое `dc` из-за этого сдвигается: делитель принимает новое деление
-  раз в два такта, и весь критический путь съезжает;
-- оптимум придерживает делитель, отдаёт его `dc`, а `z0` считает позже, в тени
-  критической цепочки.
+**1. The heuristic does have a gap, but it is small, and its source is a single thing —
+a scarce port.** There is only one truly monopoly execution unit on `e2k`: the divider
+(port `,5`; the assembler refuses to encode `sdivs` anywhere else). Plus stores are
+scarce — they encode only in `,2` and `,5`. A greedy scheduler is work-conserving: if a
+scarce port is free and some operation for it is ready, it issues it — even when nobody
+needs the result urgently. `slotclash` catches this on the divider; `memstream` catches
+it on the store channel. Both gaps are 1 cycle and both are proven by exact search; the
+honest scale of the problem is single-digit percent, not tens of percent.
 
-Природа проблемы общая: приоритет по критическому пути видит длину цепочек и
-слеп к тому, что дефицитный порт нельзя тратить на работу, которой никто не
-ждёт. Но честный масштаб этой проблемы на проверенной модели — единицы тактов,
-и делать вид, что там десятки процентов, нельзя.
-
-## Как модель оказалась неверной (и что это меняет)
-
-Единственный раздел README, написанный по датам и от первого лица. Остальной
-документ описывает, что в проекте есть. Здесь важно другое — в каком порядке
-я это понимал, потому что неверная модель машины прожила две недели, выглядела
-как результат и давала красивые числа.
-
-**17 августа.** Модель машины построена по ОДНОМУ листингу `lcc -O3 -S` для
-`probe.c`: четыре независимых деления, четыре умножения. Все четыре `muls`
-легли в канал `,0` одно за другим. Я прочитал это как «умножитель на e2k один
-и держит порт 8 тактов». Отсюда пошли сценарий `mulclash`, «21% разрыва» и вся
-линия про «две монополии». Разрыв в 21% на дороге не валяется, и проверять его
-второй раз мне не хотелось.
-
-**29–31 августа.** Проверил тем, чем следовало с самого начала: не выводом
-компилятора, а самим ассемблером и пробами, составленными под вопрос.
-
-- **Восемь независимых умножений** вместо четырёх — компилятор сам поставил
-  `muls,0` и `muls,1` **в одну широкую команду**. Одного этого достаточно,
-  чтобы «умножитель один» перестало быть правдой.
-- **Шестнадцать независимых умножений** идут по одному в такт подряд, без
-  разрывов — значит устройство конвейеризовано, порт свободен уже в следующем
-  такте.
-- **Ассемблер отвечает прямо** — если наконец спросить его, а не планировщик:
-  `$LCC -c` на `.s` с `muls,2` печатает `Error: 'muls' cannot be encoded in
-  ALC2`. Перебором всех шести каналов получена матрица: `muls` — `,0 ,1 ,3
-  ,4`, `sdivs` — только `,5`, `stw` — только `,2 ,5`, `ldw` — `,0 ,2 ,3 ,5`.
-
-Заодно поехали и латентности, снятые тем же ненадёжным способом. Цепочки
-ЗАВИСИМЫХ операций (компилятор обязан развести их ровно на латентность) дали
-MUL **4** такта вместо 8, DIV **11** вместо 13, LOAD **5** вместо 2. Потоки
-НЕЗАВИСИМЫХ дали темп приёма: MUL — каждый такт, DIV — раз в два такта, а не
-«держит порт 13 тактов».
-
-Мне это не понравилось. Все числа, которыми проект до этого хвалился,
-оказались следствием одного и того же неаккуратного взгляда — а не тринадцати
-разных ошибок, которые можно было бы чинить по одной.
-
-**Что отсюда стоит унести, даже если Эльбрус вам не интересен:** по выводу
-компилятора видно то, что компилятор ЗАХОТЕЛ сделать, а не то, что железо
-МОЖЕТ. Жадный планировщик не станет занимать второй канал, если ему хватает
-первого, — и наблюдатель принимает это за физическое ограничение.
-
-**Что сделано, а не просто признано.**
-
-- `vliw/core/model.py` перезаполнен по проверенным данным, у каждого параметра
-  проставлен источник (`проверено ассемблером` / `цепочка зависимых` /
-  `поток независимых` / `допущение`) — видно в `/model`;
-- ошибочная модель **оставлена** как профиль `e2k-v6-firstprobe`, чтобы разницу
-  можно было увидеть, а не только прочитать: `/model e2k-v6-firstprobe`;
-- сценарий `mulclash` не удалён, а переписан: теперь это экспонат в группе
-  «проверка модели» — на проверенной модели разрыва нет, на `firstprobe` есть;
-- пробы и **настоящий** вывод компилятора сложены в
-  [`examples/probes/`](../../examples/probes/README.md) вместе с методикой;
-- прежняя «иллюстрация» `examples/probe.s`, нарисованная руками под неверную
-  модель, помечена как экспонат (`probe_ILLUSTRATION_OBSOLETE.s`) и заменена
-  настоящим выводом `lcc`.
-
-Ошибочный профиль лежит в проекте намеренно. Ошибку такого рода легко описать
-словами и невозможно почувствовать, пока не увидишь своими глазами, как одни и
-те же пятнадцать операций на двух профилях дают разный ответ.
-
-**Граница применимости, найденная там же.** `wide_ilp` — 63 инструкции, точный
-поиск не укладывается в бюджет, включается запасной портфельный перебор. Он не
-нашёл ничего лучше baseline, но и оптимальность не доказал. В отчёте так и
-написано — не «разрыва нет», а «разрыв не найден».
-
-Полный журнал по датам — со всем, что в README не поместилось: пустой эвал,
-портфель CAB, два бага по дороге — в **[docs/JOURNAL.md](JOURNAL.md)**.
-
-## Не только планировщик: приёмы оптимизации
-
-Всё выше — про работу ПЛАНИРОВЩИКА: один граф, две раскладки, разрыв между
-ними. Но на e2k чаще теряется другое: планировщик уже выжал всё, а такты всё
-равно уходят, потому что дело в самом коде. Вторая половина сценариев
-(`/scenarios`, группы «форма графа», «цена операции», «циклы», «память»,
-«ветвления») собрана парами «как написано» → «как надо»:
+**2. The size of the gap is almost entirely determined by how accurately the machine is
+described — and this is testable.** `python3 -m vliw sweep` runs random graphs across
+all machine configurations, including the **refuted first version of the model**, kept
+in the project specifically for this comparison (below is `sweep --seeds 20 --sizes
+10,12,14`, 60 graphs per row):
 
 ```
-  сценарий      N  нижн.гр.  baseline  oracle  выигрыш  что показывает
-  seqreduce    16        13        13      13  —        acc += v[i]: цепочка, ILP = 1
-  treereduce   16         9        10      10  —        та же свёртка деревом
-  divpressure  19        14        20      20  —        4 деления на единственном ,5
-  divstrength  19         4         5       5  —        те же 4 операции сдвигом
-  unroll4      12        12        12      12  —        развёртка работает, мешает память
-  ptrchase     23        32        32      32  —        p = p->next: цепочка по памяти
-  memstream    24         7        11      10  -1 (9%)  запись живёт лишь в ,2 и ,5
-  ifconv       13         9         9       9  —        обе ветви условия посчитаны
+  model                 ch.  slots          with gap  share  mean gap  max, cycles
+  e2k-v6-measured         6  asymmetric         1/60     2%        3%            1
+  e2k-v6-measured/w4      4  asymmetric         1/60     2%        3%            1
+  e2k-v6-measured/w3      3  asymmetric         1/60     2%        3%            1
+  e2k-v6-firstprobe       6  asymmetric         4/60     7%       18%           15
+  e2k-v6-firstprobe/w4    4  asymmetric         4/60     7%       18%           15
+  e2k-v6-firstprobe/w3    3  asymmetric         6/60    10%       12%            9
+  naive_homogeneous       6  symmetric          0/60     0%         —            —
+  naive_homogeneous/w4    4  symmetric          0/60     0%         —            —
+  naive_homogeneous/w3    3  symmetric          0/60     0%         —            —
 ```
 
-Колонка «выигрыш» пустая почти везде — и это ровно то, что нужно показать:
-**точный поиск не даёт ничего, потому что оптимизировать надо не расписание.**
-Смысл в сравнении СОСЕДНИХ строк, а не baseline с oracle:
+Read it like this: on the **wrong** model (`firstprobe`, where a monopoly was wrongly
+attributed to the multiplier), the greedy heuristic "loses" on 7% of graphs by 18% of
+cycles. On the **verified** model — on 2% of graphs by 3%, at most 1 cycle. On the
+"all ports equal" model — it never loses at all. In other words, most of "the gap worth
+fighting for with a trained model" existed not in silicon, but in a modeling error.
 
-- `seqreduce` → `treereduce`: то же число инструкций, 13 тактов против 10.
-  Свёртка в один аккумулятор не параллелится в принципе; помогает
-  реассоциация в исходнике (для плавающей точки — только явно, она меняет
-  порядок округления).
-- `divpressure` → `divstrength`: 20 тактов против 5. Деление — единственная
-  настоящая монополия машины: порт `,5`, новое деление раз в два такта,
-  результат через одиннадцать. Замена на сдвиг (или вынос обратного значения
-  из цикла) выигрывает больше, чем любое улучшение планировщика.
-- `unroll4`: развёртка честно работает — умножения расходятся по четырём
-  каналам и не мешают друг другу. Участок держит не арифметика, а латентность
-  загрузки в 5 тактов: выигрыш даст подъём загрузок повыше, а не ещё одна
-  развёртка.
-- `ptrchase`: 32 такта на шести зависимых загрузках — самый длинный участок в
-  наборе, и ни один планировщик его не сократит: адрес следующей загрузки
-  известен только после предыдущей.
-- `memstream`: единственный из этой группы, где разрыв есть. Причина не в
-  вычислениях — запись кодируется только в двух каналах (`,2` и `,5`), и
-  эвристика тратит дефицитный слот не в том порядке.
-- `ifconv`: спекулятивно посчитанные обе ветви условия достаются даром, пока
-  в них универсальные операции; поставьте туда деление — и получится
-  `slotclash`.
+The mechanism of the remaining gap is visible on `slotclash` (23 cycles vs. 22 optimal):
 
-Числа в таблице считает сам инструмент (`python3 -m vliw all`), в текст они
-не зашиты.
+- the dead-end division `z0` is independent and ready at cycle 0, but nobody needs its
+  result urgently; the critical division `dc` waits on its operand `a0` and is only
+  ready at cycle 1;
+- at cycle 0 the heuristic sees a free divider and a ready `z0` — and occupies the sole
+  divider with it;
+- critical `dc` is pushed back as a result: the divider accepts a new division once
+  every two cycles, shifting the entire critical path;
+- the optimum holds the divider, gives it to `dc`, and computes `z0` later in the shadow
+  of the critical chain.
 
-## Интерактивный режим
+The underlying mechanism is general: critical-path priority sees chain lengths and is
+blind to the fact that a scarce port must not be spent on work nobody is waiting for.
+Yet the honest scale of this problem on the verified model is single cycles, and
+pretending it is tens of percent is unacceptable.
 
-Один экран и пристыкованные окна, как в IDE: редактор ассемблера e2k слева,
-живой разбор расписания прямо в номерах строк, вкладки снизу (расписание,
-замечания, вывод, ядро). Открывается `python3 -m vliw` без аргументов —
-сначала экран выбора:
+## How the Model Turned Out to Be Wrong (and What That Changes)
 
-![Экран выбора режима](../img/picker.svg)
+The only section of the README written by date and in the first person. The rest of the
+document describes what is in the project. What matters here is the order in which I
+understood it, because the wrong machine model lived for two weeks, looked like a
+result, and produced attractive numbers.
 
-Дальше — рабочее место КОДа, разбор реального `.s` от `lcc`:
+**August 17.** The machine model was built from ONE `lcc -O3 -S` listing for `probe.c`:
+four independent divisions, four multiplications. All four `muls` landed in channel `,0`
+one after another. I read that as "e2k has one multiplier and it holds the port for 8
+cycles". From there came the `mulclash` scenario, "21% gap", and the entire "two
+monopolies" storyline. A 21% gap is hard to come by, and I didn't want to double-check
+it.
 
-![КОД: probe.s разобран, F5 прогнан](../img/code-mode.svg)
+**August 29–31.** Checked the way I should have from the start: not from compiler
+output, but from the assembler itself and probes designed for the question.
 
-Тот же экран текстом, если картинки не грузятся:
+- **Eight independent multiplications** instead of four — the compiler itself placed
+  `muls,0` and `muls,1` **in the same wide instruction**. That alone falsifies "there
+  is one multiplier".
+- **Sixteen independent multiplications** issue one per cycle back-to-back with no
+  gaps — meaning the unit is pipelined and the port is free on the very next cycle.
+- **The assembler answers directly** once you finally ask it rather than the scheduler:
+  `$LCC -c` on a `.s` with `muls,2` prints `Error: 'muls' cannot be encoded in ALC2`.
+  Sweeping all six channels yielded the matrix: `muls` — `,0 ,1 ,3 ,4`, `sdivs` — `,5`
+  only, `stw` — `,2 ,5` only, `ldw` — `,0 ,2 ,3 ,5`.
+
+Latencies taken by the same unreliable method fell apart at the same time. Chains of
+DEPENDENT operations (which the compiler must space by exact latency) gave MUL **4**
+cycles instead of 8, DIV **11** instead of 13, LOAD **5** instead of 2. Streams of
+INDEPENDENT operations gave issue rates: MUL — every cycle, DIV — once every two
+cycles, not "holds the port for 13 cycles".
+
+I did not like this. Every number the project had been boasting about turned out to be
+the consequence of a single sloppy glance — not thirteen separate bugs that could be
+fixed one by one.
+
+**What to take away from this even if you don't care about Elbrus:** compiler output
+shows what the compiler CHOSE to do, not what the hardware CAN do. A greedy scheduler
+will not occupy a second channel when the first one is enough — and an observer mistakes
+that for a physical limit.
+
+**What was done, not merely admitted:**
+
+- `vliw/core/model.py` was repopulated from verified data, with a source tag on every
+  parameter (`verified by assembler` / `dependent chain` / `independent stream` /
+  `assumption`) — visible in `/model`;
+- the erroneous model was **kept** as profile `e2k-v6-firstprobe` so the difference can
+  be seen rather than just read: `/model e2k-v6-firstprobe`;
+- the `mulclash` scenario was not deleted, but rewritten: it is now an exhibit in the
+  "model check" group — no gap on the verified model, gap on `firstprobe`;
+- the probes and **real** compiler output are stored in
+  [`examples/probes/`](../../examples/probes/README.md) along with the methodology;
+- the old hand-drawn "illustration" `examples/probe.s` made for the wrong model is
+  marked as an exhibit (`probe_ILLUSTRATION_OBSOLETE.s`) and replaced with real `lcc`
+  output.
+
+The wrong profile stays in the project intentionally. This kind of error is easy to
+describe in words and impossible to feel until you see with your own eyes how the exact
+same fifteen operations produce different answers under two profiles.
+
+**Boundary of applicability found in the same place.** `wide_ilp` has 63 instructions;
+exact search exceeds budget and falls back to portfolio search. It found nothing better
+than baseline, nor did it prove optimality. The report states exactly that — not "no
+gap", but "no gap found".
+
+The full dated journal — with everything that didn't fit in the README: the empty eval,
+the CAB portfolio, two bugs along the way — is in **[docs/JOURNAL.md](JOURNAL.md)**.
+
+## Beyond the Scheduler: Optimization Techniques
+
+Everything above is about the SCHEDULER's job: one DAG, two layouts, the gap between
+them. On `e2k`, however, losses more often come from elsewhere: the scheduler has
+already squeezed everything out, yet cycles are still lost because of the code itself.
+The second half of the scenarios (`/scenarios`, groups "graph shape", "operation cost",
+"loops", "memory", "branches") is built as "as written" → "as it should be" pairs:
 
 ```
-▍NEX  slots.s ✕  probe.s ✕                 15→8 т. · 15 оп. · e2k-v6-measured
-    11  т0     muls,0 %r10, %r11, %r20
+  scenario      N  lower_b.  baseline  oracle  gain     what it shows
+  seqreduce    16        13        13      13  —        acc += v[i]: chain, ILP = 1
+  treereduce   16         9        10      10  —        same reduction as a tree
+  divpressure  19        14        20      20  —        4 divisions on sole ,5
+  divstrength  19         4         5       5  —        same 4 ops via shift
+  unroll4      12        12        12      12  —        unrolling works, memory blocks it
+  ptrchase     23        32        32      32  —        p = p->next: memory chain
+  memstream    24         7        11      10  -1 (9%)  store lives only in ,2 and ,5
+  ifconv       13         9         9       9  —        both branches computed
+```
+
+The "gain" column is empty almost everywhere — and that is the exact point: **exact
+search gives nothing because the code needs optimizing, not the schedule.** The point
+is comparing ADJACENT rows, not baseline against oracle:
+
+- `seqreduce` → `treereduce`: same instruction count, 13 cycles vs. 10. Reduction into
+  a single accumulator cannot be parallelized in principle; reassociation in the source
+  helps (for floating point, only explicitly, since it changes rounding order).
+- `divpressure` → `divstrength`: 20 cycles vs. 5. Division is the machine's sole true
+  monopoly: port `,5`, a new division once every two cycles, result in eleven. Replacing
+  it with a shift (or hoisting a reciprocal out of a loop) wins more than any scheduler
+  improvement.
+- `unroll4`: unrolling genuinely works — multiplications fan out across four channels
+  without interfering. The block is held back not by arithmetic, but by 5-cycle load
+  latency: hoisting loads earlier wins, not another unroll factor.
+- `ptrchase`: 32 cycles across six dependent loads — the longest block in the suite, and
+  no scheduler can shorten it: the next load's address is only known after the previous
+  one completes.
+- `memstream`: the only scenario in this group with a gap. The cause is not compute —
+  stores encode in only two channels (`,2` and `,5`), and the heuristic spends the
+  scarce slot in the wrong order.
+- `ifconv`: speculatively computing both branches of a condition is free as long as they
+  use general-purpose ops; put a division in there and you get `slotclash`.
+
+The numbers in the table are computed live by the tool (`python3 -m vliw all`), not
+hardcoded in prose.
+
+## Interactive Mode
+
+One screen with docked panels, IDE-style: an `e2k` assembly editor on the left, live
+schedule analysis right in the line numbers, and bottom tabs (schedule, findings,
+output, core). Opens with `python3 -m vliw` with no arguments — starting at the mode
+picker:
+
+![Mode picker screen](../img/picker.svg)
+
+Next is the CODE workspace, analyzing a real `.s` from `lcc`:
+
+![CODE: probe.s parsed, F5 run](../img/code-mode.svg)
+
+The same screen as text if images do not load:
+
+```
+▍NEX  slots.s ✕  probe.s ✕                 15→8 c. · 15 ops · e2k-v6-measured
+    11  c0     muls,0 %r10, %r11, %r20
 ──────────────────────────────────────────────────────────────────────────────
-  расписание   разбор   замечания   вывод   ядро    15 т. −7  как написано  оракул
-    т0      т1      т2      т3      т4
+  schedule     lab        findings    output   core     15 c. −7  as written    oracle
+    c0      c1      c2      c3      c4
  ,0  muls    muls    muls    muls    muls
-  F5 прогнать   F6 переписать   F12 док   ^P команда   ^G спросить
+  F5 run        F6 rewrite      F12 dock  ^P command   ^G ask
 ```
 
-Остальные экраны — РАЗБОР (весь граф, решётка тактов×каналов, диагноз),
-АГЕНТ (диалог) и полноэкранное ЯДРО (верстак интерпретатора) — открываются
-по `/clear` или `^O` и возвращают обратно по `Esc`:
+The other screens — LAB (full DAG, cycles×channels grid, diagnosis), AGENT (dialog),
+and fullscreen CORE (interpreter workbench) — open via `/clear` or `^O` and return via
+`Esc`:
 
-![РАЗБОР: участок slotclash, решётка и все панели](../img/lab-mode.svg)
+![LAB: slotclash block, grid and all panels](../img/lab-mode.svg)
 
-**Каждый экран описан отдельно, кнопка за кнопкой:**
-[КОД](../CODE_MODE.md) — редактор, проводник, все вкладки дока и оговорка
-про F6; [РАЗБОР](../LAB_MODE.md) — решётка и все семь панелей;
-[ЯДРО](../CORE_MODE.md) — коротко, это калькулятор с историей. Полная
-документация по CLI (команды, флаги, Tab-дополнение, история, разбор
-проблем) — [docs/CLI.md](../CLI.md).
+**Each screen is documented separately, button by button:**
+[CODE](../CODE_MODE.md) — editor, explorer, all dock tabs, and the F6 caveat;
+[LAB](../LAB_MODE.md) — the grid and all seven panels;
+[CORE](../CORE_MODE.md) — brief, it is a calculator with history. Full CLI
+documentation (commands, flags, Tab completion, history, troubleshooting) —
+[docs/CLI.md](../CLI.md).
 
-### Про опциональные зависимости
+### About Optional Dependencies
 
-Обязательных зависимостей у проекта нет. **Весь функционал — цвет, рамки,
-воспроизведение, интерактивный цикл, разбор и диагностика — работает на голом
-ANSI и стандартной библиотеке.** Опциональных две:
+The project has no required dependencies. **All functionality — color, borders,
+replay, interactive loop, analysis, and diagnostics — runs on plain ANSI and the
+standard library.** Two packages are optional:
 
-| пакет | что даёт | без него |
+| package | what it adds | without it |
 |---|---|---|
-| `textual` | три полноэкранных режима: верстак интерпретатора, интерактивная решётка расписания, диалог с трассой | экран-помощник с причиной, планом и командой `pip install`; разовые команды и `--plain` работают |
-| `rich` | панели вокруг заметных блоков отчётов | те же блоки рамками из ANSI |
+| `textual` | three fullscreen modes: interpreter workbench, interactive schedule grid, dialog with trace | helper screen with reason, plan, and `pip install` command; one-shot commands and `--plain` work |
+| `rich` | panels around prominent report blocks | the same blocks with ANSI borders |
 
-Первый запуск без `textual` — не тупик и не справка. Открывается экран-помощник:
-он называет причину, принимает запрос обычными словами или выбор стрелками,
-показывает план с точными командами и после подтверждения сам ставит
-недостающие пакеты и открывает рабочее место. Удаление и другие необратимые
-шаги помощник никогда не выполняет сам — только показывает команды. `--plain`
-остаётся явным способом работать построчно.
+First launch without `textual` is neither a dead end nor a help dump. A helper screen
+opens: it explains why, accepts a plain-language request or arrow-key selection, shows
+a plan with exact commands, and after confirmation installs the missing packages and
+opens the workspace. Deletion and other irreversible steps are never executed by the
+helper — it only shows the commands. `--plain` remains the explicit way to work
+line-by-line.
 
-Если в окружении установлен
-[`rich`](https://github.com/Textualize/rich), заметные блоки (логотип, вердикт,
-справочные панели) дополнительно оформляются его панелями — это косметика с
-автоматическим graceful fallback, если библиотеки нет:
+If [`rich`](https://github.com/Textualize/rich) is installed in the environment,
+prominent blocks (logo, verdict, help panels) are additionally framed with its panels —
+purely cosmetic, with automatic graceful fallback if the library is absent:
 
 ```bash
-pip install rich    # единственная опциональная зависимость, не обязательна
+pip install rich    # the only optional dependency, not required
 ```
 
-## Калибровка модели машины
+## Machine Model Calibration
 
-Числа получены экспериментально: тестовые `.c` с независимыми операциями
-скомпилированы кросс-компилятором `lcc-1.29.16 -O3 -fverbose-asm -S` (таргет
-e2k-v6) и прогнаны под `qemu-e2k-static`; дальше читались готовые широкие
-команды в `.s`. Латентности видны по разнице номеров bundle — компилятор
-кодирует задержку явными `nop N`, что позволяет читать тайминги без публичной
-документации на систему команд.
+The numbers were obtained experimentally: test `.c` files with independent operations
+were compiled with the cross-compiler `lcc-1.29.16 -O3 -fverbose-asm -S` (target
+`e2k-v6`) and run under `qemu-e2k-static`; then the emitted wide instructions in `.s`
+were inspected. Latencies are visible from bundle-number deltas — the compiler encodes
+delays with explicit `nop N`, making timings readable without public ISA documentation.
 
-### Матрица возможностей портов — спрошена у ассемблера
+### Port capability matrix — asked of the assembler
 
-Читать листинг компилятора и делать выводы о железе **ненадёжно**: видно то,
-что планировщик захотел сделать, а не то, что машина может (именно на этом и
-построена [ошибка первой версии](#как-модель-оказалась-неверной-и-что-это-меняет)).
-Поэтому матрица снимается иначе: для каждой пары (операция, канал) собирается
-крошечный `.s` и отдаётся **ассемблеру**. Нельзя — получаем прямой отказ:
+Reading compiler listings and drawing conclusions about hardware is **unreliable**: you
+see what the scheduler chose to do, not what the machine can do (that is literally how
+the [first-version error](#how-the-model-turned-out-to-be-wrong-and-what-that-changes)
+happened). So the matrix is extracted differently: for every `(operation, channel)`
+pair, a tiny `.s` is assembled and handed to the **assembler**. If illegal, we get a
+direct rejection:
 
 ```
 Error: `muls' cannot be encoded in ALC2
 ```
 
-Это утверждение про кодировку широкой команды, то есть про само железо.
-Перебором всех шести каналов для каждой операции получилось:
+That is a statement about wide-instruction encoding — i.e., about the hardware itself.
+Sweeping all six channels for every operation yielded:
 
-| Операция | Каналы | Латентность | Темп приёма | Источник |
+| Operation | Channels | Latency | Issue rate | Source |
 |---|---|---|---|---|
-| `adds`/`subs`/`ands`/`shls` | все шесть `,0`…`,5` | 1 такт | 1/такт | ассемблер + цепочка |
-| `muls`/`muld` | `,0 ,1 ,3 ,4` (четыре) | 4 такта | 1/такт | ассемблер + цепочка |
-| `sdivs` | **только `,5`** | 11 тактов | раз в 2 такта | ассемблер + цепочка |
-| `ldw`/`ldd` | `,0 ,2 ,3 ,5` | 5 тактов | 1/такт | ассемблер + цепочка |
-| `stw`/`std` | **только `,2 ,5`** | 2 такта | 1/такт | ассемблер + цепочка + попарная проба |
+| `adds`/`subs`/`ands`/`shls` | all six `,0`…`,5` | 1 cycle | 1/cycle | assembler + chain |
+| `muls`/`muld` | `,0 ,1 ,3 ,4` (four) | 4 cycles | 1/cycle | assembler + chain |
+| `sdivs` | **`,5` only** | 11 cycles | 1 per 2 cycles | assembler + chain |
+| `ldw`/`ldd` | `,0 ,2 ,3 ,5` | 5 cycles | 1/cycle | assembler + chain |
+| `stw`/`std` | **`,2 ,5` only** | 2 cycles | 1/cycle | assembler + chain + pair probe |
 
-Латентности мерялись **цепочками зависимых** операций (`x = x * b` подряд:
-компилятор обязан развести их ровно на латентность), темп приёма — **потоками
-независимых** (шаг между выдачами). Четыре `muls` в одной широкой команде
-собираются успешно — ограничения «не больше двух умножений сразу» на уровне
-кодировки нет.
+Latencies were measured via **chains of dependent** operations (`x = x * b` in a row:
+the compiler must space them by exact latency), and issue rates via **streams of
+independent** operations (step between issues). Four `muls` in a single wide instruction
+assemble cleanly — there is no "at most two multiplies at once" limit at the encoding
+level.
 
-Вывод, зашитый в модель: у e2k не «шесть взаимозаменяемых АЛУ», а **матрица
-возможностей** порт → допустимые операции. Но настоящая монополия в ней ровно
-одна — **делитель**; вторая по дефицитности вещь — запись (два канала).
-Умножитель узким местом не является.
+Conclusion baked into the model: `e2k` does not have "six interchangeable ALUs", but a
+**capability matrix** mapping port → allowed operations. Yet there is only one true
+monopoly in it — the **divider**; the second scarcest resource is store (two channels).
+The multiplier is not a bottleneck.
 
-Отчёт печатает источник каждого параметра — чтобы измеренное не смешивалось
-с придуманным. Отсюда три профиля машины:
+The report prints the source of every parameter so measured values never mix with
+guesses. Hence three machine profiles:
 
-- **`e2k-v6-measured`** (по умолчанию) — матрица, проверенная ассемблером,
-  латентности сняты цепочками. То, во что стоит верить.
-- **`e2k-v6-firstprobe`** — **опровергнутая** первая версия: «единственный
-  умножитель на `,0`, держит порт 8 тактов», DIV 13/13, LOAD 2. Оставлена
-  специально, чтобы разницу можно было увидеть своими глазами, а не только
-  прочитать: `/model e2k-v6-firstprobe`, затем `/run slotclash`.
-- **`naive_homogeneous`** — вырожденный контраст: 6 полностью равноправных
-  каналов, любая операция на любом. Показывает случай, где выбор порта вообще
-  не является решением.
+- **`e2k-v6-measured`** (default) — matrix verified by the assembler, latencies measured
+  from dependent chains. What you should trust.
+- **`e2k-v6-firstprobe`** — the **refuted** first version: "sole multiplier on `,0`
+  holding the port for 8 cycles", DIV 13/13, LOAD 2. Kept deliberately so you can see
+  the difference with your own eyes rather than just read about it:
+  `/model e2k-v6-firstprobe`, then `/run slotclash`.
+- **`naive_homogeneous`** — degenerate contrast: 6 fully symmetric channels, any
+  operation on any channel. Shows the case where port choice is not a decision at all.
 
-Ключевой результат прототипа как раз и состоит в том, что *ответ на вопрос
-«нужен ли тут ИИ» полностью зависит от матрицы возможностей портов*. Раньше
-этот параметр был допущением — теперь он измерен, и измерение показало ту
-самую монополию портов, при которой разрыв между эвристикой и оптимумом
-возникает.
+The prototype's key result is precisely that *the answer to "is AI needed here" depends
+entirely on the port capability matrix*. Previously that parameter was an assumption —
+now it is measured, and measurement revealed the exact port monopoly that creates a gap
+between heuristic and optimum.
 
-### Сочетания операций: второй класс ограничений
+### Operation combinations: a second class of constraints
 
-Матрица портов отвечает на вопрос «исполнима ли операция в этом канале» — по
-одной операции за раз. Тем же приёмом можно спросить и про **пары**: собрать
-широкую команду из двух операций, каждая из которых по отдельности законна, и
-посмотреть, примет ли её ассемблер. Полный перебор находит ровно два запрета:
+The port matrix answers "is an operation executable on this channel" — one operation at
+a time. The same technique asks about **pairs**: build a wide instruction from two
+operations that are each legal on their own and see if the assembler accepts it.
+Exhaustive enumeration finds exactly two bans:
 
 ```
 Error: the combination of STORE in ALC2 with LOAD in ALC3 is prohibited
 Error: the combination of STORE in ALC5 with LOAD in ALC0 is prohibited
 ```
 
-Остальные 117 сочетаний законны — включая `STORE,2 + LOAD,0` и
-`STORE,5 + LOAD,3`. То есть запрет не «запись плюс загрузка вообще», а именно
-эти две пары каналов: `(2,3)` и `(5,0)` — «швы» между кластерами `,0 ,1 ,2` и
-`,3 ,4 ,5`. **Кластерность машины существует и наблюдаема, но проявляется как
-структурный запрет в широкой команде, а не как межкластерная задержка.**
+The other 117 combinations are legal — including `STORE,2 + LOAD,0` and
+`STORE,5 + LOAD,3`. So the ban is not "store plus load in general", but specifically
+these two channel pairs: `(2,3)` and `(5,0)` — the "seams" between clusters `,0 ,1 ,2`
+and `,3 ,4 ,5`. **Machine clustering exists and is observable, but manifests as a
+structural ban inside a wide instruction rather than as an inter-cluster latency.**
 
-Саму межкластерную задержку локальным тулчейном снять **нельзя**, и это
-проверено, а не предположено: ассемблер регистровых зависимостей не
-отслеживает вообще (зависимая пара в соседних тактах принимается молча), а
-компилятору нельзя приказать, в какой кластер класть операцию — из `.c` каналы
-не выбираются. Ставить задержку в модель «по документации» значило бы
-повторить ровно ту ошибку, из-за которой пришлось заводить профиль
-`e2k-v6-firstprobe`.
+Inter-cluster latency itself **cannot** be measured with a local toolchain, and that is
+verified rather than assumed: the assembler does not track register dependencies at all
+(a dependent pair in adjacent cycles is silently accepted), and the compiler cannot be
+instructed which cluster to place an operation in — channels cannot be chosen from `.c`.
+Putting a latency into the model "from documentation" would repeat the exact mistake
+that forced us to create the `e2k-v6-firstprobe` profile.
 
-В модель запреты пока **не заведены**, и это осознанный порядок работ, а не
-недосмотр: точный поиск опирается на свойство «двудольное паросочетание
-существует ⟺ набор выдаваем в этом такте», и запрет на пары его ломает —
-менять пришлось бы ядро доказательства оптимальности. Расхождение сторожит
-сама проверка: `python -m vliw verify` перебирает пары при каждом прогоне и
-ругается, если набор запретов изменится. Разбор — в
-[`examples/probes/README.md`](../../examples/probes/README.md).
+The bans are **not yet wired into the model**, and that is a deliberate ordering of work
+rather than an oversight: exact search relies on "a bipartite matching exists ⟺ the set
+is issuable in this cycle", and pair bans break that property — changing it requires
+modifying the core optimality proof. The gap is guarded by verification itself:
+`python -m vliw verify` sweeps pairs on every run and complains if the set of bans
+changes. Details in [`examples/probes/README.md`](../../examples/probes/README.md).
 
-## Как это устроено
+## How It Is Structured
 
-Проект разведён по слоям: **логика ничего не печатает, визуализация ничего не
-считает, склейка — тонкая.**
+The project is split into layers: **logic prints nothing, visualization computes
+nothing, glue is thin.**
 
 ```
 vliw/
-  core/            ЛОГИКА (ничего не печатает, не знает про цвет/rich)
-    model.py         модель машины: матрица возможностей портов, латентности, монополия
-    dag.py           граф зависимостей, тестовые сценарии, нижние границы
-    schedule.py      расписание (такт, порт) + полная валидация
-    api.py           протокол Scheduler (контракт всех планировщиков)
-    baseline.py      жадный list scheduler        (kind="heuristic")
-    oracle.py        точный поиск + запасной движок (kind="exact")
-    doctor.py        диагностика: где теряются такты и почему (правила)
-    asm_parser.py    разбор настоящего .s от lcc → граф + расписание компилятора
-    selfcheck.py     независимая проверка оракула полным перебором
-  ui/              ВИЗУАЛИЗАЦИЯ (берёт данные из core, рендерит; ANSI + rich)
-    render.py        цвет, ширина, рамки, таблицы, панели
-    theme.py         палитра из themes/*.json (роли + цвета операций)
-    themes/*.json    сами темы: nex-dark (по умолч.), classic
-    logo.py          пиксельный баннер NEX + гора Эльбруса, статус-строка
-    tables.py        таблицы сценариев/результатов/матрицы/sweep/selfcheck
-    schedule_view.py пачки-рамки, вердикт, границы, критический путь, разбор
-    context.py       панель контекста сессии (она же команда /status)
-    slash.py         палитра «/»: фильтр команд по группам, подстановка аргументов
-  tui/             ПОЛНОЭКРАННЫЙ ИНТЕРФЕЙС (Textual; единственный fullscreen)
-    screens/         КОД (рабочее место) + РАЗБОР / АГЕНТ / ЯДРО
-    widgets.py       панели, палитра «/», док ввода, умная вставка
-  learned/         ОБУЧЕННАЯ МОДЕЛЬ: LoRA поверх Qwen2.5-3B, локальный запуск
-    runtime.py       поиск весов, зависимости, llama.cpp-сервер, генерация
-    scheduler.py     LearnedScheduler(kind="learned") — рабочая реализация
-    portfolio.py     CAB: несколько законных расписаний из одного ответа
-    repair.py        починка незаконных каналов в сыром ответе модели
-    bench.py         замер на любом .jsonl, отвязан от встроенного эвала
-    README.md        интерфейс, формат промпта, ссылка на веса на HF
-  tiny/            КРОШКИ: рабочий обученный планировщик (~21К параметров,
-                   инференс чистой стандартной библиотекой, миллисекунды).
-                   Веса лежат в git (килобайты, не гигабайты) — в отличие от
-                   learned/, ничего скачивать не нужно. Подробно и с замерами —
-                   [vliw/tiny/README.md](../../vliw/tiny/README.md), команда `/tiny`
-  cli.py           ЕДИНАЯ точка входа: команда → core → ui → печать
-  __main__.py      тонкий: вызывает cli.main()
+  core/            LOGIC (prints nothing, knows nothing about color/rich)
+    model.py         machine model: port capability matrix, latencies, monopoly
+    dag.py           dependency DAG, test scenarios, lower bounds
+    schedule.py      schedule (cycle, port) + full validation
+    api.py           Scheduler protocol (contract for all schedulers)
+    baseline.py      greedy list scheduler        (kind="heuristic")
+    oracle.py        exact search + fallback engine (kind="exact")
+    doctor.py        diagnostics: where cycles are lost and why (rules)
+    asm_parser.py    parser for real .s from lcc → DAG + compiler schedule
+    selfcheck.py     independent brute-force verification of the oracle
+  ui/              VISUALIZATION (takes data from core, renders; ANSI + rich)
+    render.py        color, width, borders, tables, panels
+    theme.py         palette from themes/*.json (roles + op colors)
+    themes/*.json    themes themselves: nex-dark (default), classic
+    logo.py          pixel NEX banner + Elbrus peak, status bar
+    tables.py        tables for scenarios/results/matrix/sweep/selfcheck
+    schedule_view.py bundle boxes, verdict, bounds, critical path, breakdown
+    context.py       session context panel (also the /status command)
+    slash.py         "/" palette: command filtering by group, arg completion
+  tui/             FULLSCREEN INTERFACE (Textual; sole fullscreen UI)
+    screens/         CODE (workspace) + LAB / AGENT / CORE
+    widgets.py       panels, "/" palette, input dock, smart insert
+  learned/         TRAINED MODEL: LoRA on Qwen2.5-3B, local execution
+    runtime.py       weight discovery, dependencies, llama.cpp server, generation
+    scheduler.py     LearnedScheduler(kind="learned") — working implementation
+    portfolio.py     CAB: multiple legal schedules from one response
+    repair.py        repairing illegal channels in raw model output
+    bench.py         benchmark on any .jsonl, decoupled from built-in eval
+    README.md        interface, prompt format, HF weights link
+  tiny/            TINY SCHEDULERS: working trained scheduler (~21K parameters,
+                   pure stdlib inference, milliseconds).
+                   Weights live in git (kilobytes, not gigabytes) — unlike
+                   learned/, nothing to download. Details & benchmarks —
+                   [vliw/tiny/README.md](../../vliw/tiny/README.md), `/tiny` command
+  cli.py           SINGLE entry point: command → core → ui → print
+  __main__.py      thin: calls cli.main()
 docs/
-  CLI.md           полная документация по CLI: команды, флаги, ввод, проблемы
+  CLI.md           full CLI documentation: commands, flags, input, troubleshooting
 ```
 
-Все планировщики реализуют один протокол `Scheduler` из `core/api.py` —
-и классификация честная:
+All schedulers implement the single `Scheduler` protocol from `core/api.py`, with honest
+classification:
 
 ```python
 GreedyListScheduler   kind = "heuristic"   # baseline
-OracleScheduler       kind = "exact"       # точный поиск (потолок), НЕ «ИИ»
-LearnedScheduler      kind = "learned"     # обученная LLM — обучена и работает
-TinyScheduler         kind = "learned"     # крошки: MLP-приоритеты + поиск,
-                                           # законность по построению, см. /tiny
+OracleScheduler       kind = "exact"       # exact search (ceiling), NOT "AI"
+LearnedScheduler      kind = "learned"     # trained LLM — trained and working
+TinyScheduler         kind = "learned"     # tiny: MLP priorities + search,
+                                           # legal by construction, see /tiny
 
-    def schedule(self, dag, model) -> SchedulingResult:  # общий контракт
+    def schedule(self, dag, model) -> SchedulingResult:  # shared contract
         ...
 ```
 
-Всё остальное — валидация, метрики, объяснения, CLI, визуализация — работает
-с любым планировщиком, реализующим этот метод. Обученная модель уже лежит в
-[`vliw/learned/`](../../vliw/learned/README.md), не переделывая `core`/`ui`/`cli`, —
-контракт и задумывался ради этого. Оракул остаётся верхней планкой для
-сравнения независимо от того, как ведёт себя модель.
+Everything else — validation, metrics, explanations, CLI, visualization — works with any
+scheduler implementing this method. The trained model already lives in
+[`vliw/learned/`](../../vliw/learned/README.md) without modifying `core`/`ui`/`cli` —
+that is what the contract was designed for. The oracle remains the upper comparison bar
+regardless of how the model behaves.
 
-### Почему оракулу можно верить
+### Why you can trust the oracle
 
-Оракул объявляет свои расписания оптимальными — заявление, которому нельзя
-верить на слово: ошибка в отсечении дала бы «доказанный оптимум», который
-оптимумом не является, и всё демо превратилось бы в подтасовку. Поэтому
-`core/selfcheck.py` содержит второй, намеренно тупой планировщик — полный перебор
-всех подмножеств готовых инструкций и всех назначений каналов, без единого
-умного отсечения.
+The oracle declares its schedules optimal — a claim you cannot take on faith: a pruning
+bug would produce a "proven optimum" that is not optimal, turning the whole demo into a
+rigged show. Therefore `core/selfcheck.py` contains a second, deliberately dumb
+scheduler — exhaustive brute-force over all subsets of ready instructions and all
+channel assignments, without a single clever prune.
 
-Прогон на 5472 задачах (случайные графы 5–8 инструкций × машины шириной 2–3 ×
-оба профиля) расхождений не дал: там, где оракул заявляет оптимальность, его
-makespan совпадает с полным перебором, и нижняя граница ни разу не оказалась
-выше истинного оптимума. Плюс каждое выданное расписание проходит валидацию
-(зависимости, ширина команды, возможности портов, монопольное занятие) —
-это проверяется и в CLI, на каждом прогоне.
+A run across 5,472 problems (random graphs of 5–8 instructions × machines of width 2–3 ×
+both profiles) produced zero mismatches: wherever the oracle claims optimality, its
+makespan matches brute force, and the lower bound was never above the true optimum. In
+addition, every emitted schedule passes validation (dependencies, bundle width, port
+capabilities, monopoly occupancy) — checked in the CLI on every run as well.
 
 ```bash
 python -m vliw selfcheck --seeds 40 --time-limit 120
 ```
 
-## Ограничения прототипа
+## Prototype Limitations
 
-- Модель машины игрушечная: нет регистрового давления, спекуляции,
-  предикатов, обращений к памяти сложнее «load с фиксированной латентностью».
-  Настоящий e2k устроен сложнее по всем пунктам.
-- **Ограничений на сочетания операций внутри широкой команды в модели нет —
-  а у машины они есть, и они измерены.** Ассемблер отвергает ровно две пары:
-  запись в `,2` вместе с загрузкой в `,3` и запись в `,5` вместе с загрузкой
-  в `,0`. Это «швы» между кластерами каналов (`,0 ,1 ,2` и `,3 ,4 ,5`).
-  Пробел зафиксирован проверкой (`python -m vliw verify` печатает его при
-  каждом прогоне), а не забыт — [подробности и почему в модель пока не
-  заведено](#сочетания-операций-второй-класс-ограничений).
-- Матрица возможностей портов снята у ассемблера и в этой части надёжна, но
-  проверены только те операции, что есть в модели (`adds`/`subs`/`ands`/`shls`,
-  `muls`/`muld`, `sdivs`, `ldw`/`ldd`, `stw`/`std`). Всё остальное богатство
-  системы команд e2k не рассматривалось вовсе.
-- Латентности сняты с КОМПИЛЯТОРА, а не с железа: это то, во что верит `lcc`
-  при планировании. Совпадение с реальными тактами на живой машине пока не
-  проверено — для этого нужен доступ к серверу Эльбрус.
-- Величину разрыва на реальном коде прототип не измеряет: она зависит от того,
-  как часто в коде рядом оказываются готовое некритическое и критическое
-  действия, которым нужен один и тот же дефицитный порт.
-- Точный поиск начинает не укладываться в бюджет примерно с 30 инструкций;
-  дальше работает портфельный перебор без гарантий.
-- Планируется один прямолинейный участок кода: ни ветвлений, ни циклов,
-  ни программной конвейеризации.
+- The machine model is a toy: no register pressure, speculation, predicates, or memory
+  accesses more complex than "load with fixed latency". Real `e2k` is more complex in
+  every respect.
+- **Intra-bundle operation combination constraints are not in the model — yet the machine
+  has them, and they are measured.** The assembler rejects exactly two pairs: store on
+  `,2` with load on `,3`, and store on `,5` with load on `,0`. These are the "seams"
+  between channel clusters (`,0 ,1 ,2` and `,3 ,4 ,5`). The gap is tracked by a check
+  (`python -m vliw verify` prints it on every run), not forgotten —
+  [details and why it is not yet in the model](#operation-combinations-a-second-class-of-constraints).
+- The port capability matrix was extracted from the assembler and is reliable in that
+  scope, but only the operations in the model were probed (`adds`/`subs`/`ands`/`shls`,
+  `muls`/`muld`, `sdivs`, `ldw`/`ldd`, `stw`/`std`). The rest of the `e2k` ISA was not
+  examined at all.
+- Latencies were extracted from the COMPILER, not silicon: they are what `lcc` believes
+  when scheduling. Agreement with real hardware cycles on a live machine has not yet
+  been checked — that requires access to an Elbrus server.
+- The prototype does not measure gap magnitude on real code: that depends on how often
+  a ready non-critical op and a critical op needing the same scarce port occur side by
+  side.
+- Exact search starts exceeding budget around 30 instructions; beyond that, portfolio
+  search runs without guarantees.
+- Only a single straight-line block is scheduled: no branches, no loops, no software
+  pipelining.
 
-## Что дальше
+## What's Next
 
-1. Проверить латентности на ЖИВОМ железе, а не только по вере компилятора
-   (доступ к серверам Эльбрус по заявке через dev.mcst.ru). Матрица портов уже
-   снята надёжно — у ассемблера; под вопросом именно тайминги. Там же и только
-   там снимается межкластерная задержка: локальным тулчейном она не измеряется
-   в принципе (см. [выше](#сочетания-операций-второй-класс-ограничений)).
-2. Завести измеренные запреты на сочетания в модель отдельным профилем.
-   Работа не косметическая — задевает ядро точного поиска, — и делать её
-   стоит после того, как отработает обучение: смена профиля обесценивает уже
-   снятые замеры.
-3. Перенести постановку на Hexagon в LLVM: там открытый `MachineScheduler`,
-   реальное описание слотов широкой команды и доступ к внутренностям.
-4. Обучать модель на парах «граф → расписание», где эталон даёт оракул из
-   этого прототипа, а метрика качества — тот самый разрыв в тактах.
+1. Verify latencies on LIVE silicon, not just by compiler belief (Elbrus server access
+   by application via dev.mcst.ru). The port matrix is already reliably extracted from
+   the assembler; timings are what remain in question. That is also the only place to
+   measure inter-cluster latency: it cannot be measured with a local toolchain in
+   principle (see [above](#operation-combinations-a-second-class-of-constraints)).
+2. Add the measured combination bans to the model as a separate profile. Not cosmetic —
+   it touches the core of exact search — and should be done after training completes:
+   changing the profile invalidates prior measurements.
+3. Port the setup to Hexagon in LLVM: it has an open `MachineScheduler`, a real wide-
+   instruction slot description, and access to internals.
+4. Train a model on "DAG → schedule" pairs where the oracle from this prototype supplies
+   the ground truth and the quality metric is that exact cycle gap.
 
-## Ссылки
+## Links
 
-- Портал МЦСТ для разработчиков: https://dev.mcst.ru/
-- Кросс-компилятор и `qemu-e2k-static`: https://dev.mcst.ru/download/
-- Удалённый доступ к серверам Эльбрус: https://dev.mcst.ru/access/
-- Комьюнити-ресурсы по e2k: https://github.com/e2k-community/awesome-e2k
-- Hexagon-бэкенд в LLVM: https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/Hexagon
+- MCST developer portal: https://dev.mcst.ru/
+- Cross-compiler and `qemu-e2k-static`: https://dev.mcst.ru/download/
+- Remote access to Elbrus servers: https://dev.mcst.ru/access/
+- Community `e2k` resources: https://github.com/e2k-community/awesome-e2k
+- Hexagon backend in LLVM: https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/Hexagon
 
-## Поддержать
+## Support
 
-Проект делается одним человеком, в свободное время, и отдаётся как есть —
-вместе с честным отрицательным результатом, а не только с удачными числами.
-Если пригодился или просто показался стоящим:
+This project is built by one person in spare time and given away as-is — along with its
+honest negative result, not just flattering numbers. If you found it useful or simply
+worthwhile:
 
 **https://pay.cloudtips.ru/p/7809ff65**
 
-Донат ни к чему не обязывает ни вас, ни меня: он не покупает поддержку,
-приоритет правок или обещание развивать проект дальше. Это спасибо за
-сделанное, а не подписка на будущее.
+Donations create no obligation for either of us: they do not buy support, bug-fix
+priority, or a promise to keep developing the project. It is a thank-you for what was
+built, not a subscription to the future.
 
-## Лицензия
+## License
 
-MIT, см. [LICENSE](../../LICENSE).
+MIT, see [LICENSE](../../LICENSE).

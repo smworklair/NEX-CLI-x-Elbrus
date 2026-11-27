@@ -1,13 +1,10 @@
-"""АГЕНТ — диалог, у которого видно основание.
+"""AGENT — dialog with visible grounding.
 
-Претензия к прежнему чату была простая: он отвечал текстом в ту же ленту, где
-до этого печатались отчёты, и понять, на чём основан ответ, было нельзя.
-
-Здесь ответ и его основание разведены. Слева — разговор, ответ печатается по
-мере поступления. Справа — ровно те числа, которые агенту переданы, и трасса:
-что он сделал сам, прежде чем отвечать (загрузил файл, переключил участок,
-посчитал расписание). Ответ можно перепроверить теми же командами, поэтому
-трасса — не украшение, а способ не поверить агенту на слово.
+Instead of mixing chat prose into the same log as command reports, this screen
+separates the answer from its evidence: the streaming conversation sits on the
+left, while the right column shows the exact numbers passed to the agent and
+the trace of actions it ran (loading files, switching blocks, scheduling) so
+every claim can be verified directly.
 """
 
 from __future__ import annotations
@@ -22,17 +19,17 @@ from ..widgets import (Chip, Panel, PromptBar, Tool, plural)
 from .base import ModeScreen
 
 QUESTIONS = [
-    "почему этот участок медленный?",
-    "где теряются такты и что менять?",
-    "сравни baseline с точным поиском",
-    "что за монопольный порт ,5?",
-    "загрузи examples/probe.s и разбери",
-    "какой предел у этого участка?",
+    "why is this block slow?",
+    "where are cycles lost and what should I change?",
+    "compare baseline with exact search",
+    "what is the exclusive ,5 port?",
+    "load examples/probe.s and analyze it",
+    "what is the lower bound for this block?",
 ]
 
 
 def _wrap(text: str, width: int, indent: int) -> str:
-    """Перенос с висячим отступом — колонка узкая, а находки длинные."""
+    """Wrap text with a hanging indent for narrow sidebar columns."""
     import textwrap
 
     pad = " " * indent
@@ -41,11 +38,11 @@ def _wrap(text: str, width: int, indent: int) -> str:
 
 class AgentScreen(ModeScreen):
     mode = "mind"
-    mode_title = "АГЕНТ"
-    mode_subtitle = "диалог"
-    placeholder = "спросите обычным языком"
-    key_placeholder = "вставь API-ключ и нажми Enter…"
-    hint = "/clear — очистить   ·   ключ — вставь сюда"
+    mode_title = "AGENT"
+    mode_subtitle = "dialog"
+    placeholder = "ask in plain language"
+    key_placeholder = "paste API key and press Enter…"
+    hint = "/clear — clear   ·   paste key here"
     SIDE_ID = "#mind-right"
     TIPS_ID = "#p-questions"
 
@@ -54,104 +51,83 @@ class AgentScreen(ModeScreen):
         self._answer: Static | None = None
         self._buf = ""
         self._actions: list[str] = []
-        self._model: tuple[bool | None, str] = (None, "проверяю…")
+        self._model: tuple[bool | None, str] = (None, "checking…")
         self._wide = ""
-        #: Ждём вставки ключа вместо вопроса (см. _maybe_ask_key).
+        #: Waiting for a pasted API key instead of a question (see _maybe_ask_key).
         self._awaiting_key = False
-        #: Просьбу показали один раз за жизнь экрана — не нудим повторами.
+        #: Show the key prompt at most once per screen lifetime.
         self._key_offered = False
-        # Каждый заданный вопрос с его счётом: сколько модель думала и сколько
-        # действий успела сделать до ответа. Это история рабочей области, а не
-        # украшение: развёрнутый ДИАЛОГ показывает её слева, и клик повторяет
-        # вопрос — тот же приём, что и журнал запусков в ВЫВОДЕ КОМАНД.
+        # Question history with timing and action count (shown on left when
+        # DIALOG is maximized; clicking repeats the question).
         self._asked: list[dict] = []
         self._last_q = ""
         self._t0 = 0.0
-        #: Сколько реплик общей переписки уже в ленте (см. _sync_dialog).
+        #: Number of shared `session.dialog` entries already mounted.
         self._shown = 0
-        #: Каталог моделей: выбранный провайдер, фильтр, заметка. Состояние
-        #: только на сессию — как и ключ.
+        #: Session-only model catalog state: selected provider, filter, note.
         self._model_prov: str | None = None
         self._model_filter = ""
         self._model_note = ""
-        #: Штаб: миссии на проверенных подключениях. Только память сессии:
+        #: HQ missions on verified connections (session memory only):
         #: [{id, conn, area, script, question, status, answer}].
         self._hq_tasks: list[dict] = []
         self._hq_seq = 0
         self._hq_conn = 0
         self._hq_area = "doctor"
-        #: Глушим эхо программной записи в поле поиска (см. on_input_changed).
+        #: Suppress programmatic writes to the search input.
         self._mute_filter = False
 
-    # --- раскладка --------------------------------------------------------
+    # --- layout -----------------------------------------------------------
 
     def compose_body(self):
         with Horizontal(id="mind-body"):
             with Vertical(id="mind-left"):
-                # Развёрнутый ДИАЛОГ — рабочая область с историей слева
-                # (заполняется кодом при развороте, как слои у других панелей),
-                # а не та же лента в большем размере. Кнопок над лентой нет
-                # намеренно: очистка и повтор живут на ^L/^R, как в журнале
-                # команд, — полоса инструментов над разговором читалась бы
-                # как чужая панель и залезала на текст.
-                with Panel(title="ДИАЛОГ", id="p-chat", topic="chat"):
+                with Panel(title="DIALOG", id="p-chat", topic="chat"):
                     with Horizontal(id="chat-body"):
                         yield Vertical(VerticalScroll(id="chat-hist"),
                                        id="chat-hist-col")
                         yield VerticalScroll(id="chat")
                 yield Panel(ItemGrid(id="question-chips", min_column_width=34),
-                            title="О ЧЁМ СПРОСИТЬ", id="p-questions")
+                            title="SUGGESTED QUESTIONS", id="p-questions")
             with Vertical(id="mind-right"):
-                # ШТАБ — главный блок правой колонки: сводка + задача всегда
-                # видны, детали (подключения, участок, скрипт, список миссий)
-                # — в развороте. Двойной клик разворачивает каждый блок.
                 yield Panel(Static(id="hq-mini"),
-                            Input(placeholder="задача штабу… (Enter — отправить)",
+                            Input(placeholder="mission for HQ… (Enter to send)",
                                   id="hq-task"),
                             VerticalScroll(id="hq-wide"),
-                            title="ШТАБ", id="p-hq", topic="hq")
-                # ПОДКЛЮЧЕНИЕ — мини-блок: провайдер на один клик + ключ.
-                # Каталог, поиск-фильтр и проверка — только в развороте.
-                with Panel(title="ПОДКЛЮЧЕНИЕ", id="p-model", topic="model"):
+                            title="HQ", id="p-hq", topic="hq")
+                with Panel(title="CONNECTION", id="p-model", topic="model"):
                     yield Static(id="model")
                     with Vertical(id="model-mini"):
                         yield ItemGrid(id="model-provs-mini",
                                        min_column_width=12)
                         with Horizontal(id="model-mini-row"):
                             yield Input(
-                                placeholder="ключ… (Enter — подключить)",
+                                placeholder="API key… (Enter to connect)",
                                 password=True, id="model-key-mini")
-                            yield Tool("подключить", "mconnect-mini",
+                            yield Tool("connect", "mconnect-mini",
                                        id="model-go")
                     yield VerticalScroll(id="model-wide")
                 yield Panel(Static(id="seen"),
                             VerticalScroll(Static(id="seen-full"),
                                            id="seen-wide"),
-                            title="ЧТО ВИДИТ АГЕНТ", id="p-seen", topic="seen")
+                            title="AGENT CONTEXT", id="p-seen", topic="seen")
                 yield Panel(VerticalScroll(Static(id="trace")),
                             VerticalScroll(Static(id="trace-full"),
                                            id="trace-wide"),
-                            title="ТРАССА", id="p-trace", topic="trace")
-                # GIT-панели здесь НЕТ осознанно: агент живёт одну сессию и
-                # не связан с общими экранами — ни общего журнала запусков,
-                # ни коммитов. Вывод команд (`/doctor`, `/run`, …) идёт тем
-                # же пузырём в диалог (см. _core_done), а не в консоль.
+                            title="TRACE", id="p-trace", topic="trace")
 
     BINDINGS = ModeScreen.BINDINGS + [
-        # Клавиши развёрнутого ДИАЛОГА — тот же паттерн, что у журнала
-        # команд (^R повтор / ^L очистить), только действуют они здесь на
-        # разговор. Никаких кнопок над лентой: действие есть, шума нет.
-        Binding("ctrl+l", "dialog_clear", "очистить диалог", show=False),
-        Binding("ctrl+r", "dialog_repeat", "повторить вопрос", show=False),
+        Binding("ctrl+l", "dialog_clear", "clear dialog", show=False),
+        Binding("ctrl+r", "dialog_repeat", "repeat question", show=False),
     ]
 
     def action_dialog_clear(self) -> None:
-        """^L — стереть ленту диалога; история вопросов остаётся."""
+        """^L — clear the dialog transcript while keeping question history."""
         if self._wide == "chat":
             self.submit_line("/clear")
 
     def action_dialog_repeat(self) -> None:
-        """^R — задать последний вопрос ещё раз (из истории или живой)."""
+        """^R — re-ask the last question."""
         if self._wide != "chat":
             return
         q = self._last_q or (self._asked[-1]["q"] if self._asked else "")
@@ -161,21 +137,8 @@ class AgentScreen(ModeScreen):
             self._t0 = _time.monotonic()
             self.submit_line(q)
 
-    def panel_tool(self, tool: str) -> None:
-        """Инструменты развёрнутых панелей АГЕНТА.
-
-        Журнала запусков здесь нет (связи с GIT нет осознанно), поэтому
-        все инструменты — базовые; действия диалога живут на ^L/^R.
-        """
-        super().panel_tool(tool)
-
     def on_screen_resume(self) -> None:
-        """Вернулись на экран — подобрать реплики, добавленные в другом окне.
-
-        Экран живёт по одному экземпляру на сессию (`NexApp._mode_screen`),
-        поэтому повторный вход ленту не пересобирает: она осталась какой
-        была. А разговор мог уйти вперёд — его продолжили в колонке КОДа.
-        """
+        """Pick up dialog messages added from other views (e.g., CODE dock)."""
         try:
             self._sync_dialog()
         except Exception:
@@ -196,12 +159,7 @@ class AgentScreen(ModeScreen):
         self._take_pending_question()
 
     def _maybe_ask_key(self) -> None:
-        """Перед началом — просьба вставить ключ, если в сессии его нет.
-
-        Только здесь, в АГЕНТЕ. Смотрят именно на ключ СЕССИИ (память), а не
-        на сохранённые файлы: вставил — работаешь, закрыл терминал — ключа
-        нет. Решение синхронное, без сети.
-        """
+        """Prompt once for a session-only API key if none is configured."""
         from ...agent import llm
 
         if self._key_offered or llm.has_session_key():
@@ -214,13 +172,13 @@ class AgentScreen(ModeScreen):
         except Exception:
             pass
         t = Text()
-        t.append("вставь API-ключ прямо сюда и нажми Enter — и спрашивай.\n",
+        t.append("paste an API key here and press Enter — then ask away.\n",
                  style=palette.role_hex("title"))
-        t.append("Ключ живёт только до закрытия терминала, никуда не "
-                 "сохраняется.\n",
+        t.append("The key lives in memory for this session only and is never "
+                 "saved to disk.\n",
                  style=palette.role_hex("dim"))
-        t.append("Без ключа тоже можно: просто спроси, отвечу по уже "
-                 "посчитанным числам.\n",
+        t.append("You can also ask without a key to get answers from computed "
+                 "numbers.\n",
                  style=palette.role_hex("dim"))
         hint = llm.key_source_hint(llm.provider())
         if hint:
@@ -229,7 +187,7 @@ class AgentScreen(ModeScreen):
         self.chat.scroll_end(animate=False)
 
     def _stop_awaiting_key(self) -> None:
-        """Вернуть строку в обычный режим (ключ принят или задан вопрос)."""
+        """Restore normal question placeholder on the input bar."""
         self._awaiting_key = False
         try:
             bar = self.query_one("#prompt", PromptBar)
@@ -238,11 +196,7 @@ class AgentScreen(ModeScreen):
             pass
 
     def _adopt_key(self, raw: str) -> None:
-        """Вставленный ключ: принять, не светя его нигде, подтвердить маской.
-
-        Сырая строка не попадает ни в переписку (`session.dialog`), ни в
-        историю строки (`PromptBar.history`, стрелка ↑) — только маска.
-        """
+        """Accept a pasted API key without logging or saving the raw secret."""
         from ...agent import llm
 
         line = raw.strip()
@@ -255,19 +209,19 @@ class AgentScreen(ModeScreen):
             label, shown, repaired = llm.adopt_pasted_key(line)
         except llm.LLMError as e:
             t = Text()
-            t.append("не похоже на ключ: ", style=palette.role_hex("warning"))
+            t.append("does not look like a key: ", style=palette.role_hex("warning"))
             t.append(str(e)[:120], style=palette.role_hex("dim"))
             self._bubble(Static(t, classes="msg-note"))
             return
         self._stop_awaiting_key()
         t = Text()
-        t.append("ключ принят: ", style=palette.role_hex("success"))
+        t.append("key accepted: ", style=palette.role_hex("success"))
         t.append(f"{label} · {shown}", style=palette.role_hex("title"))
         if repaired:
-            t.append("\nпочинил вставку: " + "; ".join(repaired),
+            t.append("\ncleaned paste: " + "; ".join(repaired),
                      style=palette.role_hex("warning"))
-        t.append("\nтолько на эту сессию: закроешь терминал — ключа не будет. "
-                 "Спрашивай.",
+        t.append("\nsession-only: closing the terminal drops the key. "
+                 "Ask away.",
                  style=palette.role_hex("dim"))
         self._bubble(Static(t, classes="msg-note"))
         self.chat.scroll_end(animate=False)
@@ -275,12 +229,7 @@ class AgentScreen(ModeScreen):
         self.refresh_context()
 
     def _take_pending_question(self) -> None:
-        """Вопрос, привезённый мостиком из журнала, — в строку, не в отправку.
-
-        Кнопка «в агента» у прогона решает только одно: о чём спросить.
-        Отправлять или стереть — решает тот, кто нажал. Поэтому текст
-        подставляется, а Enter остаётся за человеком.
-        """
+        """Pre-fill a bridged question from the journal without auto-sending."""
         q = getattr(self.app.session, "pending_question", "")
         if not q:
             return
@@ -293,11 +242,7 @@ class AgentScreen(ModeScreen):
         bar.set_value(q)
 
     def _watch_warmup(self) -> None:
-        """Пока модель греется — обновлять панель, потом перестать.
-
-        Таймер снимает сам себя: держать вечный опрос ради строки, которая
-        меняется дважды за сессию, незачем.
-        """
+        """Poll local model warmup state until ready or failed, then stop."""
         from ...agent import llm
 
         if not llm.is_local():
@@ -313,32 +258,22 @@ class AgentScreen(ModeScreen):
         timer = self.set_interval(0.7, tick)
 
     def hint_pairs(self):
-        out = [("Enter", "спросить"), ("/", "команды"),
-               ("Esc", "к выбору режима")]
-        # Клавишу очистки — текстом в подсказки: лента растёт и при активном
-        # использовании занимает весь экран, а «/clear уводит к выбору режима»
-        # никто не угадает, пока не попробовал случайно.
+        out = [("Enter", "ask"), ("/", "commands"),
+               ("Esc", "mode picker")]
         if self._wide == "chat":
-            out.append(("/clear", "очистить диалог"))
+            out.append(("/clear", "clear dialog"))
         return out
 
-    # --- ввод -------------------------------------------------------------
+    # --- input ------------------------------------------------------------
 
     def submit_line(self, raw: str) -> None:
-        """В АГЕНТЕ `/clear` чистит диалог, а не уводит к выбору режима.
-
-        Базовый экран — про команды, и там /clear действительно выход. Здесь
-        разговор и есть рабочая область: после десятка вопросов лента занимает
-        весь экран, и стереть её — первое, что хочется сделать, не покидая
-        режим. К выбору режима по-прежнему ведут Esc и ^O, а история вопросов
-        слева остаётся: чистится лента, не работа.
-        """
+        """In AGENT, `/clear` clears the dialog transcript instead of exiting."""
         import time as _time
 
         line = raw.strip()
         if line.lstrip("/").lower() in ("clear", "cls"):
             self.clear_dialog()
-            self._t0 = _time.monotonic()   # приветствие не должно ломать таймер
+            self._t0 = _time.monotonic()
             return
         super().submit_line(raw)
 
@@ -346,12 +281,10 @@ class AgentScreen(ModeScreen):
         self.chat.remove_children()
         self._buf = ""
         self._answer = None
-        # Чистим и общую переписку: иначе очищенная лента возвращалась бы
-        # целиком при следующем входе на экран (её поднимает _replay_dialog).
         self.app.session.dialog.clear()
         self._shown = 0
         self._greet()
-        self._bubble(Static(Text("— лента очищена, история вопросов слева —",
+        self._bubble(Static(Text("— transcript cleared, question history kept on left —",
                                  style=palette.role_hex("faint")),
                             classes="msg-note"))
         self._draw_chat()
@@ -363,7 +296,7 @@ class AgentScreen(ModeScreen):
         base = super().context_bits()
         return f"{base}   ·   {llm.describe()}"
 
-    # --- лента ------------------------------------------------------------
+    # --- transcript -------------------------------------------------------
 
     @property
     def chat(self) -> VerticalScroll:
@@ -376,31 +309,20 @@ class AgentScreen(ModeScreen):
     def _greet(self) -> None:
         dim = palette.role_hex("dim")
         t = Text()
-        t.append("числа считает ядро, агент их объясняет.\n",
+        t.append("core computes the numbers, agent explains them.\n",
                  style=palette.role_hex("text"))
-        t.append("что он сделал перед ответом — в трассе справа; "
-                 "любой ответ можно перепроверить командой.", style=dim)
+        t.append("actions taken before answering appear in TRACE on the right; "
+                 "every answer can be verified with a command.", style=dim)
         self._bubble(Static(t, classes="msg-note"))
         self._sync_dialog()
 
     def _sync_dialog(self) -> None:
-        """Досыпать в ленту реплики, которых в ней ещё нет.
-
-        Спрашивают агента из трёх мест — колонки в КОДЕ, вкладки АГЕНТ и
-        этого экрана, — и до общей переписки это были три разных разговора:
-        задал вопрос в колонке, развернул на весь экран, а тут пусто. Лента
-        поднимается из `session.dialog`, поэтому «развернуть» значит
-        продолжить, а не начать заново.
-
-        Показанное считается по счётчику, а не перерисовывается целиком:
-        ответ приходит потоком в живой виджет, и снос-монтаж на каждый
-        токен мигал бы всей лентой.
-        """
+        """Append any new entries from shared `session.dialog` incrementally."""
         for msg in self.app.session.dialog[self._shown:]:
             if msg["role"] == "you":
                 head = Text()
                 head.append("▌ ", style=palette.role_hex("faint"))
-                head.append("вы", style=palette.role_hex("dim"))
+                head.append("you", style=palette.role_hex("dim"))
                 head.append("\n")
                 head.append(msg["text"], style=palette.role_hex("title"))
                 self._bubble(Static(head, classes="msg-you"))
@@ -413,8 +335,6 @@ class AgentScreen(ModeScreen):
                     else Text("…", style=palette.role_hex("faint")))
             widget = Static(body, classes="msg-nex")
             self._bubble(widget)
-            # Последняя реплика может быть ещё в пути — в неё и польётся
-            # поток ответа (см. _chunk).
             self._answer = widget
         self._shown = len(self.app.session.dialog)
 
@@ -431,14 +351,12 @@ class AgentScreen(ModeScreen):
         self.app.call_from_thread(self._model_done, ok, detail)
 
     def _model_done(self, ok: bool, detail: str) -> None:
-        # Состояние модели — в панель фактов, а не в ленту: проверка идёт по
-        # сети и приходит когда угодно, в том числе посреди чужого ответа.
         self._model = (ok, detail)
         self._draw_seen()
         self._draw_model()
         self._draw_hq()
 
-    # --- ввод -------------------------------------------------------------
+    # --- input handling ---------------------------------------------------
 
     def handle_line(self, line: str) -> None:
         from ...agent import llm
@@ -450,8 +368,6 @@ class AgentScreen(ModeScreen):
             if llm.looks_like_key_text(line):
                 self._adopt_key(line)
                 return
-            # Обычный вопрос вместо ключа — значит, человек выбрал офлайн:
-            # больше не ждём, спрашиваем как обычно.
             self._stop_awaiting_key()
         self._ask(line)
 
@@ -460,18 +376,12 @@ class AgentScreen(ModeScreen):
 
         self._last_q = question
         self._t0 = time.monotonic()
-        # Переписка одна на сессию: этот же разговор виден в колонке агента
-        # и во вкладке АГЕНТ нижнего дока КОДа. См. Session.dialog.
         self.app.session.dialog.append({"role": "you", "text": question,
                                         "facts": []})
         self.app.session.dialog.append({"role": "nex", "text": "",
                                         "facts": [], "waiting": True})
         self._buf = ""
         self._actions = []
-        # Лента рисуется из переписки, а не отдельным кодом на каждый путь:
-        # вопрос мог прийти и отсюда, и из колонки в КОДе, и рисовать его
-        # двумя способами значит однажды получить два разных вида одного
-        # разговора. `_sync_dialog` заодно отдаёт виджет ответа под поток.
         self._sync_dialog()
         self.set_busy(True)
         self.run_worker(lambda: self._ask_worker(question), thread=True,
@@ -492,7 +402,7 @@ class AgentScreen(ModeScreen):
             return
         if kind == "error":
             t = Text()
-            t.append("без модели: ", style=palette.role_hex("warning"))
+            t.append("no model: ", style=palette.role_hex("warning"))
             t.append(value[:160], style=palette.role_hex("dim"))
             self._bubble(Static(t, classes="msg-note"))
             return
@@ -506,7 +416,7 @@ class AgentScreen(ModeScreen):
             self.chat.scroll_end(animate=False)
 
     def _render_answer(self, text: str) -> Text:
-        """Лёгкая разметка ответа: **жирное**, `код`, списки — без markdown."""
+        """Lightweight inline formatting: **bold**, `code`, and bullet lists."""
         from ...ui import agent_view
 
         out = Text()
@@ -524,11 +434,8 @@ class AgentScreen(ModeScreen):
 
         self.set_busy(False)
         if self._answer is not None and not self._buf.strip():
-            self._answer.update(Text("ответа не было",
+            self._answer.update(Text("no response",
                                      style=palette.role_hex("warning")))
-        # Вопрос в историю — только когда ответ закончился: строка без счёта
-        # («сколько думала», «что успела сделать») вела бы себя как кнопка, у
-        # которой половина функции не работает.
         if self._last_q:
             self._asked.append({"q": self._last_q,
                                 "seconds": time.monotonic() - self._t0,
@@ -545,12 +452,7 @@ class AgentScreen(ModeScreen):
         self._draw_hq()
 
     def _core_done(self, out: str, err: str) -> None:
-        """Вывод команды — в диалог, а не в консоль: консоли здесь нет.
-
-        GIT-панель убрана осознанно (агент не связан с общими экранами), и
-        прятать отчёт команды некуда — поэтому он показывается тем же пузырём
-        в ленте, что ответы. В журнал других экранов ничего не пишется.
-        """
+        """Render slash-command output as a dialog bubble (no separate console)."""
         self.set_busy(False)
         t = Text()
         if out.strip():
@@ -563,7 +465,7 @@ class AgentScreen(ModeScreen):
                 t.append("\n")
             t.append(err.strip()[:500], style=palette.role_hex("warning"))
         if not out.strip() and not err.strip():
-            t.append("(пусто)", style=palette.role_hex("faint"))
+            t.append("(empty)", style=palette.role_hex("faint"))
         self._bubble(Static(t, classes="msg-note"))
         self.chat.scroll_end(animate=False)
         self.app.reload_palette()
@@ -576,19 +478,10 @@ class AgentScreen(ModeScreen):
         self._draw_model()
         self._draw_hq()
 
-    # --- правая колонка ---------------------------------------------------
-
-    # --- развороты панелей --------------------------------------------------
+    # --- right column & maximized panels ----------------------------------
 
     def _draw_chat(self) -> None:
-        """Развёрнутый ДИАЛОГ — рабочая область, а не лента покрупнее.
-
-        Слева — каждый заданный вопрос с его счётом (время, действия);
-        клик повторяет вопрос, как клик по запуску в журнале команд повторяет
-        просмотр его вывода. Справа — сама лента на всю оставшуюся ширину.
-        Свёрнутая панель истории не видит: там вопрос задают один раз и
-        уходят, возвращаться не к чему.
-        """
+        """Maximized DIALOG: clickable question history on left, transcript on right."""
         wide = self._wide == "chat"
         try:
             self.query_one("#chat-hist-col").display = wide
@@ -596,19 +489,19 @@ class AgentScreen(ModeScreen):
             return
         panel = self.query_one("#p-chat", Panel)
         if not wide:
-            panel.set_title("ДИАЛОГ")
+            panel.set_title("DIALOG")
             return
         n = len(self._asked)
-        panel.set_title(f"ДИАЛОГ   ·   {n} "
-                        f"{plural(n, 'вопрос', 'вопроса', 'вопросов')}"
-                        f"   ·   /clear — очистить ленту")
+        panel.set_title(f"DIALOG   ·   {n} "
+                        f"{plural(n, 'question', 'questions', 'questions')}"
+                        f"   ·   /clear — clear transcript")
         hist = self.query_one("#chat-hist", VerticalScroll)
         hist.remove_children()
         faint = palette.role_hex("faint")
         if not n:
-            hist.mount(Static(Text("  задайте первый вопрос — он появится "
-                                   "здесь,\n  и его можно будет повторить "
-                                   "кликом", style=faint)))
+            hist.mount(Static(Text("  ask your first question — it will "
+                                   "appear here\n  so you can repeat it "
+                                   "with a click", style=faint)))
             return
         accent = palette.role_hex("mind")
         title = palette.role_hex("title")
@@ -617,18 +510,15 @@ class AgentScreen(ModeScreen):
             row.append(f"{i:>2}  ", style=faint)
             row.append(_wrap(it["q"], 40, 5), style=title)
             row.append("\n     ")
-            row.append(f"{it['seconds']:.0f} с", style=faint)
+            row.append(f"{it['seconds']:.0f} s", style=faint)
             if it["acts"]:
                 row.append(f"   ·   * {it['acts']} "
-                           + plural(it["acts"], "действие", "действия",
-                                    "действий"), style=accent)
+                           + plural(it["acts"], "action", "actions",
+                                    "actions"), style=accent)
             row.append("\n")
             chip = Chip(row, value=it["q"], classes="hist-item")
-            # Подсказка — вопрос ЦЕЛИКОМ и что из него вышло: в колонке
-            # истории текст зажат 40 колонками, и длинный вопрос без
-            # наведения обрезан ровно там, где начинается смысл.
-            chip.tooltip = (f"{it['q']}\n{it['seconds']:.0f} с  ·  "
-                            f"действий {it['acts']}\nклик — задать ещё раз")
+            chip.tooltip = (f"{it['q']}\n{it['seconds']:.0f} s  ·  "
+                            f"{it['acts']} actions\nclick — ask again")
             hist.mount(chip)
 
     def on_panel_expanded(self, event) -> None:
@@ -640,7 +530,6 @@ class AgentScreen(ModeScreen):
         self._draw_model()
         self._draw_hq()
         if topic == "model":
-            # В каталоге сразу ищем: фокус в поле поиска, список строится.
             try:
                 self.query_one("#model-filter", Input).focus()
             except Exception:
@@ -651,9 +540,6 @@ class AgentScreen(ModeScreen):
             except Exception:
                 pass
         self.refresh_hints()
-        # Строку вопроса поднимает ModeScreen: Textual зовёт обработчик у
-        # КАЖДОГО класса в MRO, поэтому super() здесь звать не надо — иначе
-        # строка монтируется дважды и падает на дублирующемся id.
 
     def on_panel_collapsed(self, event) -> None:
         self._wide = ""
@@ -665,33 +551,32 @@ class AgentScreen(ModeScreen):
         self.refresh_hints()
 
     def panel_facts(self, topic: str) -> list[str]:
-        """Факты по теме открытой панели. Спрашивают про то, на что смотрят."""
+        """Facts scoped to the active maximized panel."""
         s = self.app.session
-        base = [f"Участок {s.scenario}, {len(s.dag_obj)} операций, "
-                f"машина {s.model().name}."]
+        base = [f"Block {s.scenario}, {len(s.dag_obj)} ops, "
+                f"machine {s.model().name}."]
         cached = s.peek()
         if cached is not None:
             b, o, met = cached
-            base.append(f"baseline {b.schedule.makespan} т., "
-                        f"оракул {o.schedule.makespan} т., "
-                        f"нижняя граница {met.lower_bound} т.")
+            base.append(f"baseline {b.schedule.makespan} cyc, "
+                        f"oracle {o.schedule.makespan} cyc, "
+                        f"lower bound {met.lower_bound} cyc.")
         if topic == "trace":
-            return base + (["Агент сделал: " + a for a in self._actions[-8:]]
-                           or ["Агент ещё ничего не делал."])
+            return base + (["Agent did: " + a for a in self._actions[-8:]]
+                           or ["Agent has not run any actions yet."])
         if topic == "chat":
             asked = self._asked
-            lines = [f"В диалоге {len(list(self.chat.children))} сообщений, "
-                     f"вопросов задано {len(asked)}."]
+            lines = [f"Dialog has {len(list(self.chat.children))} messages, "
+                     f"{len(asked)} questions asked."]
             if asked:
-                lines.append("Последний вопрос: " + asked[-1]["q"])
-                lines.append("Повторить любой вопрос можно кликом по нему "
-                             "в истории слева.")
+                lines.append("Last question: " + asked[-1]["q"])
+                lines.append("Click any question in the left history to repeat it.")
             return base + lines
         if topic == "hq":
             from ...agent import hq as hq_mod
 
-            lines = [f"Подключений: {len(self.headquarters_connections())}, "
-                     f"миссий: {len(self._hq_tasks)}."]
+            lines = [f"Connections: {len(self.headquarters_connections())}, "
+                     f"missions: {len(self._hq_tasks)}."]
             for task in self._hq_tasks[-5:]:
                 mark = {"working": "…", "done": "+",
                         "error": "-"}.get(task["status"], "·")
@@ -705,32 +590,32 @@ class AgentScreen(ModeScreen):
 
             prov = self._model_provider()
             state = self._catalog_connection(prov)
-            return base + [f"Провайдер: {llm._label(prov)}.",
-                           f"Каталог: {state['status']}, "
-                           f"строк: {len(state['rows'])}."]
+            return base + [f"Provider: {llm._label(prov)}.",
+                           f"Catalog: {state['status']}, "
+                           f"rows: {len(state['rows'])}."]
         return base
 
     def panel_chips(self, topic: str) -> list[str]:
         from ...agent import hq as hq_mod
 
         return {
-            "seen": ["что из этого ты придумал, а что посчитано?",
-                     "какие числа ты видишь прямо сейчас?",
-                     "чего тебе не хватает, чтобы ответить точно?"],
-            "trace": ["зачем ты это сделал?",
-                      "какой командой это перепроверить?",
-                      "что ты сделаешь следующим?"],
-            "chat": ["повтори короче",
-                     "с чего начать разбор этого участка?",
-                     "какой вопрос стоит задать следующим?"],
+            "seen": ["which parts are computed vs inferred?",
+                     "what numbers do you see right now?",
+                     "what information is missing for an exact answer?"],
+            "trace": ["why did you run that?",
+                      "which command verifies this?",
+                      "what will you check next?"],
+            "chat": ["summarize more briefly",
+                     "where should I start analyzing this block?",
+                     "what should I ask next?"],
             "hq": [q for _, _, q in hq_mod.AREAS if q],
-            "model": ["какой провайдер выбрать для разбора?",
-                      "чем облако отличается от локального сервера?",
-                      "что делать, если ключ отклонён?"],
+            "model": ["which provider should I pick for analysis?",
+                      "how does cloud differ from a local server?",
+                      "what if my API key is rejected?"],
         }.get(topic, [])
 
     def _section(self, label: str, note: str = "") -> Text:
-        """Заголовок раздела: строчными и линейка до края."""
+        """Section rule: lowercase label with horizontal line to the edge."""
         width = max(40, self.app.size.width - 8)
         t = Text()
         t.append("  " + label + "  ", style=palette.role_hex("title") + " bold")
@@ -742,13 +627,7 @@ class AgentScreen(ModeScreen):
         return t
 
     def _draw_seen_full(self) -> None:
-        """Развёрнутое «ЧТО ВИДИТ АГЕНТ» — дословный контекст, а не сводка.
-
-        Свёрнутая панель показывает вывеску: модель, участок, три числа.
-        Развёрнутая показывает ровно те строки, которые уходят в модель, —
-        столько, сколько их есть. Это единственное место, где видно, на чём
-        ответ основан; без него «проверяемость» остаётся словом.
-        """
+        """Maximized AGENT CONTEXT: verbatim facts sent to the model."""
         target = self.query_one("#seen-full", Static)
         panel = self.query_one("#p-seen", Panel)
         from ...agent import context, llm
@@ -756,8 +635,6 @@ class AgentScreen(ModeScreen):
         s = self.app.session
         dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
         title = palette.role_hex("title")
-        # Ровно те строки, что собирает контекст агента, — не пересказ их
-        # своими словами: панель обязана показывать то, что реально уходит.
         try:
             facts = (context.machine_facts(s.model())
                      + context.schedule_facts(s)
@@ -765,21 +642,21 @@ class AgentScreen(ModeScreen):
         except Exception:
             facts = self.panel_facts("seen")
         chars = sum(len(f) for f in facts)
-        panel.set_title(f"ЧТО ВИДИТ АГЕНТ   ·   контекст дословно   ·   "
-                        f"{len(facts)} {plural(len(facts), 'факт', 'факта', 'фактов')}")
+        panel.set_title(f"AGENT CONTEXT   ·   verbatim facts   ·   "
+                        f"{len(facts)} {plural(len(facts), 'fact', 'facts', 'facts')}")
         t = Text()
-        t.append_text(self._section("модель"))
+        t.append_text(self._section("model"))
         t.append("\n\n")
         ok, detail = self._model
-        t.append("    " + ("проверяю…" if ok is None else
-                           (llm.describe() if ok else "нет модели: " + detail)),
+        t.append("    " + ("checking…" if ok is None else
+                           (llm.describe() if ok else "no model: " + detail)),
                  style=(faint if ok is None else
                         (palette.role_hex("success") if ok
                          else palette.role_hex("warning"))))
         t.append("\n\n")
         t.append_text(self._section(
-            "факты, которые уходят в модель",
-            f"{chars} символов  ·  примерно {max(1, chars // 3)} токенов"))
+            "facts sent to the model",
+            f"{chars} chars  ·  ~{max(1, chars // 3)} tokens"))
         t.append("\n\n")
         for i, f in enumerate(facts, 1):
             t.append(f"    {i:>2}  ", style=faint)
@@ -787,31 +664,31 @@ class AgentScreen(ModeScreen):
                      style=dim)
             t.append("\n")
         t.append("\n")
-        t.append_text(self._section("чего тут нет"))
+        t.append_text(self._section("what is not sent"))
         t.append("\n\n")
-        t.append("    Модель не видит исходник, не видит решётку и не умеет\n"
-                 "    считать. Всё, что она может, — пересказать строки выше.\n"
-                 "    Любое число из ответа, которого нет в этом списке,\n"
-                 "    выдумано: сверьте командой (/doctor, /bounds, /compare).",
+        t.append("    The model cannot see your source, the schedule grid, or\n"
+                 "    compute schedules itself. It only explains the lines above.\n"
+                 "    Verify any number not listed here with /doctor, /bounds,\n"
+                 "    or /compare.",
                  style=faint)
         target.update(t)
 
     def _draw_trace_full(self) -> None:
-        """Развёрнутая ТРАССА — что агент делал сам, по шагам и с проверкой."""
+        """Maximized TRACE: step-by-step agent actions and verification commands."""
         target = self.query_one("#trace-full", Static)
         panel = self.query_one("#p-trace", Panel)
         dim, faint = palette.role_hex("dim"), palette.role_hex("faint")
         n = len(self._actions)
-        panel.set_title(f"ТРАССА   ·   действия агента   ·   "
-                        f"{n} {plural(n, 'шаг', 'шага', 'шагов')}")
+        panel.set_title(f"TRACE   ·   agent actions   ·   "
+                        f"{n} {plural(n, 'step', 'steps', 'steps')}")
         t = Text()
-        t.append_text(self._section("что агент сделал сам",
-                                    "прежде чем отвечать"))
+        t.append_text(self._section("what the agent ran",
+                                    "before answering"))
         t.append("\n\n")
         if not self._actions:
-            t.append("    Агент ещё ничего не делал. Он берётся за действия\n"
-                     "    сам: загрузить файл, переключить участок, посчитать\n"
-                     "    расписание — и каждое попадает сюда.", style=faint)
+            t.append("    The agent has not run any actions yet. When it loads\n"
+                     "    a file, switches blocks, or runs the scheduler, each\n"
+                     "    step is recorded here.", style=faint)
         else:
             for i, note in enumerate(self._actions, 1):
                 t.append(f"    {i:>2}  ", style=palette.role_hex("mind"))
@@ -819,16 +696,16 @@ class AgentScreen(ModeScreen):
                          style=dim)
                 t.append("\n")
         t.append("\n")
-        t.append_text(self._section("перепроверить"))
+        t.append_text(self._section("verify"))
         t.append("\n\n")
-        for cmd, note in (("/doctor", "где именно теряются такты"),
-                          ("/compare", "оба расписания бок о бок"),
-                          ("/bounds", "предел участка"),
-                          ("/ai", "состояние модели")):
+        for cmd, note in (("/doctor", "where cycles are lost"),
+                          ("/compare", "both schedules side by side"),
+                          ("/bounds", "block lower bound"),
+                          ("/ai", "model status")):
             t.append("    " + cmd.ljust(12), style=palette.role_hex("mind"))
             t.append(note + "\n", style=faint)
-        t.append("\n    Числа считает ядро. Трасса нужна, чтобы не верить\n"
-                 "    агенту на слово, а повторить его шаги руками.",
+        t.append("\n    Core computes the numbers. Trace lets you replay\n"
+                 "    the agent's steps manually instead of taking its word.",
                  style=faint)
         target.update(t)
 
@@ -839,7 +716,7 @@ class AgentScreen(ModeScreen):
         if wide:
             self._draw_seen_full()
             return
-        self.query_one("#p-seen", Panel).set_title("ЧТО ВИДИТ АГЕНТ")
+        self.query_one("#p-seen", Panel).set_title("AGENT CONTEXT")
         target = self.query_one("#seen", Static)
         s = self.app.session
         dim = palette.role_hex("dim")
@@ -855,45 +732,42 @@ class AgentScreen(ModeScreen):
 
         ok, detail = self._model
         if ok is None:
-            row("модель", detail, palette.role_hex("faint"))
+            row("model", detail, palette.role_hex("faint"))
         elif ok:
-            row("модель", llm.describe(), palette.role_hex("success"))
-            # Прогрев видно, пока он идёт. Молчащий интерфейс во время
-            # семисекундного подъёма сервера читается как «зависло», а
-            # человек в этот момент как раз выбирает, что спросить.
+            row("model", llm.describe(), palette.role_hex("success"))
             if llm.is_local():
                 from ...agent import local
 
                 state, note = local.warm_state()
                 if state == "warming":
-                    row("", f"греется — {note}", palette.role_hex("warning"))
+                    row("", f"warming up — {note}", palette.role_hex("warning"))
                 elif state == "ready":
-                    row("", "прогрета, первый ответ быстрый",
+                    row("", "warmed up, first reply is fast",
                         palette.role_hex("faint"))
                 elif state == "failed":
-                    row("", "прогрев не удался, ответит медленнее",
+                    row("", "warmup failed, first reply will be slower",
                         palette.role_hex("faint"))
         else:
-            row("модель", "нет сети", palette.role_hex("warning"))
+            row("model", "offline", palette.role_hex("warning"))
             t.append(_wrap(detail, 40, 13), style=palette.role_hex("faint"))
             t.append("\n")
-        row("участок", s.scenario)
-        row("инструкций", str(len(s.dag_obj)))
-        row("машина", s.model().name)
+        row("block", s.scenario)
+        row("ops", str(len(s.dag_obj)))
+        row("machine", s.model().name)
         cached = s.peek()
         if cached is None:
             t.append("\n")
-            t.append("расписание ещё не считалось — агент посчитает его сам,\n"
-                     "прежде чем отвечать", style=palette.role_hex("faint"))
+            t.append("not scheduled yet — the agent will run it\n"
+                     "before answering", style=palette.role_hex("faint"))
             target.update(t)
             return
         base, orc, met = cached
         t.append("\n")
-        row("baseline", f"{base.schedule.makespan} т.")
-        row("оракул", f"{orc.schedule.makespan} т.",
+        row("baseline", f"{base.schedule.makespan} cyc")
+        row("oracle", f"{orc.schedule.makespan} cyc",
             f"{palette.role_hex('success')} bold")
-        row("предел", f"{met.lower_bound} т.")
-        t.append("это те же числа, что в РАЗБОРЕ", style=palette.role_hex("faint"))
+        row("bound", f"{met.lower_bound} cyc")
+        t.append("same numbers as in LAB", style=palette.role_hex("faint"))
         target.update(t)
 
     def _draw_trace(self) -> None:
@@ -903,10 +777,10 @@ class AgentScreen(ModeScreen):
         if wide:
             self._draw_trace_full()
             return
-        self.query_one("#p-trace", Panel).set_title("ТРАССА")
+        self.query_one("#p-trace", Panel).set_title("TRACE")
         target = self.query_one("#trace", Static)
         if not self._actions:
-            target.update(Text("агент ещё ничего не делал",
+            target.update(Text("no agent actions yet",
                                style=palette.role_hex("faint")))
             return
         t = Text()
@@ -917,32 +791,22 @@ class AgentScreen(ModeScreen):
             t.append(_wrap(note, 40, 2), style=palette.role_hex("dim"))
         target.update(t)
 
-    # --- панель МОДЕЛЬ: мини + каталог --------------------------------------
-    #
-    # Аналог /models в OpenCode: живой каталог (где есть), пометка бесплатных,
-    # клик сразу применяет на сессию. Всё только в память — как и вставка
-    # ключа в диалоге. Разворот — штатным двойным кликом (топик "model").
+    # --- CONNECTION panel: compact + full catalog -------------------------
 
-    #: Сколько строк каталога показываем (остальное — уточни поиск).
+    #: Max catalog rows displayed before asking the user to narrow the filter.
     _MODEL_LIST_CAP = 80
 
-    #: Порядок вкладок каталога: рабочие лошадки — облака — агрегаторы —
-    #: российские — Local последним. `custom` (legacy) и внутренний `local`
-    #: скрыты: первый — ради совместимости CLI, второй — ради TINY.
+    #: Catalog provider tab order (`custom` and internal `local` are hidden).
     CATALOG_ORDER = ("mistral", "gemini", "openai", "deepseek", "qwen",
                      "kimi", "grok", "anthropic", "glm", "muse",
                      "openrouter", "vercel", "gigachat", "yandex",
                      "local-server")
 
-    #: Мини-блок ПОДКЛЮЧЕНИЕ: пять кнопок на один клик. Остальные провайдеры
-    #: — только в развороте, иначе мини перестаёт быть мини.
+    #: Compact CONNECTION buttons (remaining providers appear when maximized).
     MINI_PROVS = ("mistral", "gemini", "openai", "deepseek", "local-server")
 
-    #: Сколько строк каталога показываем (остальное — уточни поиск).
-    _MODEL_LIST_CAP = 80
-
     def _model_provider(self) -> str:
-        """Выбранный в каталоге провайдер (по умолчанию — текущий)."""
+        """Return the active catalog provider (defaulting to current)."""
         from ...agent import llm
 
         allowed = set(llm.PROVIDERS) - {"custom", "local"}
@@ -963,25 +827,25 @@ class AgentScreen(ModeScreen):
             self._draw_model_full()
             return
         self.query_one("#p-model", Panel).set_title(
-            "ПОДКЛЮЧЕНИЕ   ·   каталог — двойной клик")
+            "CONNECTION   ·   2xclick for catalog")
         target = self.query_one("#model", Static)
         from ...agent import llm
 
         t = Text()
         dim, title = palette.role_hex("dim"), palette.role_hex("title")
-        t.append("провайдер".ljust(13), style=dim)
+        t.append("provider".ljust(13), style=dim)
         t.append(llm.describe(), style=title)
         t.append("\n")
-        t.append("ключ".ljust(13), style=dim)
+        t.append("key".ljust(13), style=dim)
         if llm.has_session_key():
-            t.append("вставлен (на сессию)", style=palette.role_hex("success"))
+            t.append("set (session)", style=palette.role_hex("success"))
         else:
-            t.append("нет — вставь ниже", style=palette.role_hex("warning"))
+            t.append("none — paste below", style=palette.role_hex("warning"))
         target.update(t)
         self._redraw_model_provs_mini()
 
     def _redraw_model_provs_mini(self) -> None:
-        """Подсветка выбранного провайдера в мини-блоке."""
+        """Highlight the selected provider in the compact CONNECTION block."""
         from ...agent import llm
 
         try:
@@ -1045,21 +909,21 @@ class AgentScreen(ModeScreen):
     def _draw_model_full(self) -> None:
         wide = self.query_one("#model-wide", VerticalScroll)
         panel = self.query_one("#p-model", Panel)
-        panel.set_title("ПОДКЛЮЧЕНИЕ   ·   провайдер → ключ → каталог")
+        panel.set_title("CONNECTION   ·   provider → key → catalog")
         from ...agent import llm
 
         if not wide.children:
-            wide.mount(Static("1 · провайдер", id="model-sec-prov"))
+            wide.mount(Static("1 · provider", id="model-sec-prov"))
             provs = ItemGrid(id="model-provs", min_column_width=14)
             wide.mount(provs)
             for p in self.CATALOG_ORDER:
                 provs.mount(Tool(llm._label(p), f"mprov:{p}"))
-            wide.mount(Static("2 · ключ → подключить", id="model-sec-key"))
-            wide.mount(Input(placeholder="ключ · Enter загружает модели",
+            wide.mount(Static("2 · key → connect", id="model-sec-key"))
+            wide.mount(Input(placeholder="key · Enter loads models",
                              password=True, id="model-key"))
-            wide.mount(Tool("подключить / обновить каталог", "mconnect"))
+            wide.mount(Tool("connect / refresh catalog", "mconnect"))
             wide.mount(Static(id="model-status"))
-            wide.mount(Static("локальный сервер: пресет или свой URL",
+            wide.mount(Static("local server: preset or custom URL",
                               id="model-sec-local"))
             presets = ItemGrid(id="model-presets", min_column_width=16)
             wide.mount(presets)
@@ -1069,24 +933,25 @@ class AgentScreen(ModeScreen):
                              id="model-url"))
             wide.mount(Input(placeholder="Yandex folder ID", id="model-folder"))
             wide.mount(Static(
-                "Запусти сервер вручную: Ollama — ollama serve; LM Studio — Start Server; "
-                "llama.cpp — llama-server -m <путь к существующему GGUF>. "
-                "Загрузи уже установленную модель на сервере и нажми подключить. "
-                "Здесь нет скачивания моделей и запуска TINY.", id="model-local-help"))
-            wide.mount(Static("3 · каталог: клик применяет модель на сессию",
+                "Start the server manually: Ollama — ollama serve; LM Studio — Start Server; "
+                "llama.cpp — llama-server -m <path to existing GGUF>. "
+                "Load an installed model on the server and click connect. "
+                "Models are not downloaded automatically and TINY is not started here.",
+                id="model-local-help"))
+            wide.mount(Static("3 · catalog: click applies model for this session",
                               id="model-sec-list"))
-            wide.mount(Static("поиск — только фильтр списка ниже: "
-                              "печатай, Enter — взять первую строку",
+            wide.mount(Static("search filters the list below: "
+                              "type to filter, Enter picks the first match",
                               id="model-filter-help"))
-            wide.mount(Input(placeholder="фильтр каталога…", id="model-filter"))
+            wide.mount(Input(placeholder="filter catalog…", id="model-filter"))
             wide.mount(VerticalScroll(id="model-list"))
             wide.mount(Static(id="model-note"))
-            wide.mount(Static("нет в списке? введи ID вручную",
+            wide.mount(Static("not listed? enter model ID manually",
                               id="model-sec-manual"))
-            wide.mount(Input(placeholder="ID модели · Enter проверяет API (платный запрос)",
+            wide.mount(Input(placeholder="model ID · Enter checks API (billed request)",
                              id="model-manual"))
-            wide.mount(Tool("проверить модель (платный запрос к API)", "mcheck"))
-            wide.mount(Tool("активировать проверенный ID", "mactivate", id="model-activate"))
+            wide.mount(Tool("verify model (billed API request)", "mcheck"))
+            wide.mount(Tool("activate verified ID", "mactivate", id="model-activate"))
         self._redraw_model_provs()
         self._sync_catalog_fields()
         self._draw_model_status()
@@ -1102,8 +967,8 @@ class AgentScreen(ModeScreen):
         self.query_one("#model-folder").display = prov == "yandex"
         self.query_one("#model-manual").display = state["status"] in ("unsupported", "text")
         self.query_one("#model-key", Input).placeholder = (
-            "ключ необязателен · Enter подключает Local" if local else
-            "ключ · Enter загружает модели")
+            "key optional · Enter connects Local" if local else
+            "key · Enter loads models")
         if getattr(self, "_catalog_field_provider", None) != prov:
             self._catalog_field_provider = prov
             for wid, value in (("model-url", state["url"]),
@@ -1114,7 +979,6 @@ class AgentScreen(ModeScreen):
                 field = self.query_one(f"#{wid}", Input)
                 with field.prevent(Input.Changed):
                     field.value = value
-
 
     def _draw_model_status(self) -> None:
         try:
@@ -1130,20 +994,20 @@ class AgentScreen(ModeScreen):
         status = state["status"]
         if status == "live":
             style = palette.role_hex("success")
-            t.append(f"{label}: каталог загружен", style=style)
+            t.append(f"{label}: catalog loaded", style=style)
         elif status == "error":
-            t.append(f"{label}: {state['note'] or 'ошибка'}",
+            t.append(f"{label}: {state['note'] or 'error'}",
                      style=palette.role_hex("warning"))
         elif status in ("unsupported", "text"):
-            t.append(f"{label}: каталога нет — введи ID и проверь модель через API",
+            t.append(f"{label}: no catalog — enter ID and verify via API",
                      style=palette.role_hex("dim"))
         elif status == "locked":
             hint = llm.key_source_hint(prov)
-            t.append(f"{label}: нужен ключ", style=palette.role_hex("warning"))
+            t.append(f"{label}: key required", style=palette.role_hex("warning"))
             if hint:
                 t.append(f" — {hint}", style=palette.role_hex("faint"))
         else:
-            t.append(f"{label}: загрузка каталога…",
+            t.append(f"{label}: loading catalog…",
                      style=palette.role_hex("dim"))
         target.update(t)
 
@@ -1184,18 +1048,18 @@ class AgentScreen(ModeScreen):
             box.mount(tool)
         if len(rows) > self._MODEL_LIST_CAP:
             box.mount(Static(
-                Text(f"… ещё {len(rows) - self._MODEL_LIST_CAP} — уточни поиск",
+                Text(f"… {len(rows) - self._MODEL_LIST_CAP} more — narrow filter",
                      style=palette.role_hex("faint"))))
         if not rows:
             _rows, src = self._model_rows()
             hints = {"live": "",
-                     "error": "сервер не ответил — проверь сеть или адрес",
-                     "locked": "вставь ключ выше — список появится после подключения",
-                     "unsupported": "введи ID модели в строке выше",
-                     "text": "каталога нет — введи ID модели выше"}
+                     "error": "server did not respond — check network or URL",
+                     "locked": "paste key above — list appears after connecting",
+                     "unsupported": "enter model ID in the field above",
+                     "text": "no catalog — enter model ID above"}
             hint = hints.get(src, "")
             box.mount(Static(Text(
-                "ничего не найдено" + (f" ({hint})" if hint else ""),
+                "no models found" + (f" ({hint})" if hint else ""),
                 style=palette.role_hex("faint"))))
 
     def _redraw_model_note(self, text: str = "") -> None:
@@ -1209,7 +1073,7 @@ class AgentScreen(ModeScreen):
             pass
 
     def _apply_catalog_model(self, mid: str, verify: bool = False) -> None:
-        """Клик по модели: применить на сессию и закрыть окно."""
+        """Apply a selected catalog model for the current session and close."""
         from ...agent import llm
 
         prov = self._model_provider()
@@ -1218,12 +1082,12 @@ class AgentScreen(ModeScreen):
             row.id == mid for row in state["rows"])
         manual = state["status"] in ("unsupported", "text") and state["verified"] == mid
         if not mid or not (listed or manual):
-            self._redraw_model_note("сначала выбери строку каталога или проверь ID через API")
+            self._redraw_model_note("pick a catalog row or verify the ID via API first")
             return
         snapshot = self._catalog_snapshot(prov)
         try:
             if prov == "yandex" and not state["folder"]:
-                raise llm.LLMError("Yandex: укажи folder ID")
+                raise llm.LLMError("Yandex: specify folder ID")
             backend = llm.configured_backend(prov, mid, *snapshot[1:])
             updates = llm.provider_updates(prov, {
                 "model": mid, "key": snapshot[1], "url": snapshot[2],
@@ -1231,7 +1095,7 @@ class AgentScreen(ModeScreen):
             if prov == "local-server":
                 updates["NEX_LOCAL_KEY"] = snapshot[1]
         except Exception:
-            self._redraw_model_note("не удалось применить модель — проверь ключ, URL и folder ID")
+            self._redraw_model_note("could not apply model — check key, URL, and folder ID")
             return
         import os as _os
 
@@ -1244,8 +1108,8 @@ class AgentScreen(ModeScreen):
         state["selected"] = mid
         state["backend"] = backend
         t = Text()
-        t.append("модель: ", style=palette.role_hex("success"))
-        t.append(f"{prov} · {mid} (на сессию)", style=palette.role_hex("title"))
+        t.append("model: ", style=palette.role_hex("success"))
+        t.append(f"{prov} · {mid} (session)", style=palette.role_hex("title"))
         self._bubble(Static(t, classes="msg-note"))
         self.chat.scroll_end(animate=False)
         self.refresh_context()
@@ -1273,7 +1137,7 @@ class AgentScreen(ModeScreen):
             return None
 
     def headquarters_connections(self) -> list[tuple[str, object]]:
-        """(label, backend) по подтверждённым выборам — подключения штаба."""
+        """Return `(label, backend)` pairs for verified HQ connections."""
         from ...agent import llm
 
         if not hasattr(self, "_catalog_connections"):
@@ -1285,11 +1149,7 @@ class AgentScreen(ModeScreen):
                 out.append((f"{llm._label(prov)} · {state['selected']}", backend))
         return out
 
-    # --- ШТАБ: главный блок -------------------------------------------------
-    #
-    # Мини: сводка (подключения · миссии · последняя) + поле задачи всегда
-    # под рукой — отправить можно не разворачивая. Разворот: подключения,
-    # участок работы, скрипт и список миссий с повтором/удалением.
+    # --- HQ: primary right-column block -----------------------------------
 
     def _draw_hq(self) -> None:
         wide = self._wide == "hq"
@@ -1300,7 +1160,7 @@ class AgentScreen(ModeScreen):
         if wide:
             self._draw_hq_full()
         else:
-            self.query_one("#p-hq", Panel).set_title("ШТАБ")
+            self.query_one("#p-hq", Panel).set_title("HQ")
         self._draw_hq_mini()
 
     def _draw_hq_full(self) -> None:
@@ -1310,24 +1170,24 @@ class AgentScreen(ModeScreen):
         n_conns = len(self.headquarters_connections())
         n_tasks = len(self._hq_tasks)
         self.query_one("#p-hq", Panel).set_title(
-            f"ШТАБ   ·   подключений: {n_conns}   ·   миссий: {n_tasks}")
+            f"HQ   ·   connections: {n_conns}   ·   missions: {n_tasks}")
         if not wide.children:
-            wide.mount(Static("подключение — на нём пойдёт задача "
-                              "(выбирается в ПОДКЛЮЧЕНИИ)", id="hq-sec-conn"))
+            wide.mount(Static("connection — runs the mission "
+                              "(configured in CONNECTION)", id="hq-sec-conn"))
             wide.mount(ItemGrid(id="hq-conns", min_column_width=22))
-            wide.mount(Static("участок работы", id="hq-sec-area"))
+            wide.mount(Static("focus area", id="hq-sec-area"))
             wide.mount(ItemGrid(id="hq-areas", min_column_width=14))
             wide.mount(Static(id="hq-area-desc"))
-            wide.mount(Static("скрипт — дописка к промпту (необязательно)",
+            wide.mount(Static("script — extra prompt instructions (optional)",
                               id="hq-sec-script"))
-            wide.mount(Input(placeholder="скрипт агенту… (необязательно)",
+            wide.mount(Input(placeholder="agent script… (optional)",
                              id="hq-script"))
             wide.mount(Static(id="hq-note"))
             wide.mount(Horizontal(
-                Tool("отправить агента", "hqrun"),
-                Tool("убрать выполненные", "hqclear"),
+                Tool("dispatch agent", "hqrun"),
+                Tool("clear completed", "hqclear"),
                 id="hq-actions"))
-            wide.mount(Static("миссии", id="hq-sec-list"))
+            wide.mount(Static("missions", id="hq-sec-list"))
             wide.mount(VerticalScroll(id="hq-list"))
         self._redraw_hq()
 
@@ -1342,24 +1202,22 @@ class AgentScreen(ModeScreen):
         working = sum(1 for task in self._hq_tasks
                       if task["status"] == "working")
         if not n_conns:
-            t.append("нет подключений", style=palette.role_hex("warning"))
-            t.append(" — выбери API и вставь ключ в ПОДКЛЮЧЕНИИ",
+            t.append("no connections", style=palette.role_hex("warning"))
+            t.append(" — pick an API and paste key in CONNECTION",
                      style=dim)
         else:
-            t.append(f"подключений: {n_conns}", style=title)
-            t.append(f"   ·   миссий: {len(self._hq_tasks)}", style=dim)
+            t.append(f"connections: {n_conns}", style=title)
+            t.append(f"   ·   missions: {len(self._hq_tasks)}", style=dim)
             if working:
-                t.append(f"   ·   в работе: {working}",
+                t.append(f"   ·   running: {working}",
                          style=palette.role_hex("mind"))
         if self._hq_tasks:
             last = self._hq_tasks[-1]
             mark = {"working": "… ", "done": "+ ", "error": "- "}.get(
                 last["status"], "· ")
-            # Мини — в одну строку: колонка узкая, перенос здесь крадёт
-            # целую строку у соседних блоков.
             t.append(f"\n{mark}{last['question'][:30]}", style=dim)
         else:
-            t.append("\nзадача штабу — в поле ниже, Enter отправляет",
+            t.append("\ntype a mission below, Enter dispatches",
                      style=palette.role_hex("faint"))
         target.update(t)
 
@@ -1386,8 +1244,8 @@ class AgentScreen(ModeScreen):
             self._hq_conn = 0
         conns.remove_children()
         if not labels:
-            conns.mount(Static(Text("нет подключений — выбери модель "
-                                    "в ПОДКЛЮЧЕНИИ",
+            conns.mount(Static(Text("no connections — select a model "
+                                    "in CONNECTION",
                                     style=palette.role_hex("faint"))))
         for i, (label, _be) in enumerate(labels):
             mark = "* " if i == self._hq_conn else ""
@@ -1400,7 +1258,7 @@ class AgentScreen(ModeScreen):
             desc = next(q for aid, _, q in hq_mod.AREAS
                         if aid == self._hq_area)
             self.query_one("#hq-area-desc", Static).update(
-                Text(desc or "свой вопрос — текст берётся из поля задачи",
+                Text(desc or "custom question — taken from the mission field",
                      style=palette.role_hex("faint")))
         except Exception:
             pass
@@ -1409,8 +1267,8 @@ class AgentScreen(ModeScreen):
             box.mount(Static(self._hq_task_text(task)))
             tools = Horizontal()
             box.mount(tools)
-            tools.mount(Tool("ещё раз", f"hqretry:{task['id']}"))
-            tools.mount(Tool("убрать", f"hqdel:{task['id']}"))
+            tools.mount(Tool("retry", f"hqretry:{task['id']}"))
+            tools.mount(Tool("remove", f"hqdel:{task['id']}"))
 
     def _hq_task_text(self, task: dict) -> Text:
         from ...agent import hq as hq_mod
@@ -1421,10 +1279,10 @@ class AgentScreen(ModeScreen):
         t.append(f"{mark}{task['conn']} · "
                  f"{hq_mod.AREA_LABEL.get(task['area'], task['area'])}",
                  style=palette.role_hex("title"))
-        t.append(f"\nзадача: {task['question']}",
+        t.append(f"\nmission: {task['question']}",
                  style=palette.role_hex("dim"))
         if task.get("script"):
-            t.append(f"\nскрипт: {task['script']}",
+            t.append(f"\nscript: {task['script']}",
                      style=palette.role_hex("faint"))
         if task.get("answer"):
             t.append(f"\n{task['answer']}",
@@ -1436,7 +1294,7 @@ class AgentScreen(ModeScreen):
 
         labels = self.headquarters_connections()
         if not labels:
-            self._hq_note("штаб: сначала подключи модель — ПОДКЛЮЧЕНИЕ ниже")
+            self._hq_note("HQ: connect a model first in CONNECTION below")
             return
         if self._hq_conn >= len(labels):
             self._hq_conn = 0
@@ -1456,12 +1314,12 @@ class AgentScreen(ModeScreen):
             area = self._hq_area
         question = asked.strip() or hq_mod.AREA_QUESTION.get(area, "")
         if not question:
-            self._hq_note("штаб: впиши задачу агенту")
+            self._hq_note("HQ: enter a mission for the agent")
             return
         try:
             system = hq_mod.mission_system(self.app.session, area, script)
-        except Exception as e:  # noqa: BLE001 — факты не собрались, честно
-            self._hq_note(f"штаб: нет данных — {e}"[:160])
+        except Exception as e:  # noqa: BLE001
+            self._hq_note(f"HQ: no data — {e}"[:160])
             return
         label, backend = labels[self._hq_conn]
         self._hq_seq += 1
@@ -1485,7 +1343,7 @@ class AgentScreen(ModeScreen):
             answer = hq_mod.run_mission(task["backend"], task["system"],
                                         task["question"])
             self.app.call_from_thread(self._hq_done, tid, True, answer)
-        except Exception as e:  # noqa: BLE001 — любой отказ сети сюда
+        except Exception as e:  # noqa: BLE001
             self.app.call_from_thread(self._hq_done, tid, False, str(e)[:400])
 
     def _hq_done(self, tid: int, ok: bool, text: str) -> None:
@@ -1499,9 +1357,8 @@ class AgentScreen(ModeScreen):
         if self.is_mounted:
             self._redraw_hq()
 
-
     def _adopt_catalog_key(self, raw: str) -> None:
-        """Ключ из поля каталога: явно за выбранным провайдером (без угадайки)."""
+        """Bind a pasted catalog key explicitly to the selected provider."""
         from ...agent import llm
 
         prov = self._model_provider()
@@ -1520,7 +1377,7 @@ class AgentScreen(ModeScreen):
             try:
                 updates = llm.key_updates(prov, raw.split() if prov == "gigachat" else [raw])
             except llm.LLMError:
-                state.update(status="error", note="проверь формат ключа; GigaChat: id:secret")
+                state.update(status="error", note="check key format; GigaChat: id:secret")
                 self._refresh_catalog()
                 return
             import os as _os
@@ -1553,12 +1410,12 @@ class AgentScreen(ModeScreen):
         from urllib.parse import quote
 
         note = (str(error) if isinstance(error, llm.LLMError) else
-                "не удалось подключиться — проверь ключ, URL и сеть")
+                "connection failed — check key, URL, and network")
         secrets = [snapshot[1], snapshot[2], snapshot[3]]
         if snapshot[0] == "gigachat":
             secrets.extend(snapshot[1].split(":"))
         for secret in sorted(filter(None, secrets), key=len, reverse=True):
-            note = note.replace(secret, "[скрыто]").replace(quote(secret, safe=""), "[скрыто]")
+            note = note.replace(secret, "[redacted]").replace(quote(secret, safe=""), "[redacted]")
         return note[:240]
 
     def _catalog_fetch_worker(self, snapshot: tuple, gen: int) -> None:
@@ -1575,7 +1432,7 @@ class AgentScreen(ModeScreen):
             if status != "live":
                 rows = []
             if status == "error":
-                note = "сервер не отдал каталог — проверь ключ, URL и сеть"
+                note = "server returned no catalog — check key, URL, and network"
         except Exception as error:
             rows, status = [], "error"
             note = self._catalog_error(error, snapshot)
@@ -1590,7 +1447,6 @@ class AgentScreen(ModeScreen):
         if prov == self._model_provider():
             self._refresh_catalog()
 
-
     def _check_catalog_model(self, mid: str = "") -> None:
         prov = self._model_provider()
         state = self._catalog_connection(prov)
@@ -1600,17 +1456,17 @@ class AgentScreen(ModeScreen):
                    else state["selected"])
         if not mid or (not manual and not any(
                 row.id == mid for row in state["rows"])):
-            self._redraw_model_note("выбери модель или введи ID для платной проверки")
+            self._redraw_model_note("pick a model or enter an ID for billed verification")
             return
         if prov == "yandex" and not state["folder"]:
-            self._redraw_model_note("Yandex: укажи folder ID и обнови каталог")
+            self._redraw_model_note("Yandex: specify folder ID and refresh catalog")
             return
         if state["status"] not in ("live", "unsupported", "text"):
             return
         state["generation"] += 1
         state["verified"] = ""
         snapshot, gen = self._catalog_snapshot(prov), state["generation"]
-        self._redraw_model_note("проверка модели через API — запрос может быть платным…")
+        self._redraw_model_note("verifying model via API — request may be billed…")
         self.run_worker(lambda: self._catalog_check_worker(snapshot, gen, mid),
                         thread=True, group=f"catalog:{prov}", exclusive=True)
 
@@ -1621,8 +1477,8 @@ class AgentScreen(ModeScreen):
         success = False
         try:
             be = llm.configured_backend(prov, mid, key, url, folder)
-            be.complete("Отвечай одним словом.", "Скажи «готово».", temperature=0.0)
-            success, note = True, "модель доступна — можно активировать"
+            be.complete("Reply with a single word.", "Say 'ready'.", temperature=0.0)
+            success, note = True, "model is reachable — ready to activate"
         except Exception as error:
             note = self._catalog_error(error, snapshot)
         self.app.call_from_thread(self._catalog_note_done, prov, gen, mid, success, note)
@@ -1688,11 +1544,7 @@ class AgentScreen(ModeScreen):
             self._hq_run()
 
     def panel_tool(self, tool: str) -> None:
-        """Инструменты каталога МОДЕЛИ + базовые.
-
-        Журнала запусков здесь нет (связи с GIT нет осознанно), поэтому
-        все инструменты — базовые; действия диалога живут на ^L/^R.
-        """
+        """Handle CONNECTION catalog, HQ, and base panel tools."""
         if tool.startswith("mprov:"):
             self._model_prov = tool[6:]
             self._model_filter = ""
@@ -1734,7 +1586,7 @@ class AgentScreen(ModeScreen):
             if state["verified"]:
                 self._apply_catalog_model(state["verified"])
             else:
-                self._redraw_model_note("сначала проверь модель через API — активация только после")
+                self._redraw_model_note("verify the model via API before activating")
             return
         if tool.startswith("hqconn:"):
             try:

@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "description": "NEX CLI: синий NEX, голубой Эльбрус. Три панели на одной палитре. Операции разного цвета — это данные.",
+  "description": "NEX CLI: blue NEX, cyan Elbrus. Three panes on a unified palette. Distinct operation colors encode data.",
   "roles": {
     "text": {
       "color": 254

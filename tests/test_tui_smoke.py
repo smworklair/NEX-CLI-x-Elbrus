@@ -1,20 +1,19 @@
-"""Смоук-тест полноэкранного интерфейса: экраны поднимаются, команды доходят.
+"""Smoke test suite for the full-screen Textual TUI: screens mount and commands reach core.
 
-Зачем отдельный тест, если есть глазами
----------------------------------------
-`vliw.tui.available()` требует настоящий tty, поэтому в скрипте и в CI
-`python -m vliw` полноэкранный режим НЕ поднимает — он молча откатывается в
-построчный, и «проверка» ничего не доказывает. Здесь приложение гоняется
-headless через тестовый харнесс Textual (`App.run_test()`): экраны реально
-монтируются, нажатия реально доходят до строки ввода, команды реально
-выполняются ядром.
+Why a dedicated headless TUI test is required
+---------------------------------------------
+`vliw.tui.available()` requires a real TTY, so in scripts and CI
+`python -m vliw` does NOT launch the full-screen TUI — it silently falls back
+to line mode, which leaves the TUI untested. Here the app runs headlessly via
+Textual's test harness (`App.run_test()`): screens mount for real, keystrokes
+reach the command input, and commands execute against the VLIW scheduling core.
 
-Что именно ловится: развалившийся `compose()`, потерянный `nex.tcss` или тема,
-отвалившийся мост к ядру (`tui/bridge.py`) и любое исключение при монтировании
-— то есть ровно тот класс поломок, который в построчном режиме не виден.
+This catches broken `compose()` layouts, missing `nex.tcss` rules or themes,
+a broken core bridge (`tui/bridge.py`), and any mount-time exception — the exact
+class of regressions invisible in line mode.
 
-Textual — НЕОБЯЗАТЕЛЬНАЯ зависимость (без него инструмент работает, только без
-полноэкранного режима), поэтому без него тест пропускается, а не падает.
+Textual is an OPTIONAL dependency (the CLI works without it in line mode), so
+these tests skip rather than fail when Textual is absent.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ try:
     import textual  # noqa: F401
 
     HAS_TEXTUAL = True
-except Exception:  # pragma: no cover - зависит от окружения
+except Exception:  # pragma: no cover - environment-dependent
     HAS_TEXTUAL = False
 
 from vliw import cli
@@ -37,13 +36,12 @@ from vliw.ui import render
 
 
 def _make_app(start_mode):
-    """Приложение и сессия — собранные ровно так же, как в `cli.run_tui()`.
+    """Build an app and session identically to `cli.run_tui()`.
 
-    Раскладка при этом уводится во ВРЕМЕННЫЙ файл. Экран сохраняет её между
-    запусками (`~/.config/nex/layout.json`), и без подмены тесты, во-первых,
-    затирали бы настоящие настройки того, кто их гоняет, а во-вторых —
-    влияли бы друг на друга: один открыл проводник в чужой папке, другой
-    ищет в ней свой файл и не находит.
+    Layout persistence is redirected to a TEMPORARY file. CodeScreen saves
+    layout state across runs (`~/.config/nex/layout.json`); without isolation,
+    tests would overwrite the developer's real config and leak state across
+    cases (e.g., an explorer opened in another directory).
     """
     import tempfile
     from pathlib import Path
@@ -62,14 +60,14 @@ def _make_app(start_mode):
     return app, session
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestScreensMount(unittest.TestCase):
-    """Каждый экран должен подниматься без исключений."""
+    """Every screen must mount without raising exceptions."""
 
     def _mounts(self, start_mode, expect_cls):
         async def run():
             app, _ = _make_app(start_mode)
-            # Команды печатают отчёты в stdout; в тесте он нам не нужен.
+            # Commands print reports to stdout; silence them during tests.
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(120, 40)) as pilot:
                     await pilot.pause()
@@ -78,18 +76,16 @@ class TestScreensMount(unittest.TestCase):
         self.assertEqual(asyncio.run(run()), expect_cls)
 
     def test_home_is_the_picker_but_code_is_the_main_screen(self):
-        """Запуск — выбор режима; КОД остаётся главным экраном по смыслу.
+        """Startup opens the mode picker while CODE remains the primary workspace.
 
-        Это два РАЗНЫХ решения, и их однажды спутали. КОД главный: он
-        единственный, куда человек приносит своё, и остальные экраны стали
-        вкладками его дока. Но СТАРТОВАТЬ прямо в нём оказалось ловушкой —
-        человек попадает в редактор и не знает, что экранов четыре, потому
-        что выход на ^O нигде не показан. Выбор режима стоит одного нажатия
-        и сразу отвечает, что тут вообще есть.
+        These are two distinct decisions: CODE is the home screen where users
+        bring their own assembly basic blocks and the other screens live as
+        dock tabs, but launching directly into CODE hid the other screens.
+        Starting on the picker costs one keypress and exposes all four modes.
         """
         from vliw.tui.app import NexApp
 
-        self.assertEqual(NexApp.HOME, "code", "главным остаётся КОД")
+        self.assertEqual(NexApp.HOME, "code", "CODE must remain the home screen")
         self._mounts(None, "PickerScreen")
 
     def test_lab(self):
@@ -105,13 +101,12 @@ class TestScreensMount(unittest.TestCase):
         self._mounts("code", "CodeScreen")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestPickerNavigation(unittest.TestCase):
     def test_arrow_and_enter_open_mode(self):
-        """Стрелка + Enter на списке экранов уводят на выбранный.
+        """Arrow + Enter in the mode picker navigates to the selected screen.
 
-        Список открывается по ^O из работы, а не встречает на входе:
-        рабочее место — КОД, отсюда только уходят.
+        The picker can be reopened anytime via ^O from the active workspace.
         """
         async def run():
             app, _ = _make_app(None)
@@ -128,13 +123,13 @@ class TestPickerNavigation(unittest.TestCase):
                     return start, app.screen.__class__.__name__
 
         start, got = asyncio.run(run())
-        self.assertEqual(start, "PickerScreen", "^O не открыл список экранов")
-        self.assertNotEqual(got, "PickerScreen", "экран выбора не сменился")
+        self.assertEqual(start, "PickerScreen", "^O did not open the mode picker")
+        self.assertNotEqual(got, "PickerScreen", "mode picker did not transition")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCommandsReachCore(unittest.TestCase):
-    """Набранная строка должна дойти до ядра и изменить состояние сессии."""
+    """Typed input must reach the VLIW core and update session state."""
 
     @staticmethod
     def _type(start_mode, line):
@@ -145,10 +140,10 @@ class TestCommandsReachCore(unittest.TestCase):
                     await pilot.pause()
                     await pilot.press(*line, "enter")
                     await pilot.pause()
-                    # Команды экрана уходят в рабочий поток (@work(thread=True)
-                    # в screens/base.py), а /run внутри ещё и запускает точный
-                    # поиск с бюджетом до 10 с. Ждём именно завершения воркеров:
-                    # без этого проверка гонится с невыполненной командой.
+                    # Screen commands run in a background worker (@work(thread=True)
+                    # in screens/base.py), and /run invokes the exact branch-and-bound
+                    # oracle with up to a 10s budget. Wait for workers to finish so
+                    # assertions do not race against an in-flight command.
                     await app.workers.wait_for_complete()
                     await pilot.pause()
             return session
@@ -160,12 +155,12 @@ class TestCommandsReachCore(unittest.TestCase):
         self.assertEqual(session.scenario, "mulclash")
 
     def test_interpreter_line_reaches_workspace(self):
-        """В режиме ядра обычная строка — не команда, а запись интерпретатора."""
+        """In CORE mode, a plain line is an interpreter statement, not a slash command."""
         session = self._type("work", "sum 8")
         self.assertIsNotNone(session._workspace)
 
     def test_theme_command_switches_theme(self):
-        """`/theme` меняет палитру всего инструмента — задевает reload_palette()."""
+        """`/theme` switches the global palette and exercises reload_palette()."""
         before = render.THEME.name
         try:
             self._type("lab", "/theme kilo")
@@ -174,10 +169,10 @@ class TestCommandsReachCore(unittest.TestCase):
             render.apply_theme(before)
 
     def test_unknown_scenario_does_not_kill_screen(self):
-        """Кривая команда — сообщение, а не падение интерфейса.
+        """An invalid command must show an error message instead of crashing the TUI.
 
-        Ядро бросает SystemExit на неизвестном сценарии; ловит его мост
-        (`tui/bridge.py`) и отдаёт экрану как текст ошибки.
+        Core raises SystemExit on an unknown scenario; the bridge (`tui/bridge.py`)
+        catches it and surfaces it as error text on screen.
         """
         session = self._type("lab", "/run nosuchscenario")
         self.assertNotEqual(session.scenario, "nosuchscenario")
@@ -185,30 +180,23 @@ class TestCommandsReachCore(unittest.TestCase):
 
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestPanelMaximize(unittest.TestCase):
-    """Двойной клик по панели разворачивает её на весь экран.
+    """Double-clicking a panel maximizes it to full screen.
 
-    Панелей на экране семь, и в каждой либо решётка тактов, либо длинный
-    отчёт — в своей трети экрана они читаются с трудом. Двойной клик
-    определяется по времени вручную: в Textual 8.2 у события Click нет поля
-    `chain` (счётчика кликов подряд), только `time`.
+    The screen has seven panels holding dense cycle grids or long diagnostic
+    reports. Double-click timing is tracked manually because Textual 8.2's
+    Click event exposes `time` rather than a `chain` counter.
     """
 
     @staticmethod
     async def _click(pilot, panel, times: int = 1):
-        """Клик В СЕРЕДИНУ панели — туда, куда целится человек.
+        """Click the CENTER of a panel — where a real user aims.
 
-        `times=2` — настоящий двойной клик одним вызовом пилота. Два
-        отдельных вызова подряд считались двойным только пока машина не
-        занята: между ними проходит реальное время, и на полном прогоне
-        зазор перерастал порог — тест падал через раз, хотя жест исправен.
-
-        Раньше здесь звался `panel.on_click(...)` напрямую, поддельным
-        событием. Проверялся при этом сам обработчик, а не жест, и все
-        четыре теста стояли зелёными, пока двойной клик по РАСПИСАНИЮ не
-        работал вовсе: `DataTable` гасит Click на себе, и до рамки он не
-        доходил. Настоящий клик через пилота ловит и это.
+        Using `times=2` sends an atomic double-click via Pilot so slow CI runs
+        do not exceed the double-click threshold between two separate calls.
+        Real Pilot clicks (instead of synthetic `panel.on_click` calls) also
+        verify that `DataTable` does not swallow Click events on the schedule grid.
         """
         await pilot.click(offset=(panel.region.x + panel.region.width // 2,
                                   panel.region.y + panel.region.height // 2),
@@ -236,11 +224,11 @@ class TestPanelMaximize(unittest.TestCase):
         self.assertIsNone(self._run(steps))
 
     def test_double_click_maximizes_that_panel(self):
-        """И именно на РАСПИСАНИИ: под курсором там решётка, а не пустота.
+        """Verify double-click directly on the schedule grid (`#p-grid`).
 
-        `#p-grid` выбран не случайно — это панель, ради которой разворот и
-        нужен: шесть каналов на сотню тактов в трети экрана не читаются. И
-        она же единственная, где жест был мёртв.
+        Six issue slots across dozens of cycles are unreadable in a third of
+        the screen, and `#p-grid` was the panel where DataTable previously
+        swallowed the gesture.
         """
         async def steps(app, pilot, panel):
             under = app.screen.get_widget_at(
@@ -252,12 +240,12 @@ class TestPanelMaximize(unittest.TestCase):
 
         got, under = self._run(steps)
         self.assertEqual(under, "ScheduleGrid",
-                         f"кликнули не в решётку, а в {under} — тест ослаб")
-        self.assertIsNotNone(got, "панель не развернулась")
-        self.assertEqual(got.id, "p-grid", "развернулась не та панель")
+                         f"clicked {under} instead of ScheduleGrid — test weakened")
+        self.assertIsNotNone(got, "panel did not maximize")
+        self.assertEqual(got.id, "p-grid", "wrong panel maximized")
 
     def test_slow_second_click_is_not_double(self):
-        """Два клика с большим зазором — не двойной клик, а два одиночных."""
+        """Two clicks spaced beyond the threshold are two single clicks, not a double-click."""
         from vliw.tui.widgets import Panel
 
         async def steps(app, pilot, panel):
@@ -270,7 +258,7 @@ class TestPanelMaximize(unittest.TestCase):
         self.assertIsNone(self._run(steps))
 
     def test_escape_minimizes(self):
-        """Esc сворачивает — и это не ломает свой Esc у экрана РАЗБОР."""
+        """Esc restores the panel without breaking LAB screen's own Esc handling."""
         async def steps(app, pilot, panel):
             await self._click(pilot, panel, times=2)
             await pilot.pause()
@@ -283,18 +271,17 @@ class TestPanelMaximize(unittest.TestCase):
         self.assertIsNotNone(before)
         self.assertIsNone(after)
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestModelViewIsLive(unittest.TestCase):
-    """Живой прогон модели в решётке РАЗБОРА.
+    """Live neural-scheduler replay inside the LAB schedule grid.
 
-    Проверяется то, чего построчный режим показать не может: решётка
-    заполняется ПО ХОДУ генерации, незаконная клетка находится сама, а
-    починка остаётся отдельным действием. Модель здесь не запускается —
-    события подаются напрямую, поэтому тест идёт за миллисекунды и не
-    требует ни весов, ни llama.cpp.
+    Verifies behavior invisible in line mode: the grid populates incrementally
+    as placements stream in, illegal issue-slot assignments are flagged
+    automatically, and repair remains an explicit action. Events are injected
+    directly so the test runs in milliseconds without weights or llama.cpp.
 
-    Ответ взят с настоящего прогона `slotclash` (адаптер lora-eos): двенадцать
-    законных размещений и STORE #12 на канал `,0`, который его не исполняет.
+    Fixture comes from a real `slotclash` run (lora-eos adapter): twelve legal
+    placements plus STORE #12 placed on issue slot `,0`, which lacks a STORE unit.
     """
 
     ANSWER = [(0, 0, 1), (1, 0, 5), (2, 2, 5), (3, 13, 1), (4, 17, 1),
@@ -302,11 +289,10 @@ class TestModelViewIsLive(unittest.TestCase):
               (10, 20, 1), (11, 21, 1), (12, 22, 0)]
 
     def _run(self, repair: bool = False) -> dict:
-        """Прогнать ответ модели событиями и снять показания.
+        """Replay model scheduler events and extract plain-data assertions.
 
-        Всё — внутри `run_test()`: снаружи виджеты уже отвязаны от приложения,
-        и обращение к ним падает с `NoActiveAppError`. Поэтому наружу уходят
-        только числа и строки, а не сами виджеты.
+        Everything runs inside `run_test()` because detached widgets raise
+        `NoActiveAppError` outside the app context.
         """
         from vliw.core import Placed, Repaired, Started
         from vliw.core.schedule import Placement
@@ -317,7 +303,7 @@ class TestModelViewIsLive(unittest.TestCase):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    sc.on_scheduler_event(Started("learned", "модель"))
+                    sc.on_scheduler_event(Started("learned", "model"))
                     for i, cycle, ch in self.ANSWER:
                         sc.on_scheduler_event(
                             Placed(Placement(i, cycle, ch), live=True))
@@ -352,49 +338,42 @@ class TestModelViewIsLive(unittest.TestCase):
         self.assertEqual(got["placed_live"], len(self.ANSWER))
 
     def test_illegal_channel_is_found(self) -> None:
-        """STORE на `,0` — незаконно, и это видно решётке, а не только отчёту."""
+        """STORE on issue slot `,0` is illegal and flagged directly in the grid."""
         got = self._run()
         self.assertEqual(got["illegal"], [12])
         self.assertEqual(got["cell"], (22, 0))
 
     def test_cursor_lands_on_the_illegal_cell(self) -> None:
-        """Курсор сам встаёт на ошибку — иначе она за краем экрана.
+        """Cursor auto-jumps to the first illegal placement so it is not off-screen.
 
-        На `slotclash` ошибка модели в такте 22 из 23: без этого шага
-        заголовок пишет «незаконных 1», а увидеть её можно, только
-        пролистав двадцать два такта вниз.
-
-        Проверяем ТАКТ, а не номер строки: простои схлопнуты, и строка
-        решётке больше не равна такту. Именно ради этого и заведён
-        `_cursor_target()` — он единственный знает про схлопывание.
+        On `slotclash` the illegal placement is in cycle 22 of 23. We assert
+        the CYCLE rather than raw row index because latency stalls are collapsed
+        in the grid and `_cursor_target()` maps rows back to cycles.
         """
         got = self._run()
         self.assertEqual((got["cursor_cycle"], got["cursor_port"]), (22, 0))
 
     def test_repair_is_a_separate_action(self) -> None:
-        """Само по себе ничего не чинится: сырой ответ остаётся сырым."""
+        """Raw model output is not auto-repaired; illegal placements remain visible."""
         got = self._run()
         self.assertEqual(got["illegal"], [12])
         self.assertEqual(got["repairs"], [(12, 0, 2)])
 
     def test_repair_command_fixes_channel_and_keeps_cycle(self) -> None:
-        """`/repair` меняет канал и НЕ трогает такт — makespan остаётся её же."""
+        """`/repair` moves the op to a legal issue slot while preserving cycle and makespan."""
         got = self._run(repair=True)
         self.assertEqual(got["illegal_after"], [])
         self.assertEqual(got["after"].cycle, got["before"].cycle)
         self.assertEqual(got["after"].channel, 2)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestMaximizedPanelFillsScreen(unittest.TestCase):
-    """Развёрнутая панель занимает экран, а не остаётся полосой посреди него.
+    """A maximized panel must fill the viewport rather than staying a narrow strip.
 
-    Найдено на скриншоте пользователя: у половины панелей высота задана числом
-    по id (#p-console: 10, #p-detail: 9, #p-seen: 12), и своя высота никуда не
-    девалась при развороте — по специфичности id побеждает класс `-maximized`,
-    который вешает Textual. Панель с фиксированной высотой повисала узкой
-    полосой в пустом экране. Разворачивают как раз такие панели: в них текст
-    не помещается.
+    Regression: panels with explicit ID heights (`#p-console: 10`, `#p-detail: 9`,
+    `#p-seen: 12`) previously beat Textual's `.-maximized` class by CSS
+    specificity and stayed fixed-height when maximized.
     """
 
     def _size(self, panel_id: str) -> tuple[int, int]:
@@ -414,23 +393,22 @@ class TestMaximizedPanelFillsScreen(unittest.TestCase):
         return asyncio.run(go())
 
     def test_fixed_height_panel_still_fills_screen(self) -> None:
-        """#p-console объявлен высотой 10 — развёрнутый обязан быть во весь экран."""
+        """#p-console has a fixed default height of 10 and must fill the screen when maximized."""
         _w, h = self._size("#p-console")
-        self.assertGreater(h, 30, "панель осталась полосой вместо разворота")
+        self.assertGreater(h, 30, "panel stayed a narrow strip instead of maximizing")
 
     def test_flexible_panel_unaffected(self) -> None:
         _w, h = self._size("#p-grid")
         self.assertGreater(h, 30)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestLabRightColumnFits(unittest.TestCase):
-    """Правая колонка РАЗБОРА помещается на экран целиком.
+    """The right column of LAB must fit completely within the viewport.
 
-    Найдено на скриншоте: длинный ответ ИИ в «ПОЧЕМУ ЗДЕСЬ» распирал панель,
-    ДИАГНОЗ сжимался в одну рамку, а МАШИНА уезжала за нижний край. Потолки
-    высоты и прокрутка внутри панели обязаны держать все четыре панели в
-    кадре при любом объёме текста.
+    Regression: a long AI explanation in WHY HERE pushed DIAGNOSIS and MACHINE
+    off the bottom edge. Height caps and internal scrolling must keep all four
+    right-hand panels on screen regardless of text length.
     """
 
     def test_machine_stays_on_screen_with_long_detail(self) -> None:
@@ -443,9 +421,9 @@ class TestLabRightColumnFits(unittest.TestCase):
                     await pilot.pause()
                     sc = app.screen
                     sc._cell_ai_token += 1
-                    # Длинный разбор — как после развёрнутого ответа ИИ.
+                    # Long breakdown, simulating a verbose AI explanation.
                     sc._set_detail(Text(
-                        "\n".join(f"строка разбора {i}" for i in range(40))))
+                        "\n".join(f"breakdown line {i}" for i in range(40))))
                     await pilot.pause()
                     await pilot.pause()
                     mach = sc.query_one("#p-machine")
@@ -454,10 +432,10 @@ class TestLabRightColumnFits(unittest.TestCase):
 
         bottom, screen_h = asyncio.run(go())
         self.assertLessEqual(bottom, screen_h,
-                             "МАШИНА уехала за нижний край экрана")
+                             "MACHINE panel overflowed past the bottom of the screen")
 
     def test_command_line_lives_inside_git(self) -> None:
-        """Командная строка — внутри GIT, а не большой полосой внизу."""
+        """Command input lives inside the GIT/console panel, not a bottom dock bar."""
         from vliw.tui.widgets import PromptBar
 
         async def go():
@@ -473,22 +451,18 @@ class TestLabRightColumnFits(unittest.TestCase):
                     return inside, len(list(dock)), bar.display
 
         inside, docks, shown = asyncio.run(go())
-        self.assertTrue(inside, "строка ввода не внутри панели GIT")
-        self.assertEqual(docks, 0, "большой нижний док должен исчезнуть")
+        self.assertTrue(inside, "command input is not inside the console panel")
+        self.assertEqual(docks, 0, "legacy bottom dock bar should not exist")
         self.assertTrue(shown)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCursorAI(unittest.TestCase):
-    """ИИ в РАЗБОРЕ подключён к курсору, а не к строке ввода.
+    """AI assistance in LAB is bound to the grid cursor rather than a side chat.
 
-    Решение по интерфейсу: у этого экрана уже есть способ спросить — курсор.
-    Человек показывает на клетку, панель «ПОЧЕМУ ЗДЕСЬ» отвечает точно, а ИИ
-    дописывает фразу обычным языком. Поле ввода рядом заставляло бы
-    ПЕРЕСПРАШИВАТЬ словами то, на что уже показали курсором.
-
-    Модель здесь не запускается: проверяется механика — отмена по движению,
-    задержка перед запуском и узость подсказки.
+    Pointing at a scheduled cell populates WHY HERE deterministically, and the
+    LLM adds a plain-English caption. No model is executed here; we verify
+    cancellation on cursor move, debounce delay, and prompt grounding.
     """
 
     def _screen(self, body):
@@ -503,13 +477,10 @@ class TestCursorAI(unittest.TestCase):
         return asyncio.run(go())
 
     def test_lab_asks_from_below_not_from_the_side(self) -> None:
-        """Спрашивают снизу, а не колонкой сбоку.
+        """Queries open as a bottom popup prompt rather than a width-stealing side column.
 
-        Колонка (PanelChat) отбирала треть ширины у решётки — ровно у того,
-        ради чего панель и разворачивают. Всплывающая строка снизу ширины не
-        отбирает, поэтому её получает каждая панель, а колонки нет ни у
-        одной. Факты при этом собираются по ТЕМЕ открытой панели, а не «всё
-        про сессию»: спрашивают всегда про то, на что смотрят.
+        Facts and suggested chips are scoped to the active maximized panel's
+        topic rather than dumping generic session state.
         """
 
         async def body(sc, pilot):
@@ -520,7 +491,7 @@ class TestCursorAI(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             for _ in range(6):
                 await pilot.pause(0.05)
-            await pilot.press("tab")          # справочник — только по Tab
+            await pilot.press("tab")          # popup helper opens only on Tab
             for _ in range(4):
                 await pilot.pause(0.05)
             return (len(list(sc.query(PanelChat))),
@@ -530,23 +501,22 @@ class TestCursorAI(unittest.TestCase):
                     sc.panel_chips("machine"))
 
         chats, prompts, facts, grid_chips, machine_chips = self._screen(body)
-        self.assertEqual(chats, 0, "колонка сбоку не должна появляться")
-        self.assertEqual(prompts, 1, "строка снизу должна появиться")
-        self.assertTrue(facts, "панели есть что рассказать про себя")
-        self.assertTrue(any("решётк" in f.lower() for f in facts),
-                        "факты должны быть про решётку, а не вообще")
-        # Готовые вопросы у панелей разные: общий список на все панели был бы
-        # тем же боковым чатом, только без колонки.
+        self.assertEqual(chats, 0, "side chat column must not appear")
+        self.assertEqual(prompts, 1, "bottom popup prompt must appear")
+        self.assertTrue(facts, "panel must expose grounded facts")
+        self.assertTrue(any("grid" in f.lower() for f in facts),
+                        "facts must describe the schedule grid specifically")
+        # Suggested questions must be panel-specific rather than a single global list.
         self.assertTrue(grid_chips and machine_chips)
         self.assertNotEqual(grid_chips, machine_chips)
 
     def test_cursor_move_invalidates_previous_answer(self) -> None:
-        """Ушёл с клетки — прежний ответ снят, а не дописывается к чужой."""
+        """Moving the cursor off a cell clears and invalidates the previous AI caption."""
 
         async def body(sc, pilot):
             sc._cell_ai_token = 5
-            sc._cell_ai_text = "старый ответ"
-            sc._cell_ai_state = "готово"
+            sc._cell_ai_text = "stale answer"
+            sc._cell_ai_state = "done"
             sc._cell_ai_restart()
             await pilot.pause()
             return sc._cell_ai_token, sc._cell_ai_text, sc._cell_ai_state
@@ -557,48 +527,41 @@ class TestCursorAI(unittest.TestCase):
         self.assertEqual(state, "")
 
     def test_stale_request_cannot_write(self) -> None:
-        """Запрос с чужим номером молчит, даже если успел вернуться."""
+        """A late response carrying a stale token must be discarded silently."""
 
         async def body(sc, pilot):
             sc._cell_ai_token = 9
-            sc._cell_ai_piece(3, "ответ от прошлой клетки")
+            sc._cell_ai_piece(3, "answer from previous cell")
             await pilot.pause()
             return sc._cell_ai_text
 
         self.assertEqual(self._screen(body), "")
 
     def test_ai_starts_only_after_the_cursor_rests(self) -> None:
-        """Запуск не на каждое нажатие стрелки: иначе очередь брошенных задач.
-
-        Здесь проверяется не число, а сам факт задержки: без неё быстрая
-        прокрутка решётки на двадцать тактов подняла бы двадцать запросов к
-        модели, каждый по несколько секунд и шесть потоков.
-        """
+        """Cursor AI must debounce before firing so rapid scrolling does not flood inference."""
         from vliw.tui.screens.lab_screen import LabScreen
 
         self.assertGreaterEqual(LabScreen.CELL_AI_DELAY, 1.0)
 
     def test_cell_prompt_is_a_retelling_not_a_reasoning_task(self) -> None:
-        """В подсказку уходит только разбор панели, и считать запрещено."""
+        """Cell prompt sends only the deterministic panel breakdown and forbids arithmetic."""
         from vliw.agent import context
 
-        prompt = context.cell_prompt(["store out #12 стоит в такте 22 на порту ,0",
-                                      "STORE исполняют только ,2 и ,5"])
+        prompt = context.cell_prompt(["store out #12 is placed in cycle 22 on port ,0",
+                                      "STORE executes only on ports ,2 and ,5"])
         self.assertIn("store out #12", prompt)
-        self.assertIn("НИ ОДНОГО числа, которого нет", prompt)
-        self.assertNotIn("ФАКТЫ (единственный источник чисел)", prompt)
+        self.assertIn("ZERO numbers that do not appear", prompt)
+        self.assertNotIn("FACTS (the only source of numbers)", prompt)
         self.assertLess(len(prompt), 1500)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestDiagGridBridge(unittest.TestCase):
-    """Разворот ДИАГНОЗА и РЕШЁТКИ — два разных режима, связанные переходом.
+    """Maximized DIAGNOSIS and GRID are distinct views linked bidirectionally.
 
-    ДИАГНОЗ развёрнутый показывает находки целиком (без потолка top-5) и
-    кликом уводит на клетку в РЕШЁТКЕ; РЕШЁТКА развёрнутая мостиком уводит
-    обратно на ту же находку. Ни то ни другое не открывает общий чат сбоку
-    (см. TestCursorAI.test_lab_has_no_side_chat — тот же принцип для панели
-    grid, здесь для diag).
+    Maximized DIAGNOSIS lists every doctor finding (no top-5 cap) and jumps to
+    its cell in GRID on click; maximized GRID links back to the same finding
+    in DIAGNOSIS. Neither opens a side chat column.
     """
 
     def _screen(self, body):
@@ -626,11 +589,11 @@ class TestDiagGridBridge(unittest.TestCase):
             return len(rows), len(sc._findings())
 
         rows, total = self._screen(body)
-        self.assertGreater(total, 0, "у slotclash должны быть находки")
+        self.assertGreater(total, 0, "slotclash must produce doctor findings")
         self.assertEqual(rows, total)
 
     def test_no_side_chat_when_diag_maximized(self) -> None:
-        """То же решение, что и для решётки: здесь свой режим, не чат."""
+        """Maximizing DIAGNOSIS opens its dedicated view, never a side chat."""
         from vliw.tui.widgets import Panel, PanelChat
 
         async def body(sc, pilot):
@@ -673,11 +636,11 @@ class TestDiagGridBridge(unittest.TestCase):
             sc.maximize(grid, container=False)
             grid.post_message(Panel.Expanded(grid))
             sc._find_pos = -1
-            sc._cmd_find("next")          # курсор на первую находку
+            sc._cmd_find("next")          # jump cursor to the first finding
             await pilot.pause()
             f_before = sc._active_finding()
             link = sc.query_one("#grid-link", GridLink)
-            self.assertTrue(link.active, "мостик должен включиться под находкой")
+            self.assertTrue(link.active, "grid-to-diag link must activate under a finding")
             link.post_message(GridLink.Picked())
             await pilot.pause()
             return sc.screen.maximized.id, sc._active_finding(), f_before
@@ -687,12 +650,11 @@ class TestDiagGridBridge(unittest.TestCase):
         self.assertEqual(after, before)
 
     def test_find_command_cycles_through_distinct_findings(self) -> None:
-        """`/find next` обходит весь список по разу и ставит курсор верно.
+        """`/find next` cycles through every finding once and positions the cursor accurately.
 
-        Не у каждой находки есть своя клетка (например «23 т. против нижней
-        границы» — про расписание целиком, без instrs): для таких курсор не
-        трогаем. Но там, где клетка есть (idle-stall или instrs), после
-        перехода курсор обязан стоять ровно на ней.
+        Whole-schedule findings without `instrs` leave the cursor unchanged,
+        while cell-scoped findings (`idle-stall` or non-empty `instrs`) must
+        highlight their exact target cell.
         """
         async def body(sc, pilot):
             findings = sc._filtered_findings()
@@ -709,19 +671,17 @@ class TestDiagGridBridge(unittest.TestCase):
             f = findings[pos]
             if f.code == "idle-stall" or f.instrs:
                 self.assertEqual(active, f,
-                    f"находка {f.code} {f.where} не подсветилась после /find")
+                    f"finding {f.code} {f.where} was not highlighted after /find")
 
 
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestPanelPromptIsAgentic(unittest.TestCase):
-    """Всплывающая строка панели отвечает НАСТОЯЩИМ агентом, а не облегчённой копией.
+    """The panel popup prompt runs the full Agent (`Agent.ask_stream`), not a stripped stub.
 
-    Раньше `_panel_prompt_worker` строил свой собственный узкий промпт и звал
-    голый `llm.stream` — ни одного действия агент оттуда сделать не мог.
-    Теперь это тот же `Agent.ask_stream`, что ведёт ДИАЛОГ в АГЕНТЕ: спросить
-    «переключись на X» можно из всплывающей строки ЛЮБОЙ панели.
+    Users can trigger real session actions (such as switching scenarios) from
+    any maximized panel's popup prompt.
     """
 
     def _screen(self, body, mode="lab"):
@@ -736,17 +696,12 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
         return asyncio.run(go())
 
     def test_scenario_switch_from_popup_does_not_crash_and_updates_screen(self) -> None:
-        """Регрессия: действие агента меняло сценарий, `redraw()` падал IndexError.
+        """Regression: switching scenarios from a popup must reschedule instead of crashing.
 
-        `redraw()` красит уже посчитанное — единственный прежний вызывающий,
-        `repaint()`, зовёт его при смене темы, когда `self.base` и
-        `session.dag_obj` гарантированно согласованы. Действие агента уводит
-        `session.dag_obj` вперёд раньше, чем в РАЗБОРЕ пересчитается
-        `self.base` — звать `redraw()` напрямую значило читать старое
-        расписание для нового графа. На mulclash (другое число инструкций)
-        это падало `IndexError` в `_render_grid`. Правильный хук —
-        `after_command()`: он либо ничего не делает, либо (в РАЗБОРЕ) сам
-        запускает пересчёт в фоне.
+        Calling `redraw()` directly after `session.dag_obj` changed read an old
+        schedule against a differently sized dependency DAG (`mulclash`), raising
+        `IndexError` in `_render_grid`. `after_command()` triggers background
+        rescheduling safely.
         """
         import unittest.mock as mock
 
@@ -754,7 +709,7 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
         from vliw.tui.widgets import Panel, PanelPrompt
 
         def fake_stream(system, q, history=None, temperature=0.3, nudge=True):
-            yield "готово"
+            yield "done"
 
         async def body(sc, pilot, session):
             panel = sc.query_one("#p-machine", Panel)
@@ -762,14 +717,14 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             await pilot.pause()
             await pilot.pause()
-            # Справочник приходит только по Tab — сам он не выскакивает.
+            # Popup helper opens only on Tab — never automatically.
             await pilot.press("tab")
             await pilot.pause()
             await pilot.pause()
             pp = sc.query_one(PanelPrompt)
             inp = pp.query_one("#pp-input")
             with mock.patch.object(llm, "stream", fake_stream):
-                inp.value = "переключись на mulclash и сравни"
+                inp.value = "run mulclash and compare"
                 await pilot.press("enter")
                 for _ in range(30):
                     await pilot.pause(0.05)
@@ -779,14 +734,14 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
         self.assertEqual(scenario, "mulclash")
 
     def test_clear_wipes_answer_log_but_keeps_facts_and_chips(self) -> None:
-        """`/clear` — не закрытие: факты и готовые вопросы остаются на месте."""
+        """`/clear` clears the answer log without closing the popup or dropping facts/chips."""
         import unittest.mock as mock
 
         from vliw.agent import llm
         from vliw.tui.widgets import Panel, PanelPrompt
 
         def fake_stream(system, q, history=None, temperature=0.3, nudge=True):
-            yield "короткий ответ"
+            yield "short answer"
 
         async def body(sc, pilot, session):
             panel = sc.query_one("#p-numbers", Panel)
@@ -794,14 +749,14 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             await pilot.pause()
             await pilot.pause()
-            # Справочник приходит только по Tab — сам он не выскакивает.
+            # Popup helper opens only on Tab — never automatically.
             await pilot.press("tab")
             await pilot.pause()
             await pilot.pause()
             pp = sc.query_one(PanelPrompt)
             inp = pp.query_one("#pp-input")
             with mock.patch.object(llm, "stream", fake_stream):
-                inp.value = "почему предел такой?"
+                inp.value = "why is the lower bound this high?"
                 await pilot.press("enter")
                 for _ in range(20):
                     await pilot.pause(0.05)
@@ -821,8 +776,7 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
         self.assertFalse(log_visible)
 
     def test_close_key_is_printed_not_only_a_tooltip(self) -> None:
-        """Клавиша закрытия видна текстом — подсказка по наведению мышью в
-        терминале не видна ни на скриншоте, ни без мыши."""
+        """Close shortcut must be visible in text, not hidden behind a hover tooltip."""
         from vliw.tui.widgets import Panel, PanelPrompt
 
         async def body(sc, pilot, session):
@@ -831,7 +785,7 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
             panel.post_message(Panel.Expanded(panel))
             await pilot.pause()
             await pilot.pause()
-            # Справочник приходит только по Tab — сам он не выскакивает.
+            # Popup helper opens only on Tab — never automatically.
             await pilot.press("tab")
             await pilot.pause()
             await pilot.pause()
@@ -842,15 +796,13 @@ class TestPanelPromptIsAgentic(unittest.TestCase):
         self.assertIn("Esc", text)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestConsoleJournalIsATerminal(unittest.TestCase):
-    """Развёрнутый ВЫВОД КОМАНД — живой терминал, а не список для чтения.
+    """Maximized command output acts as a live terminal, not a read-only log.
 
-    Командная строка в РАЗБОРЕ одна: пока журнал развёрнут, это ЕГО строка
-    (панельная спрятана — две одинаковых рядом только путают). Команда,
-    набранная в ней, обязана сразу появиться в журнале — иначе разворот
-    выглядит терминалом только на словах: набрал команду, а видишь по-
-    прежнему старый запуск.
+    While maximized, the journal owns the single active prompt bar (the
+    inline panel prompt is hidden), and newly entered commands immediately
+    become the selected entry.
     """
 
     def test_new_run_while_maximized_jumps_to_it(self) -> None:
@@ -873,9 +825,9 @@ class TestConsoleJournalIsATerminal(unittest.TestCase):
                     await pilot.pause()
                     await pilot.pause()
 
-                    # Панельная строка спрятана — командная теперь одна.
+                    # Inline panel prompt is hidden so only one command bar is active.
                     self.assertFalse(sc.query_one("#prompt", PromptBar).display,
-                                     "в развороте не должно быть двух строк")
+                                     "maximized journal must not show two prompt bars")
                     inp = sc.query_one("#journal-input")
                     inp.focus()
                     inp.value = "/bounds"
@@ -888,18 +840,16 @@ class TestConsoleJournalIsATerminal(unittest.TestCase):
 
         n, pos = asyncio.run(go())
         self.assertEqual(n, 2)
-        self.assertEqual(pos, 1, "после набора второй команды журнал обязан "
-                                 "показывать именно её, а не первую")
+        self.assertEqual(pos, 1, "after entering a second command, the journal must "
+                                 "select the new run rather than staying on the first")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestMachineMatrixIsInteractive(unittest.TestCase):
-    """Развёрнутая МАШИНА — таблица, которой манипулируют, а не только читают.
+    """Maximized MACHINE exposes an interactive port-capability matrix.
 
-    Клик по заголовку столбца пересортировывает строки, живой текстовый
-    фильтр прячет несовпавшие операции. Раньше матрица была вычисленной, но
-    ФИКСИРОВАННОЙ таблицей — ровно тем самым «большим окном с выводом»,
-    который и в свёрнутом виде можно было пересказать столбиком.
+    Clicking column headers sorts rows, and the live text filter narrows
+    functional-unit rows by mnemonic or port.
     """
 
     def _screen(self, body):
@@ -929,7 +879,7 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
                 DataTable.HeaderSelected(table, ColumnKey("op"), 0, None))
             await pilot.pause()
             by_name = list(sc._matrix_ops)
-            # Клик по тому же столбцу второй раз — переворачивает направление.
+            # Clicking the same column header a second time reverses sort order.
             sc.on_data_table_header_selected(
                 DataTable.HeaderSelected(table, ColumnKey("op"), 0, None))
             await pilot.pause()
@@ -940,9 +890,8 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
         self.assertEqual(by_name, sorted(by_name))
         self.assertEqual(by_name_rev, sorted(by_name, reverse=True))
         self.assertNotEqual(default_order, by_name,
-                            "сортировка по умолчанию (по числу операций) не "
-                            "совпадает с алфавитной — иначе клик было бы не "
-                            "проверить")
+                            "default sort (by op count) must differ from alphabetical "
+                            "so the header click produces a measurable change")
 
     def test_live_filter_hides_non_matching_rows(self) -> None:
         from vliw.tui.widgets import Panel
@@ -959,16 +908,12 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
             return list(sc._matrix_ops)
 
         ops = self._screen(body)
-        # «div» находит ОБА делителя — целочисленный и с плавающей точкой.
-        # Раньше ждали ровно ["DIV"], потому что второго в модели не было;
-        # измерение 30.08.2026 показало, что fdivd исполняется на том же
-        # единственном порту ,5. Фильтр не сломался — он честно показывает
-        # обоих претендентов на монопольный порт, а это ровно то, ради чего
-        # на матрицу и смотрят.
+        # "div" matches BOTH integer and floating-point dividers: hardware
+        # probing confirmed that fdivd shares the single monopoly issue slot ,5.
         self.assertEqual(ops, ["DIV", "FDIV"])
 
     def test_filter_narrows_to_a_single_row(self) -> None:
-        """Фильтр обязан уметь и до одной строки — иначе он не фильтр."""
+        """Filter must be able to narrow down to a single row."""
         from vliw.tui.widgets import Panel
 
         async def body(sc, pilot):
@@ -985,14 +930,12 @@ class TestMachineMatrixIsInteractive(unittest.TestCase):
         self.assertEqual(self._screen(body), ["STORE"])
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestDialogIsAWorkspace(unittest.TestCase):
-    """Развёрнутый ДИАЛОГ — рабочая область: история вопросов + /clear.
+    """Maximized DIALOG provides a question-history sidebar and in-place `/clear`.
 
-    Долгое время разворот ДИАЛОГА был просто лентой покрупнее — ровно то,
-    за что критиковали остальные панели до переделки. Теперь слева история
-    вопросов с их счётом, клик повторяет вопрос, а `/clear` стирает ленту,
-    не покидая режим (история остаётся: чистится разговор, не работа).
+    `/clear` clears the conversation feed without leaving AGENT mode or
+    erasing the recorded question history.
     """
 
     def _screen(self, body):
@@ -1007,18 +950,13 @@ class TestDialogIsAWorkspace(unittest.TestCase):
         return asyncio.run(go())
 
     def test_clear_wipes_dialog_but_keeps_history(self) -> None:
-        """`/clear` в АГЕНТЕ чистит ленту диалога, а не уводит к выбору режима.
-
-        Лента растёт и при активном использовании занимает весь экран.
-        Раньше /clear означал «покинуть режим» — стереть разговор, не
-        уходя, было нельзя вообще.
-        """
+        """`/clear` in AGENT wipes the dialog feed instead of exiting to the picker."""
         from textual.widgets import Static
 
         async def body(sc, pilot, session):
-            sc._asked = [{"q": "почему медленно?", "seconds": 14.0, "acts": 2}]
+            sc._asked = [{"q": "why is makespan high?", "seconds": 14.0, "acts": 2}]
             for _ in range(6):
-                sc._bubble(Static("сообщение", classes="msg-note"))
+                sc._bubble(Static("message", classes="msg-note"))
             before = len(list(sc.chat.children))
             sc.submit_line("/clear")
             await pilot.pause()
@@ -1026,14 +964,14 @@ class TestDialogIsAWorkspace(unittest.TestCase):
 
         before, after, asked = self._screen(body)
         self.assertGreater(before, 1)
-        self.assertLessEqual(after, 2, "лента должна стереться до приветствия")
-        self.assertEqual(asked, 1, "история вопросов должна остаться")
+        self.assertLessEqual(after, 2, "dialog feed should clear back to the greeting")
+        self.assertEqual(asked, 1, "question history must be preserved")
 
     def test_expanded_dialog_shows_history_column(self) -> None:
         from vliw.tui.widgets import Panel
 
         async def body(sc, pilot, session):
-            sc._asked = [{"q": "почему медленно?", "seconds": 14.0, "acts": 2}]
+            sc._asked = [{"q": "why is makespan high?", "seconds": 14.0, "acts": 2}]
             panel = sc.query_one("#p-chat", Panel)
             sc.maximize(panel, container=False)
             panel.post_message(Panel.Expanded(panel))
@@ -1044,18 +982,12 @@ class TestDialogIsAWorkspace(unittest.TestCase):
                     "/clear" in panel._title)
 
         shown, items, title = self._screen(body)
-        self.assertTrue(shown, "колонка истории видна при развороте")
+        self.assertTrue(shown, "history sidebar must be visible when maximized")
         self.assertEqual(items, 1)
-        self.assertTrue(title, "клавиша очистки напечатана в заголовке")
+        self.assertTrue(title, "clear shortcut must be shown in the header")
 
     def test_tab_opens_ai_reference_and_it_does_not_come_uninvited(self) -> None:
-        """Справочник ИИ приходит ТОЛЬКО по Tab и по нему же уходит.
-
-        Раньше он выскакивал сам при развороте: панель разворачивают, чтобы
-        работать в ней, и чужая строка снизу в этот момент только мешает.
-        Проверяем обе половины: сразу после разворота его нет, Tab поднимает,
-        Tab убирает.
-        """
+        """The AI popup helper opens ONLY on Tab and toggles closed on Tab."""
         from vliw.tui.widgets import Panel, PanelPrompt
 
         async def body(sc, pilot, session):
@@ -1075,20 +1007,17 @@ class TestDialogIsAWorkspace(unittest.TestCase):
             return uninvited, opened, len(list(sc.query(PanelPrompt)))
 
         uninvited, opened, closed = self._screen(body)
-        self.assertEqual(uninvited, 0, "справочник не должен приходить сам")
-        self.assertEqual(opened, 1, "Tab должен его поднять")
-        self.assertEqual(closed, 0, "Tab должен его убрать")
+        self.assertEqual(uninvited, 0, "popup helper must not open automatically")
+        self.assertEqual(opened, 1, "Tab must open the popup helper")
+        self.assertEqual(closed, 0, "Tab must close the popup helper")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestEscapeIsOneStepBack(unittest.TestCase):
-    """Esc везде значит одно: шаг наружу, вплоть до начального экрана.
+    """Esc consistently steps one level outward, all the way back to the picker.
 
-    Раньше он значил три разных вещи в зависимости от фокуса (закрыть
-    справочник / переключить решётка⇄ввод / уйти к выбору режима), причём
-    поверх всего этого Textual перехватывал Esc ЕЩЁ РАНЬШЕ любых биндингов,
-    когда панель развёрнута (`App.ESCAPE_TO_MINIMIZE`), и схлопывал её сам —
-    минуя наш обработчик и не посылая `Panel.Collapsed`.
+    Verifies the 3-step unwind: popup helper -> maximized panel -> mode picker,
+    without Textual's default `ESCAPE_TO_MINIMIZE` bypassing `Panel.Collapsed`.
     """
 
     def test_escape_unwinds_level_by_level(self) -> None:
@@ -1112,41 +1041,36 @@ class TestEscapeIsOneStepBack(unittest.TestCase):
                     await pilot.pause()
                     steps = [len(list(sc.query(PanelPrompt)))]
 
-                    await pilot.press("escape")     # 1: убрать справочник
+                    await pilot.press("escape")     # 1: close popup helper
                     await pilot.pause()
                     await pilot.pause()
                     steps.append((len(list(sc.query(PanelPrompt))),
                                   sc.maximized is not None))
 
-                    await pilot.press("escape")     # 2: свернуть панель
+                    await pilot.press("escape")     # 2: minimize panel
                     await pilot.pause()
                     await pilot.pause()
                     steps.append((app.screen.maximized is None,
                                   app.screen.__class__.__name__))
 
-                    await pilot.press("escape")     # 3: к выбору режима
+                    await pilot.press("escape")     # 3: return to mode picker
                     await pilot.pause()
                     await pilot.pause()
                     steps.append(isinstance(app.screen, PickerScreen))
                     return steps
 
         opened, after_first, after_second, after_third = asyncio.run(go())
-        self.assertEqual(opened, 1, "Tab должен был поднять справочник")
-        # Первый Esc снимает ТОЛЬКО справочник — панель обязана остаться
-        # развёрнутой, иначе один Esc проскакивает через два уровня.
+        self.assertEqual(opened, 1, "Tab should have opened the popup helper")
+        # First Esc dismisses ONLY the popup helper — the panel must stay
+        # maximized so a single Esc never skips two levels.
         self.assertEqual(after_first, (0, True))
         self.assertEqual(after_second, (True, "LabScreen"))
-        self.assertTrue(after_third, "третий Esc — на начальный экран")
+        self.assertTrue(after_third, "third Esc must return to the mode picker")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestGridKeyboardTools(unittest.TestCase):
-    """Развёрнутая решётка управляется клавишами, а не строкой кнопок.
-
-    Строка «тегов» над расписанием режется по краям и дублирует подсказки.
-    Вместо неё: клавиши при фокусе решётки + правая колонка-инспектор,
-    где список клавиш и состояние слоёв видно всегда.
-    """
+    """Maximized schedule grid is keyboard-driven with a right-hand inspector sidebar."""
 
     def _screen(self, body):
         async def go():
@@ -1169,7 +1093,7 @@ class TestGridKeyboardTools(unittest.TestCase):
         sc.query_one("#grid", ScheduleGrid).focus()
 
     def test_side_inspector_is_drawn(self) -> None:
-        """Правая колонка не пустует: курсор и клавиши заполнены."""
+        """Inspector sidebar displays active cursor details and key legend."""
         from textual.widgets import Static
 
         async def body(sc, pilot):
@@ -1181,11 +1105,11 @@ class TestGridKeyboardTools(unittest.TestCase):
             return cursor, legend
 
         cursor, legend = self._screen(body)
-        self.assertTrue(cursor.strip(), "инспектор курса пуст")
-        self.assertIn("n / N", legend, "в легенде нет списка клавиш")
+        self.assertTrue(cursor.strip(), "cursor inspector is empty")
+        self.assertIn("n / N", legend, "key legend is missing navigation shortcuts")
 
     def test_tool_keys_act_on_focused_grid(self) -> None:
-        """v/z/[ ] — инструменты прямо с клавиатуры; фокус остаётся в решётке."""
+        """v/z/[ ] toggle views and dependency layers directly while keeping focus in the grid."""
 
         async def body(sc, pilot):
             self._maximize_grid(sc)
@@ -1205,19 +1129,14 @@ class TestGridKeyboardTools(unittest.TestCase):
             return before, after, deps_on, focused
 
         before, after, deps_on, focused = self._screen(body)
-        self.assertNotEqual(before, after, "v не переключил вид")
-        self.assertTrue(deps_on, "z не включил слой соседей")
-        self.assertTrue(focused, "фокус сбежал из решётки после инструмента")
+        self.assertNotEqual(before, after, "v did not switch the schedule view")
+        self.assertTrue(deps_on, "z did not enable the dependency-neighbor layer")
+        self.assertTrue(focused, "focus escaped the schedule grid after pressing a tool key")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestTerminalHasCommandCatalog(unittest.TestCase):
-    """Развёрнутый ВЫВОД КОМАНД — терминал с каталогом, а не поле для слепого набора.
-
-    Команд три десятка, и держать их в голове (или лезть за ними в /docs,
-    теряя развёрнутый экран) — ровно та работа, которую инструмент должен
-    делать за человека.
-    """
+    """Maximized command output includes an interactive, filterable command catalog."""
 
     def _term(self, body, seed=("/doctor",)):
         async def go():
@@ -1251,14 +1170,10 @@ class TestTerminalHasCommandCatalog(unittest.TestCase):
             return len(list(j.query(CommandItem))), len(cli.COMMANDS)
 
         shown, total = self._term(body)
-        self.assertEqual(shown, total, "в каталоге должны быть все команды")
+        self.assertEqual(shown, total, "catalog must list every registered command")
 
     def test_typing_filters_catalog_by_first_word_only(self) -> None:
-        """Фильтр берёт только имя команды: «run slotclash» — это всё ещё /run.
-
-        Если фильтровать по всей строке, каталог пустеет ровно в тот момент,
-        когда команда набрана правильно и с аргументом.
-        """
+        """Catalog filter matches only the command name so arguments do not empty the list."""
         from vliw.tui.widgets import CommandItem
 
         async def body(sc, pilot, j, session):
@@ -1277,21 +1192,20 @@ class TestTerminalHasCommandCatalog(unittest.TestCase):
         narrowed, with_arg = self._term(body)
         self.assertIn("/doctor", narrowed)
         self.assertLess(len(narrowed), len(cli.COMMANDS))
-        # Совпадения с начала имени — первыми: «do» ищут ради /doctor, а не
-        # ради /random, где «do» просто попалось в середине (ran-do-m).
+        # Prefix matches rank first: "do" should surface /doctor before /random.
         self.assertEqual(narrowed[0], "/doctor")
         self.assertIn("/run", with_arg)
 
     def test_failed_run_is_marked(self) -> None:
-        """Провалившийся запуск не должен выглядеть как удачный."""
+        """A failed command run must be marked as an error, not a success."""
 
         async def body(sc, pilot, j, session):
             return [(r["cmd"], bool(r.get("error"))) for r in j.runs]
 
         runs = self._term(body, seed=("/doctor", "/run nosuchscenario"))
         self.assertEqual(len(runs), 2)
-        self.assertFalse(runs[0][1], "/doctor отработал — пометки быть не должно")
-        self.assertTrue(runs[1][1], "неизвестный сценарий обязан быть помечен")
+        self.assertFalse(runs[0][1], "/doctor succeeded and must not be marked as error")
+        self.assertTrue(runs[1][1], "unknown scenario must be marked as error")
 
     def test_history_walks_previous_commands(self) -> None:
         from vliw.tui.widgets import JournalInput
@@ -1307,7 +1221,7 @@ class TestTerminalHasCommandCatalog(unittest.TestCase):
                          "/bounds")
 
     def test_clicking_a_command_inserts_it_without_running(self) -> None:
-        """Клик подставляет, но не запускает: у половины команд есть аргумент."""
+        """Clicking a catalog entry prefills the prompt without executing it."""
         from vliw.tui.widgets import CommandItem
 
         async def body(sc, pilot, j, session):
@@ -1321,22 +1235,20 @@ class TestTerminalHasCommandCatalog(unittest.TestCase):
 
         value, before, after = self._term(body)
         self.assertTrue(value.startswith("/run "))
-        self.assertEqual(before, after, "клик не должен запускать команду")
+        self.assertEqual(before, after, "clicking a catalog command must not auto-run it")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCodeScreen(unittest.TestCase):
-    """КОД: редактор обязан ЗНАТЬ, что в нём написано.
+    """CODE screen: the editor must parse e2k assembly live and rewrite from the oracle.
 
-    Разница между этим режимом и текстовым полем с логом ровно в этом: буфер
-    разбирается на лету, расписание стоит в гуттере у своей строки, а `^R`
-    переписывает код по точному поиску. Каждая из трёх вещей и проверяется —
-    остальное (цвета, рамки) не сломается молча, а это сломается.
+    Verifies live parsing on open, cycle markers in the gutter, and `^R`
+    rewriting the buffer to match the exact branch-and-bound oracle schedule.
     """
 
     @staticmethod
     def _screen(body, run=False):
-        """Поднять КОД, при желании прогнать буфер, отдать тело теста экрану."""
+        """Mount CODE, optionally run the oracle (`F5`), and execute the test body."""
         async def go():
             app, session = _make_app("code")
             with redirect_stdout(io.StringIO()):
@@ -1353,35 +1265,33 @@ class TestCodeScreen(unittest.TestCase):
         return asyncio.run(go())
 
     def test_buffer_is_parsed_without_running_anything(self):
-        """Разбор идёт при открытии: расписание видно до всякого F5."""
+        """Assembly is parsed immediately on open before pressing F5."""
         async def body(screen, pilot, session):
             return (len(screen.parsed.ops),
                     screen.comp.makespan,
                     [p for p in screen.problems if p.severity == "error"])
 
         ops, makespan, errors = self._screen(body)
-        self.assertGreater(ops, 0, "буфер по умолчанию не разобрался")
+        self.assertGreater(ops, 0, "default assembly buffer failed to parse")
         self.assertGreater(makespan, 0)
-        self.assertEqual(errors, [], "пример по умолчанию обязан быть законным")
+        self.assertEqual(errors, [], "default sample basic block must have zero lint errors")
 
     def test_gutter_carries_the_schedule(self):
-        """У строки с операцией в гуттере стоит её такт, а не просто номер."""
+        """Each scheduled operation line displays its cycle marker in the gutter."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             op = screen.parsed.ops[0]
             return edit._marks.get(op.line - 1), op.cycle
 
         mark, cycle = self._screen(body)
-        self.assertIsNotNone(mark, "у первой операции нет метки расписания")
-        self.assertIn(f"т{cycle}", mark[0])
+        self.assertIsNotNone(mark, "first operation is missing its gutter cycle marker")
+        self.assertIn(f"c{cycle}", mark[0])
 
     def test_typing_reaches_the_buffer(self):
-        """Буквы обязаны печататься — это редактор, а не витрина.
+        """Keystrokes must reach the editor buffer.
 
-        Тест дословный, потому что поломка была ровно такая: перехваченный
-        `TextArea._on_key` объявлен `async`, обычное переопределение
-        проглатывало корутину родителя, и редактор молча переставал
-        принимать ввод. Ни один тест «экран поднялся» этого не видит.
+        Regression: overriding async `TextArea._on_key` synchronously swallowed
+        the parent coroutine and silently broke typing.
         """
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
@@ -1394,11 +1304,10 @@ class TestCodeScreen(unittest.TestCase):
         self.assertTrue(self._screen(body).endswith("adds"))
 
     def test_cursor_move_redraws_the_line_panel(self):
-        """Переезд курсора разбирает НОВУЮ строку, а не держит старую.
+        """Moving the cursor inspects the NEW line rather than holding stale state.
 
-        Полоса состояния меняется всегда, полный разбор — только когда
-        вкладка СТРОКА открыта: закрытая вкладка не должна стоить отрисовки
-        на каждое нажатие стрелки.
+        The status chip always updates; full line breakdown renders when the
+        LINE dock tab is open.
         """
         async def body(screen, pilot, session):
             op = screen.parsed.ops[2]
@@ -1412,35 +1321,32 @@ class TestCodeScreen(unittest.TestCase):
                     str(screen.query_one("#dock-note").content))
 
         line, chip, info, note = self._screen(body)
-        self.assertIn(f"стр.{line}", chip)
-        self.assertIn("латентность", info)
+        self.assertIn(f"ln.{line}", chip)
+        self.assertIn("latency", info)
         self.assertIn(str(line), note)
 
     def test_run_fills_the_oracle_and_the_moves(self):
-        """F5 доводит до конца: точный поиск, находки и список перестановок."""
+        """F5 runs the exact branch-and-bound oracle, diagnostics, and move list."""
         async def body(screen, pilot, session):
             return (screen.orc is not None, len(screen._moves()),
                     screen.comp.makespan,
                     screen.orc.schedule.makespan if screen.orc else None)
 
         have, moves, src, orc = self._screen(body, run=True)
-        self.assertTrue(have, "после F5 нет результата точного поиска")
-        self.assertLess(orc, src, "пример обязан иметь резерв")
-        self.assertGreater(moves, 0, "нечего переставлять — список пуст")
+        self.assertTrue(have, "F5 produced no exact branch-and-bound oracle result")
+        self.assertLess(orc, src, "sample basic block must have scheduling headroom")
+        self.assertGreater(moves, 0, "move list is empty despite scheduling headroom")
 
     def test_rewrite_produces_a_buffer_that_matches_the_oracle(self):
-        """^R пишет код, а не совет: переписанный буфер обязан пере-разбираться.
+        """^R rewrites the assembly buffer to the exact oracle schedule and re-parses cleanly.
 
-        Самая дорогая ошибка этого действия — выдать текст, который сам себя
-        не читает (потерянный `nop`, канал не из матрицы). Поэтому проверка
-        сквозная: переписали → разобрали заново → длина совпала с той, что
-        обещал точный поиск, и ни одной ошибки линтера.
+        End-to-end check: rewrite -> re-parse -> makespan matches the oracle's
+        exact bound with zero linter errors (no dropped `nop`s or illegal slots).
         """
         async def body(screen, pilot, session):
             promised = screen.orc.schedule.makespan
-            # Именно клавишей: F5/F6 приоритетные, и проверить их стоит на
-            # том же фокусе, что у человека, — курсор стоит в редакторе, а
-            # TextArea забирает себе почти все нажатия.
+            # Trigger via real keybindings while focus is inside TextArea
+            # to verify priority bindings are not swallowed by the editor.
             screen.query_one("#code-edit").focus()
             await pilot.press("f6")
             await pilot.pause()
@@ -1450,13 +1356,13 @@ class TestCodeScreen(unittest.TestCase):
                     screen.query_one("#code-edit").text)
 
         promised, got, errors, text = self._screen(body, run=True)
-        self.assertEqual(errors, [], "переписанный буфер обязан быть законным")
+        self.assertEqual(errors, [], "rewritten assembly buffer must be legal")
         self.assertEqual(got, promised,
-                         "переписали не в то расписание, которое обещали")
+                         "rewritten makespan does not match the exact oracle")
         self.assertIn("muls,", text)
 
     def test_editing_marks_the_search_result_as_stale(self):
-        """Правка буфера обязана обесценить прошлые числа, а не молчать."""
+        """Editing the buffer must mark prior oracle metrics as stale."""
         async def body(screen, pilot, session):
             before = screen._stale()
             edit = screen.query_one("#code-edit")
@@ -1466,18 +1372,17 @@ class TestCodeScreen(unittest.TestCase):
             return before, screen._stale()
 
         before, after = self._screen(body, run=True)
-        self.assertFalse(before, "сразу после прогона числа свежие")
-        self.assertTrue(after, "после правки числа относятся к другому тексту")
+        self.assertFalse(before, "metrics should be fresh immediately after F5")
+        self.assertTrue(after, "metrics must be marked stale after editing the buffer")
 
     def test_clicking_a_problem_moves_the_cursor_to_its_line(self):
-        """Замечание — ссылка: клик ведёт курсор на ту самую строку."""
+        """Clicking a linter diagnostic jumps the editor cursor to that exact line."""
         from vliw.tui.screens.code_screen import LintItem
 
         async def body(screen, pilot, session):
             screen.handle_line("/example broken")
             await pilot.pause()
-            # Замечания живут во вкладке выдвижной панели: пока она закрыта,
-            # их и не рисуют — так же, как в IDE не рисуют закрытый Problems.
+            # Diagnostics live in the dock drawer and render lazily when opened.
             screen.open_drawer("lint")
             await pilot.pause()
             await pilot.pause()
@@ -1492,15 +1397,10 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(cursor, line)
 
     def test_buffer_where_nothing_parsed_still_says_so(self):
-        """Буфер, в котором не разобралась ни одна строка, — не «всё хорошо».
-
-        Самый частый первый опыт: человек вставил не то или набрал по памяти.
-        Замечания разбора обязаны показываться и тогда, когда операций ноль,
-        иначе экран молча выглядит как чистый.
-        """
+        """A buffer with zero parsed ops and syntax errors must still surface diagnostics."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
-            edit.text = "{\n  ??? какой-то текст\n}\n"
+            edit.text = "{\n  ??? invalid assembly text\n}\n"
             screen.reparse()
             await pilot.pause()
             return [(p.line, p.kind) for p in screen.problems]
@@ -1508,14 +1408,7 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(self._screen(body), [(2, "parse")])
 
     def test_dock_opens_on_the_schedule_and_f12_takes_it_away(self):
-        """Док открыт на РАСПИСАНИИ, F12 убирает его — и код занимает всё.
-
-        Два требования разом, и второе важнее первого. Расписание видно
-        сразу, без клавиши, о которой надо знать: это ответ на вопрос, ради
-        которого экран и открывают. Но панели независимы — убрал док, и
-        редактор работает дальше, просто во весь экран. Пока снизу было ДВА
-        окна, убрать их было нечем: расписание стояло всегда.
-        """
+        """Dock opens on SCHEDULE by default; F12 collapses it so the editor fills the screen."""
         async def body(screen, pilot, session):
             open_at_start = (screen.drawer_open, screen.drawer_tab,
                              screen.query_one("#code-dock").display,
@@ -1535,16 +1428,11 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(start, (True, "sched", True, True))
         self.assertEqual(hidden, (False, False))
         self.assertGreater(without, tall,
-                           "без дока редактор обязан занять его место")
-        self.assertTrue(back, "F12 обязан возвращать док")
+                           "editor must expand into the space vacated by the collapsed dock")
+        self.assertTrue(back, "F12 must restore the dock")
 
     def test_ctrl_p_opens_the_terminal_tab(self):
-        """^P — команда: панель на ОТЧЁТЕ, слэш уже введён.
-
-        Клавиша именно непечатная: фокус в КОДЕ почти всегда в редакторе, и
-        «/» там обязан оставаться символом — иначе командой не открыть
-        терминал никогда, а слэш перестанет печататься.
-        """
+        """^P opens the REPORT dock tab with a prefilled `/` command prompt."""
         async def body(screen, pilot, session):
             screen.query_one("#code-edit").focus()
             await pilot.press("ctrl+p")
@@ -1558,44 +1446,28 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(value, "/")
 
     def test_slash_inside_a_line_is_just_a_character(self):
-        """«/» посреди строки печатается: отбирать у текста знак нельзя.
+        """Typing `/` mid-line inserts a literal slash without hijacking focus.
 
-        А в НАЧАЛЕ пустой строки он открывает каталог команд — см. тест
-        ниже. Различение по столбцу возможно потому, что в ассемблере e2k
-        строка со слэша не начинается никогда: комментарий это «!», а
-        операция — мнемоника.
+        Only `/` at column 0 of an empty line opens the inline command palette
+        (e2k assembly lines never start with `/`; comments use `!`).
         """
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             edit.focus()
             edit.move_cursor(edit.document.end)
-            edit.insert("adds,0 %r1")      # курсор не в нулевой колонке
+            edit.insert("adds,0 %r1")      # cursor is not at column 0
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
             return edit.text.endswith("/"), screen.drawer_tab
 
         typed, tab = self._screen(body)
-        self.assertTrue(typed, "слэш не напечатался посреди строки")
+        self.assertTrue(typed, "slash was not inserted mid-line")
         self.assertEqual(tab, "sched",
-                         "набор в редакторе не должен переключать вкладку")
+                         "typing in the editor must not switch dock tabs")
 
     def test_slash_at_line_start_suggests_the_commands(self):
-        """«/» в пустой строке — список команд у курсора.
-
-        До этого каталог жил только на ^P, про который надо знать, — а «/»
-        люди жмут первым делом, потому что так работает почти везде. Команды
-        при этом есть: /gen, /fill, /example, /rewrite, и найти их было
-        неоткуда.
-
-        Раньше проверялось, что слэш НЕ печатается, а открывается нижняя
-        панель. Так было хуже вдвойне: список уезжал вниз экрана, далеко от
-        курсора, а набранный символ пропадал — дописать «/gen 8 muls» одной
-        строкой становилось нельзя. Теперь слэш печатается, а команды
-        подсказывает тот же всплывающий список, что дополняет мнемоники, —
-        как дополнение кода в IDE. Смысл проверки тот же: «/» обязан
-        показывать команды, а не молчать.
-        """
+        """Typing `/` on an empty line inserts `/` and opens the inline command/snippet popup."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             edit.focus()
@@ -1607,29 +1479,25 @@ class TestCodeScreen(unittest.TestCase):
             return edit.text, sug.display, [i[1] for i in sug.items]
 
         text, shown, labels = self._screen(body)
-        self.assertEqual(text, "/", "слэш обязан напечататься")
-        self.assertTrue(shown, "список команд не всплыл")
-        # В метке рядом с именем стоят аргументы («/gen <сколько> …») —
-        # ради них список и нужен, поэтому сверяем начало, а не равенство.
+        self.assertEqual(text, "/", "slash must be inserted into the buffer")
+        self.assertTrue(shown, "inline command popup did not appear")
+        # Labels include argument hints (e.g. "/gen <n> ..."), so match prefixes.
         heads = [l.split()[0] for l in labels]
-        self.assertIn("/gen", heads, f"нет /gen среди {labels}")
-        self.assertIn("/fill", heads, f"нет /fill среди {labels}")
-        # Первыми идут ЗАГОТОВКИ (`CodeScreen.SNIPPETS`), а не /gen с /fill.
-        # Решение сменилось осознанно: заготовка вставляет готовый кусок
-        # ассемблера одним Enter, а генератору надо ещё сказать, сколько и
-        # чего. Сначала — то, что работает без аргументов.
+        self.assertIn("/gen", heads, f"/gen missing from {labels}")
+        self.assertIn("/fill", heads, f"/fill missing from {labels}")
+        # Zero-argument assembly SNIPPETS (`CodeScreen.SNIPPETS`) come first,
+        # followed by parameterized commands like /gen and /fill.
         from vliw.tui.screens.code_screen import CodeScreen
 
         snippets = {"/" + n for n, _note, _body in CodeScreen.SNIPPETS}
         self.assertIn(heads[0], snippets,
-                      f"первой стоит не заготовка, а {heads[0]}")
-        # Но и команды обязаны быть видны: восемь строк в окне, и заготовки
-        # не должны выдавить всё остальное.
+                      f"first item is not a snippet: {heads[0]}")
+        # Snippets must remain grouped cleanly at the top before commands.
         self.assertTrue(snippets.issuperset(heads[:3]),
-                        "заготовки перемешаны с командами в начале списка")
+                        "snippets are interleaved with commands at the top of the popup")
 
     def test_broken_example_is_actually_caught(self):
-        """Пример «с ошибками» обязан ловиться линтером, а не просто лежать."""
+        """The intentionally broken sample must trigger linter errors."""
         async def body(screen, pilot, session):
             screen.handle_line("/example broken")
             await pilot.pause()
@@ -1640,14 +1508,12 @@ class TestCodeScreen(unittest.TestCase):
         self.assertEqual(self._screen(body), ["busy", "channel", "ready"])
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestJournalIsSessionBridge(unittest.TestCase):
-    """Журнал — «гит сессии»: метка режима, мостик в ЯДРО, поток событий.
+    """Session journal acts as session Git: mode tags, cross-screen bridges, event stream.
 
-    Журнал общий на все экраны, и запись без пометки, ГДЕ она сделана, —
-    просто текст. Метка режима, кнопки «в разбор / в агента / в ядро» и
-    отдельная лента событий превращают его в место, откуда человек сам
-    решает, что из сессии куда поедет.
+    Shared across all screens, each commit records its source mode, dependency DAG
+    snapshot, and bridge actions (`to LAB / to AGENT / to CORE / to CODE`).
     """
 
     @staticmethod
@@ -1670,7 +1536,7 @@ class TestJournalIsSessionBridge(unittest.TestCase):
         return asyncio.run(go())
 
     def test_run_records_its_mode(self) -> None:
-        """Запись журнала помнит режим, в котором её сделали."""
+        """Each journal entry records the screen mode where it was created."""
         async def body(sc, pilot, session):
             sc.handle_line("/bounds")
             for _ in range(10):
@@ -1680,15 +1546,14 @@ class TestJournalIsSessionBridge(unittest.TestCase):
         self.assertEqual(self._journal(body), "lab")
 
     def test_bridge_to_core_is_present_and_works(self) -> None:
-        """«В ядро» открывает ЯДРО и оставляет там пометку о прогоне."""
+        """`to CORE` opens CORE mode and passes a bridge note for the run."""
         async def body(sc, pilot, session):
             from vliw.tui.widgets import Tool
 
             sc.handle_line("/bounds")
             for _ in range(10):
                 await pilot.pause()
-            # Кнопка обязана существовать и быть видимой: мостик без графа
-            # всё равно имеет смысл — контекст прогона нужен и ядру.
+            # The bridge button must remain visible even without a DAG snapshot.
             tool = sc.query_one("#bridge-work", Tool)
             self.assertTrue(tool.display)
             sc.panel_tool("@work")
@@ -1698,13 +1563,12 @@ class TestJournalIsSessionBridge(unittest.TestCase):
 
         where, note = self._journal(body)
         self.assertEqual(where, "CoreScreen")
-        # Пустая пометка после перехода — не потеря, а показ: ЯДРО гасит её
-        # в on_ready (это отдельный тест ниже). Здесь важно, что мостик
-        # довёл до другого режима и ничего не оставил висеть.
+        # An empty pending_note after transition means CORE consumed and displayed it
+        # in on_ready (verified separately below).
         self.assertEqual(note, "")
 
     def test_core_consumes_pending_note_on_mount(self) -> None:
-        """Приехавшая в ЯДРО пометка показывается строкой листа, не теряется."""
+        """A bridge note delivered to CORE renders as a sheet row and clears afterward."""
         async def go():
             app, session = _make_app("work")
             with redirect_stdout(io.StringIO()):
@@ -1713,30 +1577,25 @@ class TestJournalIsSessionBridge(unittest.TestCase):
                     sc = app.screen
                     sheet = sc.query_one("#tape-sheet")
                     before = len(list(sheet.children))
-                    session.pending_note = "из журнала: прогон тест"
+                    session.pending_note = "from journal: test run"
                     sc._take_pending_note()
                     await pilot.pause()
                     return (len(list(sheet.children)) > before,
                             session.pending_note)
 
         shown, rest = asyncio.run(go())
-        self.assertTrue(shown, "пометка мостика не дошла до листа ЯДРА")
-        self.assertEqual(rest, "", "пометка должна гаснуть после показа")
+        self.assertTrue(shown, "bridge note did not appear in the CORE sheet")
+        self.assertEqual(rest, "", "pending_note must clear after being displayed")
 
     def test_scheduler_text_goes_to_events_not_console(self) -> None:
-        """Живой поток пишется в СОБЫТИЯ и не мешает отчётам команд.
-
-        Экран нарочно КОД: у РАЗБОРА этот поток — содержимое решётки, там
-        он переопределён и в ленту событий не попадает. Базовое поведение
-        проверять честнее всего там, где переопределения нет.
-        """
+        """Live scheduler output goes to the EVENTS feed without cluttering command runs."""
         async def go():
             app, session = _make_app("code")
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    sc.on_scheduler_text("модель пишет расписание")
+                    sc.on_scheduler_text("model streaming schedule")
                     await pilot.pause()
                     journal = sc.query_one("#journal")
                     return (len(session.journal_events), len(journal.events),
@@ -1744,11 +1603,11 @@ class TestJournalIsSessionBridge(unittest.TestCase):
 
         n_session, n_journal, feed = asyncio.run(go())
         self.assertEqual(n_session, 1)
-        self.assertEqual(n_journal, 1, "события обязаны доехать до журнала")
-        self.assertEqual(feed, "runs", "по умолчанию показан поток команд")
+        self.assertEqual(n_journal, 1, "events must reach the journal")
+        self.assertEqual(feed, "runs", "default journal feed must be command runs")
 
     def test_events_feed_switches_and_renders(self) -> None:
-        """Вкладка СОБЫТИЯ реально переключает правую колонку журнала."""
+        """The EVENTS tab switches the right pane of the journal to live events."""
         async def go():
             app, session = _make_app("code")
             with redirect_stdout(io.StringIO()):
@@ -1757,7 +1616,7 @@ class TestJournalIsSessionBridge(unittest.TestCase):
                     sc = app.screen
                     from vliw.tui.widgets import RichLog
 
-                    sc.on_scheduler_text("строка потока")
+                    sc.on_scheduler_text("stream line")
                     await pilot.pause()
                     journal = sc.query_one("#journal")
                     journal.show_feed("events")
@@ -1767,17 +1626,11 @@ class TestJournalIsSessionBridge(unittest.TestCase):
                     return out.display, ev.display
 
         runs_visible, events_visible = asyncio.run(go())
-        self.assertFalse(runs_visible, "при событиях отчёты обязаны прятаться")
+        self.assertFalse(runs_visible, "command runs must hide when EVENTS is active")
         self.assertTrue(events_visible)
 
     def test_journal_reloads_after_command_finishes(self) -> None:
-        """Открытый журнал видит мостик-поля прогона БЕЗ переоткрытия.
-
-        Команда едет в фоне: запись появляется в ЗАПУСКАХ сразу, а граф
-        проставляется только в конце. Если журнал не перечитывается после
-        завершения, у свежего прогона навсегда спрятаны «в разбор / в
-        агента» — мостик выглядит сломанным ровно на самом нужном прогоне.
-        """
+        """An open journal refreshes bridge buttons once a background run finishes."""
         async def body(sc, pilot, session):
             sc.handle_line("/bounds")
             for _ in range(14):
@@ -1791,12 +1644,12 @@ class TestJournalIsSessionBridge(unittest.TestCase):
             return lab_btn.display, rec.get("dag") is not None
 
         visible, has_dag = self._journal(body)
-        self.assertTrue(has_dag, "граф не доехал до записи журнала")
-        self.assertTrue(visible, "открытый журнал не показал мостик после "
-                                 "завершения команды")
+        self.assertTrue(has_dag, "dependency DAG was not attached to the journal entry")
+        self.assertTrue(visible, "open journal did not reveal bridge buttons after "
+                                 "command completion")
 
     def test_bridge_to_code_carries_the_source(self) -> None:
-        """«В код» возвращает исходник прогона в буфер редактора."""
+        """`to CODE` restores a run's assembly source into the CODE editor buffer."""
         async def body(sc, pilot, session):
             from vliw.tui.widgets import Tool
 
@@ -1804,7 +1657,7 @@ class TestJournalIsSessionBridge(unittest.TestCase):
                 {"cmd": "/code run", "lines": [], "error": False,
                  "mode": "code",
                  "code": "{\n  adds,0 %r1, %r2, %r3\n}\n",
-                 "scenario": "буфер", "dag": None})
+                 "scenario": "buffer", "dag": None})
             sc.panel_tool("@code")
             await pilot.pause()
             await pilot.pause()
@@ -1815,18 +1668,12 @@ class TestJournalIsSessionBridge(unittest.TestCase):
 
         where, text, note = self._journal(body)
         self.assertEqual(where, "CodeScreen")
-        self.assertIn("adds,0", text, "исходник прогона не попал в буфер")
-        # Пустая пометка — она уже показана строкой в отчёте КОДА (on_ready
-        # гасит её, как и ЯДРО). Главное здесь — текст в буфере.
+        self.assertIn("adds,0", text, "run assembly source did not load into the buffer")
+        # pending_note is consumed by CODE on_ready; the key check is the buffer text.
         self.assertEqual(note, "")
 
     def test_history_rows_look_like_commits(self) -> None:
-        """История — не лог команд, а коммиты: граф, номер, время, состояние.
-
-        Пользователь ищет «гит»: запись обязана отвечать на «что это было
-        за состояние», а не только «что я набрал». Точка графа и линия —
-        чтобы список читался как git log с первого взгляда.
-        """
+        """Journal history renders as Git-style commits: number, time, DAG size, graph glyph."""
         async def body(sc, pilot, session):
             session.journal_runs.append(
                 {"cmd": "/doctor", "lines": ["a", "b"], "error": False,
@@ -1837,20 +1684,19 @@ class TestJournalIsSessionBridge(unittest.TestCase):
             await pilot.pause()
             text = journal._row(0, session.journal_runs[0]).plain
             return ("#1" in text, "14:02" in text,
-                    "slotclash" in text, "3 оп." in text,
+                    "slotclash" in text, "3 ops" in text,
                     "*" in text, "│" in text)
 
         has_num, has_time, has_scen, has_ops, dot, line = self._journal(body)
-        self.assertTrue(has_num, "в истории нет номера записи")
-        self.assertTrue(has_time, "в истории нет времени прогона")
-        self.assertTrue(has_scen, "в истории не видно участок")
-        self.assertTrue(has_ops, "в истории не видно размер графа")
-        self.assertTrue(dot, "в истории нет точки графа")
-        self.assertTrue(line, "в истории нет линии графа")
+        self.assertTrue(has_num, "commit number missing from journal row")
+        self.assertTrue(has_time, "timestamp missing from journal row")
+        self.assertTrue(has_scen, "basic-block scenario name missing from journal row")
+        self.assertTrue(has_ops, "dependency DAG op count missing from journal row")
+        self.assertTrue(dot, "commit graph bullet missing from journal row")
+        self.assertTrue(line, "commit graph rail missing from journal row")
 
     def test_restore_returns_state_without_leaving(self) -> None:
-        """«Вернуть» — checkout: состояние прогона восстанавливается,
-        экран остаётся текущим."""
+        """`@restore` checks out the recorded run state while staying on the current screen."""
         async def body(sc, pilot, session):
             from vliw.tui.widgets import Tool
 
@@ -1870,20 +1716,15 @@ class TestJournalIsSessionBridge(unittest.TestCase):
         before, after, visible, where = self._journal(body)
         self.assertEqual(before, "mulclash")
         self.assertEqual(after, "mulclash",
-                         "«вернуть» не восстановил участок прогона")
+                         "@restore did not restore the recorded scenario")
         self.assertTrue(visible)
         self.assertEqual(where, "LabScreen",
-                         "«вернуть» не должен уводить с экрана")
+                         "@restore must not leave the current screen")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCoreHasTheJournalToo(unittest.TestCase):
-    """Мостик обязан работать ИЗ ядра: журнал доступен и там.
-
-    Раньше у ЯДРА журнала не было вовсе — единственное место сессии,
-    откуда нельзя было ни вернуться к прошлому прогону, ни отправить
-    результат дальше.
-    """
+    """The session journal and bridge actions must work from CORE mode as well."""
 
     def test_tape_tool_opens_the_journal(self) -> None:
         async def go():
@@ -1901,18 +1742,17 @@ class TestCoreHasTheJournalToo(unittest.TestCase):
 
         wide, visible, _ = asyncio.run(go())
         self.assertEqual(wide, "tape")
-        self.assertTrue(visible, "журнал не открылся в ЛЕНТЕ")
+        self.assertTrue(visible, "journal did not open in CORE mode")
 
     def test_journal_from_core_bridges_back_to_lab(self) -> None:
-        """Из журнала ЯДРО прогон уезжает в РАЗБОР — полный круг."""
+        """A CORE journal commit can be bridged directly into LAB."""
         async def go():
             app, session = _make_app("work")
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    # Строка, меняющая состояние: чистая арифметика коммитом
-                    # не бывает (журнал — история состояний, не нажатий).
+                    # State-mutating statement: journal tracks machine states, not no-ops.
                     sc.handle_line("x=load 0")
                     await pilot.pause()
                     sc.panel_tool("tape-journal")
@@ -1926,14 +1766,9 @@ class TestCoreHasTheJournalToo(unittest.TestCase):
         self.assertEqual(asyncio.run(go()), "LabScreen")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCoreSheetAndCommits(unittest.TestCase):
-    """Лист ЛЕНТЫ, фильтр коммитов и полный чекаут машины.
-
-    Лист — главный вид ЛЕНТЫ: каждая строка человека с её итогом. В
-    git-журнал попадают только строки, изменившие машину, — у записи
-    лежит снимок машины, и «вернуть» восстанавливает её целиком.
-    """
+    """CORE sheet rendering, commit filtering, and full machine-state checkout."""
 
     def _screen(self, body):
         async def go():
@@ -1947,22 +1782,22 @@ class TestCoreSheetAndCommits(unittest.TestCase):
         return asyncio.run(go())
 
     def test_errors_and_view_verbs_are_not_commits(self) -> None:
-        """Ошибки и служебные виды — не коммиты: журнал не лог нажатий."""
+        """Errors and read-only views are not commits; the journal tracks state changes."""
         async def body(sc, pilot, session):
             before = len(session.journal_runs)
             sc.handle_line("names")
-            sc.handle_line("mul m0 a0 b0")   # ошибка: мнемоника e2k
+            sc.handle_line("mul m0 a0 b0")   # syntax error: raw e2k mnemonic
             await pilot.pause()
             return (before, len(session.journal_runs),
                     [r["kind"] for r in sc._rows])
 
         before, after, kinds = self._screen(body)
         self.assertEqual(after, before,
-                         "ошибки и views не должны попадать в git-журнал")
-        self.assertIn("error", kinds, "ошибка обязана быть видна в листе")
+                         "errors and read-only views must not enter the commit journal")
+        self.assertIn("error", kinds, "error row must still appear in the sheet")
 
     def test_arithmetic_that_adds_an_op_is_a_commit(self) -> None:
-        """`2+2` кладёт в граф операцию — значит, это честный коммит."""
+        """`2+2` appends an operation to the dependency DAG, so it creates a commit."""
         async def body(sc, pilot, session):
             before = len(session.journal_runs)
             sc.handle_line("2+2")
@@ -1972,12 +1807,12 @@ class TestCoreSheetAndCommits(unittest.TestCase):
                     rec["dag"] is not None)
 
         added, cmd, has_dag = self._screen(body)
-        self.assertEqual(added, 1, "строка с операцией обязана стать коммитом")
+        self.assertEqual(added, 1, "an expression adding a DAG op must create a commit")
         self.assertEqual(cmd, "2+2")
         self.assertTrue(has_dag)
 
     def test_state_line_is_a_commit_with_graph_and_machine(self) -> None:
-        """Строка, изменившая машину, — коммит с графом и снимком машины."""
+        """A state-mutating line records both the dependency DAG and machine snapshot."""
         async def body(sc, pilot, session):
             sc.handle_line("a=10")
             sc.handle_line("x=load 0")
@@ -1992,12 +1827,12 @@ class TestCoreSheetAndCommits(unittest.TestCase):
         self.assertEqual(cmd, "x=load 0")
         self.assertEqual(mode, "work")
         self.assertEqual(scenario, "interp")
-        self.assertTrue(has_dag, "у коммита нет графа — мостик в РАЗБОР мёртв")
-        self.assertIn(("a", 10), regs, "в снимке машины потерялись имена")
-        self.assertEqual(mem, [1, 2, 3], "в снимке потерялась память")
+        self.assertTrue(has_dag, "commit is missing its dependency DAG for LAB bridge")
+        self.assertIn(("a", 10), regs, "register bindings were lost in machine snapshot")
+        self.assertEqual(mem, [1, 2, 3], "memory contents were lost in machine snapshot")
 
     def test_reset_is_a_commit_and_names_only_line_is_not(self) -> None:
-        """`reset` меняет машину — коммит; `names` ничего не меняет — нет."""
+        """`reset` mutates state and commits; `names` is read-only and does not."""
         async def body(sc, pilot, session):
             sc.handle_line("a=10")
             n1 = len(session.journal_runs)
@@ -2010,19 +1845,19 @@ class TestCoreSheetAndCommits(unittest.TestCase):
                     rec["ws"]["regs"])
 
         names_commits, cmd, regs, snap_regs = self._screen(body)
-        self.assertEqual(names_commits, 0, "names — не коммит")
+        self.assertEqual(names_commits, 0, "`names` must not create a commit")
         self.assertEqual(cmd, "reset")
-        self.assertEqual(regs, {}, "reset не очистил имена")
-        self.assertEqual(snap_regs, {}, "в снимке reset остались имена")
+        self.assertEqual(regs, {}, "`reset` did not clear register bindings")
+        self.assertEqual(snap_regs, {}, "`reset` snapshot still contains stale bindings")
 
     def test_restore_checks_out_the_whole_machine(self) -> None:
-        """«Вернуть» восстанавливает имена И память, а не только граф."""
+        """`@restore` checks out register bindings AND memory, not just the DAG."""
         async def body(sc, pilot, session):
             sc.handle_line("a=10; b=2")
             sc.handle_line("store 9 3")      # mem[3] = 9
-            sc.handle_line("a=55")            # испортили имя
+            sc.handle_line("a=55")            # overwrite register binding
             journal = sc.query_one("#journal")
-            journal.pos = 1                   # коммит «store 9 3»
+            journal.pos = 1                   # commit "store 9 3"
             sc.panel_tool("@restore")
             await pilot.pause()
             ws = session.workspace()
@@ -2030,10 +1865,10 @@ class TestCoreSheetAndCommits(unittest.TestCase):
 
         a, b, mem3 = self._screen(body)
         self.assertEqual((a, b, mem3), (10, 2, 9),
-                         "«вернуть» не чекаутнуло машину целиком")
+                         "@restore did not check out full machine state")
 
     def test_go_attaches_verdict_to_its_commit(self) -> None:
-        """Вердикт `go` ложится в запись журнала числами (baseline/oracle)."""
+        """The `go` scheduling verdict attaches baseline and oracle makespans to the commit."""
         async def body(sc, pilot, session):
             sc.handle_line("x=load 0")
             rec = session.journal_runs[-1]
@@ -2044,13 +1879,13 @@ class TestCoreSheetAndCommits(unittest.TestCase):
             await pilot.pause()
             verdict_rows = [r for r in sc._rows if r["kind"] == "verdict"]
             return (rec.get("verdict"), len(verdict_rows),
-                    any("baseline 23" in t.plain and "оракул 22" in t.plain
+                    any("baseline 23" in t.plain and "oracle 22" in t.plain
                         for t in rec["lines"]))
 
         verdict, n_rows, in_lines = self._screen(body)
-        self.assertEqual(verdict, (23, 22), "числа вердикта не доехали до коммита")
-        self.assertEqual(n_rows, 1, "вердикт обязан быть строкой листа")
-        self.assertTrue(in_lines, "журнал обязан показать вердикт в выводе записи")
+        self.assertEqual(verdict, (23, 22), "verdict makespans did not attach to commit")
+        self.assertEqual(n_rows, 1, "verdict must appear as a sheet row")
+        self.assertTrue(in_lines, "journal entry output must include the verdict")
 
     def test_verdict_number_visible_in_journal_row(self) -> None:
         async def body(sc, pilot, session):
@@ -2064,10 +1899,10 @@ class TestCoreSheetAndCommits(unittest.TestCase):
             return "23→22" in journal._row(0, session.journal_runs[0]).plain
 
         self.assertTrue(self._screen(body),
-                        "в строке журнала не видно итог прогона")
+                        "journal row does not display the scheduling verdict")
 
     def test_link_program_op_highlights_tape_row(self) -> None:
-        """Клик по операции подсвечивает строку, которая её породила."""
+        """Clicking a DAG op highlights the sheet statement that emitted it."""
         from vliw.tui.screens.core_screen import ProgramItem, TapeRow
 
         async def body(sc, pilot, session):
@@ -2084,10 +1919,10 @@ class TestCoreSheetAndCommits(unittest.TestCase):
             return (sc._link, on, hot)
 
         link, on, hot = self._screen(body)
-        self.assertIsNotNone(link, "связка не включилась")
+        self.assertIsNotNone(link, "op-to-sheet link did not activate")
         self.assertEqual(link[0], "op")
-        self.assertEqual(on, [1], "подсвечена не та строка листа")
-        self.assertEqual(hot, 1, "подсветиться должна ровно одна операция")
+        self.assertEqual(on, [1], "wrong sheet row highlighted")
+        self.assertEqual(hot, 1, "exactly one op should be highlighted")
 
     def test_link_tape_row_highlights_its_ops(self) -> None:
         from vliw.tui.screens.core_screen import ProgramItem, TapeRow
@@ -2103,19 +1938,13 @@ class TestCoreSheetAndCommits(unittest.TestCase):
                     list(sc.query(TapeRow))[-1].has_class("on"))
 
         hot, on = self._screen(body)
-        self.assertEqual(hot, 1, "строка y=x*2 положила в граф одну операцию")
-        self.assertTrue(on, "выбранная строка листа не подсвечена")
+        self.assertEqual(hot, 1, "y=x*2 should highlight its single emitted DAG op")
+        self.assertTrue(on, "selected sheet row was not highlighted")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
-    """Строка состояния КОДА — лаунчер нижней панели, как в IDE.
-
-    Пункты «замечания» и «отчёт» обязаны жить на виду, нести живые счётчики
-    и открывать свою вкладку одним кликом: функциональность, спрятанная за
-    клавишей, которую надо знать заранее, — это функциональность, которой
-    нет.
-    """
+    """CODE status bar chips act as IDE-style launchers for the bottom dock."""
 
     @staticmethod
     def _screen(body):
@@ -2135,7 +1964,7 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
             return lint._label, term._label
 
         lint_label, term_label = self._screen(body)
-        self.assertIn("чисто", lint_label)
+        self.assertIn("clean", lint_label)
         self.assertIn("git", term_label)
 
     def test_clicking_term_chip_opens_drawer_on_report_tab(self) -> None:
@@ -2153,7 +1982,7 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
         self.assertEqual(tab, "term")
 
     def test_counter_grows_after_a_command_from_another_mode(self) -> None:
-        """Журнал общий: счётчик отчёта реагирует на чужие команды."""
+        """The shared session journal updates the report chip counter across modes."""
         async def body(screen, pilot, session):
             before = screen.query_one("#status-term")._label
             session.journal_runs.append(
@@ -2165,15 +1994,10 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
 
         before, after = self._screen(body)
         self.assertNotEqual(before, after,
-                            "счётчик не увидел команду из другого режима")
+                            "report chip counter missed a run from another mode")
 
     def test_bridge_row_in_drawer_sends_run_to_lab(self) -> None:
-        """Мостик доступен БЕЗ разворота: вкладка ОТЧЁТ → «в разбор».
-
-        Ровно тот сценарий, ради которого мостик существует: прогнал
-        буфер в КОДЕ — и тут же отправил его в РАЗБОР, не догадываясь
-        про разворот панели.
-        """
+        """The REPORT dock tab exposes the `to LAB` bridge without maximizing."""
         from vliw.tui.widgets import Tool
 
         async def body(screen, pilot, session):
@@ -2182,14 +2006,14 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
             session.journal_runs.append(
                 {"cmd": "/code run", "lines": [], "error": False,
                  "mode": "code", "time": "14:02",
-                 "scenario": "asm:буфер", "dag": session.dag_obj})
+                 "scenario": "asm:buffer", "dag": session.dag_obj})
             screen._sync_drawer_bridge()
             await pilot.pause()
             row = screen.query_one("#drawer-bridge")
             row.sync(session.journal_runs, 0)
             await pilot.pause()
             btn = screen.query_one("#dbridge-lab", Tool)
-            self.assertTrue(btn.display, "мостик не виден во вкладке ОТЧЁТ")
+            self.assertTrue(btn.display, "bridge button is hidden in the REPORT tab")
             btn.post_message(Tool.Picked("@lab"))
             await pilot.pause()
             await pilot.pause()
@@ -2197,10 +2021,10 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
 
         where = self._screen(body)
         self.assertEqual(where, "LabScreen",
-                         "прогон из КОДА не доехал до РАЗБОРА")
+                         "CODE run did not bridge into LAB")
 
     def test_drawer_bridge_hidden_without_runs(self) -> None:
-        """Пустая история — ряд мостика пуст: кнопки не обещают лишнего."""
+        """With empty history, the bridge button bar stays hidden."""
         from vliw.tui.widgets import Tool
 
         async def body(screen, pilot, session):
@@ -2210,18 +2034,10 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
             return btn.display
 
         self.assertFalse(self._screen(body),
-                         "без прогонов мостик обязан прятаться")
+                         "bridge bar must hide when there are no runs")
 
     def test_double_click_on_a_dock_tab_zooms_the_dock(self) -> None:
-        """Двойной клик по НАЗВАНИЮ вкладки разворачивает док и сворачивает.
-
-        Тот же жест, что в IDE, и целятся в него именно в название вкладки.
-        Полоса вкладок двойной клик тоже ловит (`DockTabs.on_click`), но
-        только на голом промежутке между кнопками шириной в пару символов:
-        `Tool.on_click` останавливает событие, и до полосы клик по самой
-        вкладке не доходит вовсе. Полгода жест числился сделанным и не
-        работал нигде, куда человек мог попасть.
-        """
+        """Double-clicking a dock tab title maximizes and restores the dock."""
         from vliw.tui.widgets import Tool
 
         async def body(screen, pilot, session):
@@ -2237,8 +2053,7 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
             await pilot.click(tab)
             await pilot.pause()
             back = (screen.zoom, dock.size.height)
-            # Медленные клики — не двойной: иначе спокойное переключение
-            # вкладок туда-обратно случайно разворачивало бы док.
+            # Slow clicks must not maximize, so normal tab switching stays calm.
             await pilot.click(tab)
             await asyncio.sleep(0.6)
             await pilot.click(tab)
@@ -2247,24 +2062,18 @@ class TestCodeStatusBarLaunchesDrawer(unittest.TestCase):
 
         one, two, back, slow = self._screen(body)
         self.assertEqual(one[:2], ("lint", ""),
-                         "одиночный клик обязан только переключать вкладку")
-        self.assertEqual(two[0], "dock", "двойной клик не развернул док")
+                         "single click must only switch tabs")
+        self.assertEqual(two[0], "dock", "double-click did not maximize the dock")
         self.assertGreater(two[1], one[2] * 2,
-                           f"док не вырос: {one[2]} → {two[1]}")
+                           f"dock did not grow: {one[2]} -> {two[1]}")
         self.assertEqual(back, ("", one[2]),
-                         "повторный двойной клик не свернул док обратно")
-        self.assertEqual(slow, "", "два медленных клика — не двойной")
+                         "second double-click did not restore the dock")
+        self.assertEqual(slow, "", "two slow clicks must not act as a double-click")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCodeFilesAreTabs(unittest.TestCase):
-    """Открытых буферов может быть несколько, и они не затирают друг друга.
-
-    Пока буфер был один на сессию, «посмотреть пример» значило потерять свой
-    код: `/example` писал прямо в него. Сравнение двух участков — своего и
-    того, что выдал lcc, — при этом было невозможно вовсе, а это основная
-    работа в инструменте.
-    """
+    """Multiple open assembly buffers live in independent tabs without clobbering each other."""
 
     @staticmethod
     def _screen(body):
@@ -2278,7 +2087,7 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         return asyncio.run(go())
 
     def test_example_opens_a_tab_and_does_not_eat_the_buffer(self) -> None:
-        """Пример открывается вкладкой, а свой код остаётся на месте."""
+        """Opening an example creates a new tab while preserving the user's buffer."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             edit.text = "{\n  adds,0 %r1, %r2, %r3\n}\n"
@@ -2290,24 +2099,24 @@ class TestCodeFilesAreTabs(unittest.TestCase):
             await pilot.pause()
             names = [r["name"] for r in screen.files]
             shown = edit.text
-            # Назад на свою вкладку — текст обязан вернуться целиком.
+            # Switching back to the user tab must restore its full text.
             screen.select_file(0)
             await pilot.pause()
             return mine, names, shown, edit.text
 
         mine, names, shown, back = self._screen(body)
-        self.assertEqual(len(names), 2, f"вкладок должно быть две: {names}")
+        self.assertEqual(len(names), 2, f"expected two open tabs, got: {names}")
         self.assertIn("divport.s", names)
-        self.assertNotEqual(shown, mine, "пример не открылся")
-        self.assertEqual(back, mine, "свой код потерян при переключении")
+        self.assertNotEqual(shown, mine, "example tab did not load")
+        self.assertEqual(back, mine, "user buffer was lost when switching tabs")
 
     def test_edits_survive_switching_between_tabs(self) -> None:
-        """Правка запоминается за вкладкой, а не за экраном."""
+        """Edits are isolated per tab rather than leaking across buffers."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
-            screen.open_file("{\n  adds,0 %r1, %r2, %r3\n}\n", "второй.s")
+            screen.open_file("{\n  adds,0 %r1, %r2, %r3\n}\n", "second.s")
             await pilot.pause()
-            edit.text = edit.text + "! правка второго\n"
+            edit.text = edit.text + "! edit in second\n"
             screen.reparse()
             await pilot.pause()
             screen.select_file(0)
@@ -2318,12 +2127,12 @@ class TestCodeFilesAreTabs(unittest.TestCase):
             return first, edit.text
 
         first, second = self._screen(body)
-        self.assertNotIn("правка второго", first,
-                         "правка протекла в чужую вкладку")
-        self.assertIn("правка второго", second, "правка не сохранилась")
+        self.assertNotIn("edit in second", first,
+                         "edit leaked into another tab")
+        self.assertIn("edit in second", second, "edit was not persisted in its tab")
 
     def test_the_last_tab_cannot_be_closed(self) -> None:
-        """Пустого редактора без единого буфера быть не должно."""
+        """Closing the last tab keeps at least one active buffer open."""
         async def body(screen, pilot, session):
             screen.close_file(0)
             await pilot.pause()
@@ -2332,14 +2141,7 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         self.assertEqual(self._screen(body), 1)
 
     def test_explorer_opens_a_real_file(self) -> None:
-        """Проводник справа — вход в работу: клик открывает файл вкладкой.
-
-        Раньше файлы рядом лежали плоским списком в левой колонке и
-        показывали один каталог. Теперь это проводник (^E): папки, вход
-        внутрь, поиск по имени. Проверяется то же самое — клик по файлу
-        открывает его вкладкой и запоминает путь, иначе ^S не знает, куда
-        писать.
-        """
+        """Clicking a file in the right-hand explorer (^E) opens a tab and records its path."""
         from vliw.tui.screens.code_screen import SideItem
         from vliw.tui.screens.code_screen import examples_dir
 
@@ -2360,15 +2162,11 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         names, path, size = self._screen(body)
         self.assertIn("probe.s", names)
         self.assertTrue(path.endswith("probe.s"),
-                        f"путь не запомнен — ^S не будет знать, куда писать: {path}")
-        self.assertGreater(size, 0, "файл открылся пустым")
+                        f"file path was not recorded for ^S save: {path}")
+        self.assertGreater(size, 0, "opened file buffer is empty")
 
     def test_gutter_arrow_runs_the_buffer(self) -> None:
-        """Стрелка в гуттере — то же, что F5. Действие живёт у строки.
-
-        Ряд текстовых кнопок над кодом убран, и если стрелка не работает,
-        мышью прогнать буфер становится нечем.
-        """
+        """Clicking the gutter run arrow triggers the same exact oracle run as F5."""
         from vliw.tui.screens.code_screen import AsmArea
 
         async def body(screen, pilot, session):
@@ -2383,21 +2181,10 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
         before, after = self._screen(body)
         self.assertIsNone(before)
-        self.assertIsNotNone(after, "клик по стрелке не запустил поиск")
+        self.assertIsNotNone(after, "gutter run arrow did not launch the oracle")
 
     def test_channel_stays_visible_when_the_grid_scrolls_sideways(self) -> None:
-        """Канал — закреплённая колонка, а не подпись строки DataTable.
-
-        Решётка развёрнута: тактов много, и вбок её прокручивают всегда.
-        Подпись строки уезжает вместе с содержимым — стоило уехать трём
-        знакам «,0», и решётка переставала отвечать на свой единственный
-        вопрос: в какой канал встала операция. Вдобавок ширина подписи
-        считается лениво и в узком окне схлопывалась в ноль, унося подписи
-        совсем.
-
-        Окно нарочно узкое: на широком решётка помещается целиком, прокрутки
-        не происходит, и тест не проверял бы ничего.
-        """
+        """Issue-slot labels stay pinned as a fixed column when scrolling horizontally."""
         from textual.widgets import DataTable
 
         async def go():
@@ -2406,54 +2193,45 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                 async with app.run_test(size=(90, 40)) as pilot:
                     await pilot.pause()
                     grid = app.screen.query_one("#code-grid", DataTable)
-                    # Ждём, пока раскладка устоится: max_scroll_x считается по
-                    # ИЗМЕРЕННОЙ ширине колонок, и до конца раскладки он равен
-                    # нулю. Тогда scroll_to(x=0) никуда не прокручивает, и тест
-                    # падал на собственной проверке «решётка не прокрутилась»
-                    # — на загруженной машине примерно раз из шести.
+                    # Wait for layout to settle so max_scroll_x reflects measured
+                    # column widths instead of 0 on busy runners.
                     for _ in range(20):
                         if grid.max_scroll_x > 0:
                             break
                         await pilot.pause()
-                    # Ещё один кадр: max_scroll_x становится положительным
-                    # раньше, чем решётка достраивается окончательно, и
-                    # поздний пересчёт сбрасывает уже сделанную прокрутку.
+                    # One extra pause so a late relayout does not reset scroll_x.
                     await pilot.pause()
-                    # Прокрутка ДО упора вправо: проверяем самый плохой
-                    # случай, а не «немножко сдвинули».
+                    # Scroll all the way to the right edge to test the worst case.
                     grid.scroll_to(x=grid.max_scroll_x, animate=False)
                     await pilot.pause()
                     await pilot.pause()
-                    # Смотрим на то, что НАРИСОВАНО, а не на данные: данные
-                    # вернут канал в любом случае, вопрос ровно в том, видно
-                    # ли его на экране после прокрутки.
+                    # Inspect rendered lines rather than underlying data to ensure
+                    # pinned slot labels remain visible after scrolling.
                     painted = "\n".join(grid.render_line(y).text
                                         for y in range(grid.size.height))
                     return (grid.fixed_columns, grid.scroll_x, painted)
 
         fixed, scrolled, painted = asyncio.run(go())
-        self.assertEqual(fixed, 1, "колонка канала не закреплена")
+        self.assertEqual(fixed, 1, "issue-slot column is not pinned")
         self.assertGreater(scrolled, 0,
-                           "решётка не прокрутилась — тест ничего не проверил")
+                           "schedule grid did not scroll horizontally")
         for chan in (",0", ",5"):
             self.assertIn(chan, painted,
-                          f"канал {chan} уехал вместе с прокруткой")
+                          f"issue slot {chan} scrolled off screen")
 
     def test_cell_and_line_point_at_each_other(self) -> None:
-        """Курсор кода → клетка решётки → та же строка кода. Круг замкнут.
+        """Editor line -> schedule grid cell -> same editor line round-trips cleanly.
 
-        Колонка канала сдвинула нумерацию колонок на единицу. Забудь вычесть
-        её в одном из двух направлений — и связь разъезжается на такт: экран
-        работает, курсор ездит, ничего не падает, а показывает не ту
-        операцию. Заметно, только если знать правильный ответ.
+        The pinned issue-slot column offsets grid column indices by +1; both
+        directions must account for it to avoid an off-by-one cycle mismatch.
         """
         from textual.widgets import DataTable
 
         async def body(screen, pilot, session):
             op = screen.parsed.ops[3]
             grid = screen.query_one("#code-grid", DataTable)
-            # Дать решётке достроиться: первый пересчёт после раскладки
-            # сбрасывает курсор, выставленный до него.
+            # Wait for initial grid build so a late relayout does not reset the cursor.
+            await screen.app.workers.wait_for_complete()
             await pilot.pause()
             screen._sync_grid_cursor(op.line)
             await pilot.pause()
@@ -2465,17 +2243,11 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
         line, cycle, channel, cell, back = self._screen(body)
         self.assertEqual(cell, (channel, cycle + 1),
-                         "курсор кода встал не в свою клетку")
-        self.assertEqual(back, line, "клетка увела на чужую строку")
+                         "editor cursor mapped to the wrong schedule grid cell")
+        self.assertEqual(back, line, "grid cell jumped back to the wrong source line")
 
     def test_numbers_survive_many_open_tabs(self) -> None:
-        """Числа участка не вытесняются вкладками, активная всегда видна.
-
-        Пока приоритета не было, шесть открытых файлов молча выдавливали
-        «15→8 т.» за край — ровно тогда, когда открыто много всего и
-        разобраться нужнее всего. А активная вкладка уезжала следом, и
-        экран показывал содержимое файла, чьего имени на нём нет.
-        """
+        """Basic-block metrics and the active tab stay visible even with many tabs open."""
         from vliw.tui.screens.code_screen import FileStrip, SideItem
 
         async def go():
@@ -2484,17 +2256,8 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                 async with app.run_test(size=(100, 30)) as pilot:
                     await pilot.pause()
                     sc = app.screen
-                    # Ключи снимаем заранее, а виджет ищем перед каждым
-                    # кликом заново: панель перерисовывается на каждом
-                    # выборе (в ней есть раздел «открыто», он обязан
-                    # показывать активную вкладку), старые виджеты при этом
-                    # отсоединяются, и сообщение отсоединённому уходит в
-                    # никуда — цикл по снятому заранее списку открывал ровно
-                    # одну вкладку и молчал об этом.
-                    # Только участки: у заметки чисел участка нет и быть
-                    # не должно (см. CodeScreen.context_parts), а тест — про
-                    # то, что вкладки не выдавливают числа. Файлы берём в
-                    # проводнике: в левой колонке теперь только вкладки.
+                    # Collect .s keys up front and re-query SideItem before each click
+                    # because selecting a file rebuilds the explorer list.
                     from vliw.tui.screens.code_screen import examples_dir
 
                     sc.action_toggle_explorer()
@@ -2516,25 +2279,18 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                             [i for _s, _e, i, _c in strip.spans], sc.file_i)
 
         n, active, painted, shown, current = asyncio.run(go())
-        self.assertGreater(n, 3, "вкладок мало — тест ничего не проверяет")
-        self.assertIn("оп.", painted, "числа участка вытеснены вкладками")
+        self.assertGreater(n, 3, "too few tabs opened to test overflow")
+        self.assertIn("ops", painted, "basic-block metrics were crowded out by tabs")
         self.assertIn(active, painted,
-                      f"активной вкладки {active} нет на экране")
-        # Активная — та, что реально активна, а не «последняя открытая»:
-        # файл, уже лежащий во вкладке, повторное открытие не дублирует, а
-        # переключает на неё, и последним кликом активной может стать первая.
+                      f"active tab {active} is not visible in the strip")
+        # Active tab must also remain clickable in the strip hitboxes.
         self.assertIn(current, shown,
-                      "активная вкладка есть в тексте, но по ней не кликнуть")
+                      "active tab is rendered but missing from click hitboxes")
         self.assertLess(len(shown), n,
-                        "все вкладки влезли — окно не проверено, нужно уже")
+                        "all tabs fit without overflow — narrow the test viewport")
 
     def test_empty_schedule_says_why_it_is_empty(self) -> None:
-        """Пустая вкладка объясняет пустоту, а не молчит прямоугольником.
-
-        Буфер без операций — самый частый первый экран. До сих пор вкладка
-        «расписание» показывала в этом случае пустой прямоугольник в треть
-        экрана: подписана, а внутри ничего и почему — молчок.
-        """
+        """An empty schedule tab explains why it is empty instead of showing a blank grid."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             edit.text = ""
@@ -2546,18 +2302,12 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                     screen.query_one("#code-grid-wrap").display)
 
         shown, text, grid = self._screen(body)
-        self.assertTrue(shown, "пустая решётка снова молчит")
-        self.assertIn("ни одной операции", text)
-        self.assertFalse(grid, "пустая таблица осталась рядом с объяснением")
+        self.assertTrue(shown, "empty schedule placeholder is hidden")
+        self.assertIn("no e2k operations", text)
+        self.assertFalse(grid, "empty DataTable stayed visible alongside the placeholder")
 
     def test_the_sixth_channel_fits_on_a_short_terminal(self) -> None:
-        """Канал ,5 обязан быть виден: это монопольный делитель.
-
-        Шесть каналов — инвариант решётки, записанный в её коде: обрезанный
-        шестой делает её бесполезной ровно там, где она нужнее всего. На
-        80x24 он уезжал за нижний край молча, без полосы прокрутки и без
-        единого признака, что там что-то есть.
-        """
+        """Issue slot ,5 (monopoly divider port) must remain visible even at 80x24."""
         async def go():
             app, _session = _make_app("code")
             with redirect_stdout(io.StringIO()):
@@ -2571,17 +2321,10 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         painted = asyncio.run(go())
         for chan in (",0", ",5"):
             self.assertIn(chan, painted,
-                          f"канал {chan} не поместился на терминале 80x24")
+                          f"issue slot {chan} was clipped on an 80x24 terminal")
 
     def test_explorer_marks_the_exhibit(self) -> None:
-        """В «настоящем коде» нет файлов-экспонатов.
-
-        probe_ILLUSTRATION_OBSOLETE.s сам про себя пишет: «ЭТО НЕ ВЫВОД
-        КОМПИЛЯТОРА, рисованная от руки иллюстрация, не использовать как
-        источник данных». Оставлен намеренно — но выдавать его за вывод lcc
-        значит ровно то враньё, от которого весь проект защищается
-        пометками источника у каждого числа.
-        """
+        """Hand-drawn illustration files must be labeled as samples, not real lcc output."""
         from vliw.tui.screens.code_screen import SideItem, examples_dir
 
         async def body(screen, pilot, session):
@@ -2596,22 +2339,18 @@ class TestCodeFilesAreTabs(unittest.TestCase):
 
         keys, marks = self._screen(body)
         self.assertTrue(any(k.endswith("probe.s") for k in keys),
-                        "настоящий код пропал из проводника совсем")
+                        "real assembly files disappeared from the explorer")
         exhibit = [k for k in keys if "OBSOLETE" in k.upper()]
         self.assertTrue(exhibit,
-                        "файл с диска пропал — проводник обязан показывать "
-                        "то, что есть, а не редактированную правду")
+                        "on-disk file disappeared — explorer must show real "
+                        "directory contents honestly")
         for key in exhibit:
-            self.assertIn("экспонат", marks[key],
-                          "экспонат подан как обычный код: "
+            self.assertIn("sample", marks[key],
+                          "illustration file presented as regular compiler output: "
                           f"{marks[key]!r}")
 
     def test_gutter_keeps_the_arrow_out_of_the_text(self) -> None:
-        """Ширина гуттера учитывает колонку действия.
-
-        Иначе клик по коду попадал бы на две колонки левее, чем виден
-        курсор, — и это заметно только руками, тестом «экран поднялся» нет.
-        """
+        """Gutter width accounts for the run-arrow action column so clicks align with text."""
         async def body(screen, pilot, session):
             edit = screen.query_one("#code-edit")
             return edit.gutter_width, edit.RUN_W + edit.BADGE_W
@@ -2620,17 +2359,7 @@ class TestCodeFilesAreTabs(unittest.TestCase):
         self.assertEqual(width, expected)
 
     def test_own_tab_keeps_its_name(self) -> None:
-        """Имя своего участка не сбрасывается уходом на другую вкладку.
-
-        Имя вкладки — единственное, чем участки различаются на экране, и
-        держаться оно обязано ровно столько, сколько живёт вкладка.
-
-        Ломалось так: имя пересчитывалось из сессии при каждом уходе со
-        вкладки (`_stash_current`), а у своего участка выводить его не из
-        чего — ни файла, ни примера. Все безымянные схлопывались в «буфер»,
-        и «участок 1.s» терял имя ровно в тот момент, когда заводили
-        «участок 2.s», то есть когда различать их и понадобилось.
-        """
+        """Custom basic-block tabs keep sequential names across tab switches."""
         from vliw.tui.screens.code_screen import SideItem
 
         async def body(screen, pilot, session):
@@ -2644,22 +2373,18 @@ class TestCodeFilesAreTabs(unittest.TestCase):
             return made, [f["name"] for f in screen.files]
 
         made, after = self._screen(body)
-        self.assertEqual(made[1:], ["участок 1.s", "участок 2.s", "участок 3.s"],
-                         "новые вкладки нумеруются не по порядку")
-        self.assertEqual(after, made, "имена вкладок пережили не всё хождение")
+        self.assertEqual(made[1:], ["block 1.s", "block 2.s", "block 3.s"],
+                         "new basic-block tabs are not numbered sequentially")
+        self.assertEqual(after, made, "tab names mutated while switching tabs")
 
     def test_rename_sticks_and_does_not_take_a_busy_name(self) -> None:
-        """F2 переименовывает вкладку, и имя держится; занятое — отклоняется.
-
-        Две вкладки с одним именем — способ потерять правки, а не удобство:
-        `open_file` ищет уже открытую именно по имени и перешла бы на чужую.
-        """
+        """F2 prefills `/rename`; renaming persists and rejects duplicate tab names."""
         from vliw.tui.screens.code_screen import SideItem
 
         async def body(screen, pilot, session):
             screen.post_message(SideItem.Picked("buf:new"))
             await pilot.pause()
-            screen.handle_line("/rename моё ядро.s")
+            screen.handle_line("/rename my kernel.s")
             await pilot.pause()
             renamed = [f["name"] for f in screen.files]
             screen.post_message(SideItem.Picked("buf:0"))
@@ -2675,28 +2400,18 @@ class TestCodeFilesAreTabs(unittest.TestCase):
                     screen.query_one("#prompt").input.value)
 
         renamed, survived, busy, prefilled = self._screen(body)
-        self.assertEqual(renamed[1], "моё ядро.s", "/rename не переименовал")
+        self.assertEqual(renamed[1], "my kernel.s", "/rename did not rename the tab")
         self.assertEqual(survived, renamed,
-                         "имя не пережило переключения вкладок")
+                         "renamed tab title did not survive tab switching")
         self.assertEqual(busy, survived,
-                         "занятое имя отдано второй вкладке")
-        self.assertEqual(prefilled, "/rename моё ядро.s",
-                         "F2 обязана подставить команду с текущим именем")
+                         "duplicate tab name was accepted for a second tab")
+        self.assertEqual(prefilled, "/rename my kernel.s",
+                         "F2 must prefill `/rename` with the active tab name")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestAgentIsAPanelNotAMode(unittest.TestCase):
-    """АГЕНТ в КОДЕ — вкладка дока по ^G, знающая, на что человек смотрит.
-
-    Целого экрана и четверти главного меню он не стоит: по замерам проекта
-    подсказка обученной модели оракулу дала 5% даже с идеальной подсказкой,
-    а интервальная нижняя граница отсекла 89% узлов перебора. Место в
-    интерфейсе должно совпадать с этими числами.
-
-    Колонки справа у него больше нет: она показывала ТОТ ЖЕ разговор, что
-    вкладка (`session.dialog`), и два окна в одно и то же — не два способа
-    работать, а лишний вопрос «в котором из них я сейчас спрашиваю».
-    """
+    """AGENT in CODE is a ^G dock tab grounded in whatever the user currently focused."""
 
     @staticmethod
     def _screen(body):
@@ -2710,7 +2425,7 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
         return asyncio.run(go())
 
     def test_it_asks_about_what_is_on_screen(self) -> None:
-        """Фокус в редакторе — вопрос про код; вкладка — про её содержимое."""
+        """Focus in the editor asks about the assembly buffer; focus in a dock tab asks about that tab."""
         from vliw.tui.widgets import PanelPrompt
 
         async def body(screen, pilot, session):
@@ -2718,35 +2433,28 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
             screen.action_explain()
             await pilot.pause()
             about_code = self._facts(screen)
-            screen.action_explain()          # ^G закрывает
+            screen.action_explain()          # ^G toggles closed
             await pilot.pause()
             closed = int(screen.ai_shown)
-            # Фокус не в тексте — спрашивают про открытую вкладку.
+            # Focus outside the editor scopes the question to the open dock tab.
             screen.open_drawer("lint")
             screen.query_one("#dock-lint").focus()
-            # Пауза обязательна: фокус в Textual применяется сообщением, и
-            # без неё ^G сработает, пока курсор ещё формально в редакторе, —
-            # то есть тест спросит не о том, о чём собирался.
+            # Pause so Textual processes the focus message before ^G runs.
             await pilot.pause()
             screen.action_explain()
             await pilot.pause()
             return about_code, closed, self._facts(screen)
 
         code, closed, lint = self._screen(body)
-        self.assertEqual(closed, 0, "^G обязан и закрывать")
-        self.assertTrue(any("буфер" in f or "операц" in f for f in code),
-                        f"объяснятель не знает про код: {code}")
+        self.assertEqual(closed, 0, "^G must toggle the agent tab closed")
+        self.assertTrue(any("buffer" in f or "ops" in f for f in code),
+                        f"agent context is missing assembly buffer facts: {code}")
         self.assertNotEqual(code, lint,
-                            "факты не зависят от того, на что смотришь")
+                            "agent facts did not adapt to the focused pane")
 
     @staticmethod
     def _facts(screen):
-        """Что агент видит про экран — блок «что видит агент» его вкладки.
-
-        Место менялось дважды: всплывающая строка → колонка справа →
-        вкладка дока. Поведение, ради которого тест написан, всё то же —
-        агент обязан знать, на что человек смотрел, когда его позвал.
-        """
+        """Return the grounded facts currently visible to the AGENT dock tab."""
         from textual.widgets import Static
 
         if not screen.ai_shown:
@@ -2755,13 +2463,7 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
         return [line.strip() for line in text.splitlines() if line.strip()]
 
     def test_escape_returns_to_the_code_and_keeps_the_dock(self) -> None:
-        """Esc из агента возвращает курсор в код, а док не закрывает.
-
-        Раньше агент был всплывающей колонкой, и Esc убирал её первой. Он
-        стал вкладкой дока — а док по Esc не закрывается ни на одной
-        вкладке: он часть обычного вида, а не окно поверх работы. Закрыть
-        агента по-прежнему можно тем же ^G, которым его открыли.
-        """
+        """Esc from the AGENT tab returns focus to the editor without closing the dock."""
         async def body(screen, pilot, session):
             screen.action_explain()
             await pilot.pause()
@@ -2777,19 +2479,14 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
                     screen.app.screen.__class__.__name__)
 
         opened, focused, closed_by_key, where = self._screen(body)
-        self.assertEqual(opened, 1, "^G не открыл агента")
+        self.assertEqual(opened, 1, "^G did not open the AGENT tab")
         self.assertEqual(focused, "code-edit",
-                         f"Esc не вернул курсор в код, а в {focused!r}")
-        self.assertEqual(closed_by_key, 0, "^G не закрыл агента")
-        self.assertEqual(where, "CodeScreen", "Esc унёс с экрана целиком")
+                         f"Esc focused {focused!r} instead of returning to the editor")
+        self.assertEqual(closed_by_key, 0, "^G did not close the AGENT tab")
+        self.assertEqual(where, "CodeScreen", "Esc unexpectedly left CodeScreen")
 
     def test_tab_stays_an_indent_in_the_editor(self) -> None:
-        """Tab в ассемблере — отступ, а не открытие справочника.
-
-        Отбирать Tab у редактора нельзя: им расставляют отступы в коде.
-        Поэтому объяснятель и живёт на ^G, а не на Tab, как справочник у
-        развёрнутых панелей в остальных режимах.
-        """
+        """Tab inside the assembly editor inserts indentation rather than opening the agent."""
         from vliw.tui.widgets import PanelPrompt
 
         async def body(screen, pilot, session):
@@ -2804,28 +2501,16 @@ class TestAgentIsAPanelNotAMode(unittest.TestCase):
 
         added, panels = self._screen(body)
         self.assertTrue(added and added.isspace(),
-                        f"Tab перестал делать отступ, добавлено {added!r}")
-        self.assertEqual(panels, 0, "Tab открыл объяснятель вместо отступа")
+                        f"Tab did not insert indentation, added {added!r}")
+        self.assertEqual(panels, 0, "Tab opened the agent instead of indenting")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestNonAsmFilesDoNotPretend(unittest.TestCase):
-    """Скрипт и заметка не притворяются участком e2k.
-
-    Каталог слева заводит файлы трёх типов: участок `.s`, скрипт `.py`,
-    заметка `.md` — работа вокруг участка состоит не из одного участка.
-    Но инструмент разбирает ТОЛЬКО `.s`, и об этом он обязан говорить, а не
-    показывать на скрипт сорок замечаний «строку не разобрать» (это правда,
-    которая ничего не значит) и не предлагать F5, который откажет.
-    """
+    """Non-assembly files (.py, .md) are not parsed as e2k basic blocks or offered F5."""
 
     def _open(self, kind):
-        """Открыть файл такого типа и вернуть, что о нём думает экран.
-
-        Заводить `.py` из панели больше нельзя (см. docs/archive/REDESIGN.md), но
-        ОТКРЫТЬ лежащий рядом скрипт человек может в любой момент — через
-        проводник. Проверяется именно этот путь.
-        """
+        """Open a file of type `kind` via the explorer and inspect CODE screen state."""
         import tempfile
         from pathlib import Path
 
@@ -2846,26 +2531,26 @@ class TestNonAsmFilesDoNotPretend(unittest.TestCase):
                             str(sc.query_one("#code-status").render()))
 
         work = Path(tempfile.mkdtemp(prefix="nex-kind-"))
-        path = work / f"скрипт.{kind}"
+        path = work / f"script.{kind}"
         path.write_text("import subprocess\nprint('hello')\n")
         return asyncio.run(go(path))
 
     def test_python_buffer_is_not_parsed_as_assembly(self) -> None:
         name, is_asm, problems, parsed, runnable, keys, status = self._open("py")
-        self.assertTrue(name.endswith(".py"), f"открыли не .py, а {name}")
-        self.assertFalse(is_asm, "скрипт сочтён участком e2k")
-        self.assertIsNone(parsed, "скрипт разобран ассемблерным парсером")
+        self.assertTrue(name.endswith(".py"), f"expected a .py file, got {name}")
+        self.assertFalse(is_asm, "Python script was misclassified as e2k assembly")
+        self.assertIsNone(parsed, "Python script was passed to the e2k assembly parser")
         self.assertEqual(problems, 0,
-                         "на скрипт выданы замечания по машине e2k")
+                         "e2k linter errors were emitted for a Python script")
         self.assertFalse(runnable,
-                         "у скрипта в гуттере стрелка запуска — она откажет")
+                         "gutter run arrow was shown for a non-assembly file")
         self.assertNotIn("F5", keys,
-                         "F5 предложен там, где он ничего не сделает")
-        self.assertIn("не e2k", status,
-                      f"строка состояния молчит про тип файла: {status!r}")
+                         "F5 was offered for a non-assembly file")
+        self.assertIn("not e2k", status,
+                      f"status bar did not identify non-e2k file type: {status!r}")
 
     def test_asm_buffer_still_works(self) -> None:
-        """Контроль: на `.s` всё остаётся как было."""
+        """Control check: `.s` assembly files still parse and offer F5 normally."""
         from vliw.tui.screens.code_screen import SideItem
 
         async def go():
@@ -2887,14 +2572,9 @@ class TestNonAsmFilesDoNotPretend(unittest.TestCase):
         self.assertIn("F5", keys)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping layout tests")
 class TestLayoutSurvivesRestart(unittest.TestCase):
-    """Раскладка живёт дольше сессии.
-
-    Высоту дока человек ставит под свою работу — мышью за границу, — и
-    теряла она при каждом запуске. Настройка, которую надо задавать заново
-    каждый день, настройкой не является.
-    """
+    """Dock height and active tab persist across sessions via layout.json."""
 
     def test_dock_height_and_tab_come_back(self) -> None:
         import json
@@ -2906,9 +2586,8 @@ class TestLayoutSurvivesRestart(unittest.TestCase):
         saved = CodeScreen.LAYOUT_FILE
         CodeScreen.LAYOUT_FILE = home / "layout.json"
         try:
-            # `_make_app` уводит раскладку во временный файл на каждый вызов
-            # (см. её докстринг), поэтому обоим запускам файл назначаем
-            # здесь — иначе второй прочитает не тот, что записал первый.
+            # `_make_app` assigns a fresh temp layout path per call, so point both
+            # launches at the same temporary layout file here.
             async def first():
                 app, _s = _make_app("code")
                 CodeScreen.LAYOUT_FILE = home / "layout.json"
@@ -2936,27 +2615,23 @@ class TestLayoutSurvivesRestart(unittest.TestCase):
 
             asyncio.run(first())
             self.assertTrue(CodeScreen.LAYOUT_FILE.exists(),
-                            "раскладка не записалась")
+                            "layout file was not written")
             height, tab, real = asyncio.run(second())
-            self.assertEqual(height, 20, "высота дока не пережила запуск")
-            self.assertEqual(tab, "core", "вкладка не пережила запуск")
-            self.assertEqual(real, 20, "высота записана, но не применена")
+            self.assertEqual(height, 20, "dock height did not persist across restart")
+            self.assertEqual(tab, "core", "active dock tab did not persist across restart")
+            self.assertEqual(real, 20, "saved dock height was not applied on startup")
         finally:
             CodeScreen.LAYOUT_FILE = saved
 
     def test_broken_file_does_not_break_the_screen(self) -> None:
-        """Испорченный файл раскладки не мешает работать.
-
-        Настройка, без которой инструмент прекрасно работает, не имеет права
-        его ронять.
-        """
+        """A corrupt layout.json must fall back cleanly instead of crashing startup."""
         import tempfile
         from pathlib import Path
         from vliw.tui.screens.code_screen import CodeScreen
 
         home = Path(tempfile.mkdtemp(prefix="nex-layout-bad-"))
         bad = home / "layout.json"
-        bad.write_text("{это не json")
+        bad.write_text("{not valid json")
         saved = CodeScreen.LAYOUT_FILE
         CodeScreen.LAYOUT_FILE = bad
         try:
@@ -2975,17 +2650,12 @@ class TestLayoutSurvivesRestart(unittest.TestCase):
             CodeScreen.LAYOUT_FILE = saved
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — заготовки не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping snippet tests")
 class TestSnippetsAreLegalCode(unittest.TestCase):
-    """Заготовки по «/» вставляют РАБОЧИЙ ассемблер, а не текст.
+    """`/` snippets insert valid, machine-legal e2k VLIW assembly bundles.
 
-    Смысл заготовок в том, что набрать десяток широких команд руками — самое
-    дорогое на этом экране. Но заготовка, которая даёт код с ошибками по
-    машине, хуже отсутствующей: человек получает замечания на то, чего не
-    писал, и не знает, кому верить.
-
-    Каналы в заготовках сверены с тремя источниками: опрос ассемблера
-    (`tools/probe_matrix.py`), руководство МЦСТ и таблица декодирования QEMU
+    Issue-slot assignments in snippets are cross-checked against hardware
+    probing (`tools/probe_matrix.py`), MCST documentation, and QEMU decode tables
     (`target/e2k/alop.decode`).
     """
 
@@ -3023,21 +2693,14 @@ class TestSnippetsAreLegalCode(unittest.TestCase):
         for name, _note, _body in CodeScreen.SNIPPETS:
             text, ops, _span, errs = self._insert(name)
             self.assertNotIn("/" + name, text,
-                             f"запрос «/{name}» остался в коде — он не "
-                             "разберётся и даст замечание")
-            self.assertFalse(errs, f"/{name} дал ошибки по машине: {errs}")
+                             f"slash trigger `/{name}` remained in the buffer "
+                             "and would cause a parse error")
+            self.assertFalse(errs, f"/{name} produced machine lint errors: {errs}")
             if name != "bundle":
-                self.assertGreater(ops, 0, f"/{name} не дал ни одной операции")
+                self.assertGreater(ops, 0, f"/{name} produced zero parsed ops")
 
     def test_two_inserts_do_not_fight_for_registers(self) -> None:
-        """Вторая вставка берёт СВОИ регистры, а не те же самые.
-
-        Первая версия заготовок вставляла готовый текст с вбитыми
-        `%r10, %r11, %r20`. Вторая вставка писала в те же регистры, разбор
-        честно показывал конфликт — на коде, которого человек не писал, — и
-        половину заготовки приходилось править руками. Такая заготовка
-        экономит меньше, чем стоит.
-        """
+        """Inserting a snippet twice allocates fresh destination registers to avoid WAW/RAW hazards."""
         from vliw.tui.screens.code_screen import AsmArea
 
         async def go():
@@ -3062,19 +2725,14 @@ class TestSnippetsAreLegalCode(unittest.TestCase):
                     return edit.text, [e.text for e in errs]
 
         text, errs = asyncio.run(go())
-        self.assertFalse(errs, f"две вставки подряд дали ошибки: {errs}")
+        self.assertFalse(errs, f"consecutive snippet insertions produced errors: {errs}")
         dsts = [line.split(",")[-1].strip()
                 for line in text.splitlines() if "muls" in line]
         self.assertEqual(len(dsts), len(set(dsts)),
-                         f"заготовки пишут в одни и те же регистры: {dsts}")
+                         f"consecutive snippets reused destination registers: {dsts}")
 
     def test_pauses_come_from_the_machine_model(self) -> None:
-        """`nop` в заготовке равен латентности минус такт выдачи.
-
-        Константа здесь соврала бы при первой же правке модели: числа в
-        `model.py` сняты измерением и меняются, а заготовка обязана
-        оставаться верной, иначе она учит неправде.
-        """
+        """Snippet `nop` counts derive from machine-model latency minus issue cycle."""
         async def go():
             app, session = _make_app("code")
             with redirect_stdout(io.StringIO()):
@@ -3092,38 +2750,22 @@ class TestSnippetsAreLegalCode(unittest.TestCase):
 
         for kind, (text, latency) in asyncio.run(go()).items():
             self.assertIn(f"nop {latency - 1}", text,
-                          f"/{kind}: пауза не по модели (латентность "
+                          f"/{kind}: nop stall does not match machine model (latency "
                           f"{latency}): {text!r}")
 
     def test_par4_and_queue_show_the_same_work_costing_differently(self) -> None:
-        """Пара заготовок, ради которой они и заводились.
-
-        Четыре умножения в одном такте против тех же четырёх в один канал —
-        это и есть дыра машины, которую инструмент показывает. Если числа
-        сравняются, заготовки перестанут что-либо демонстрировать.
-        """
+        """Parallel vs. serialized multiply snippets must demonstrate real makespan difference."""
         _t, ops_par, span_par, _e = self._insert("par4")
         _t, ops_q, span_q, _e = self._insert("queue")
-        self.assertEqual(ops_par, ops_q, "работа должна быть одна и та же")
+        self.assertEqual(ops_par, ops_q, "both snippets must perform the same op count")
         self.assertLess(span_par, span_q,
-                        f"параллельно {span_par} т., в очередь {span_q} т. — "
-                        "разницы нет, заготовки ничего не показывают")
+                        f"parallel={span_par} cyc vs. queued={span_q} cyc — "
+                        "snippets show no makespan improvement")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping layout tests")
 class TestColumnsYieldToTheEditor(unittest.TestCase):
-    """На узком окне колонки уступают редактору, а не душат его.
-
-    Правило `.tight #code-explorer { display: none }` стояло в nex.tcss и не
-    работало ВООБЩЕ: колонки показываются inline-стилем (`_toggle` пишет
-    `display` прямо в виджет), а inline сильнее таблицы стилей. На 80
-    клетках редактору оставалось 27 — строка `muls,0 %r10, %r11, %r20` туда
-    не помещается, то есть код переставал читаться как код ровно там, где
-    места и так мало.
-
-    Возвращаться колонки обязаны сами и ровно те, что человек открывал:
-    иначе окно решает за него.
-    """
+    """Sidebars yield width to the assembly editor on narrow viewports and restore automatically."""
 
     def _widths(self, sizes):
         async def go():
@@ -3153,35 +2795,29 @@ class TestColumnsYieldToTheEditor(unittest.TestCase):
         for width, _side, _expl, edit in rows:
             self.assertGreaterEqual(
                 edit, 60,
-                f"на {width} клетках редактору осталось {edit}: "
-                f"строка ассемблера туда не влезает")
+                f"at width {width}, editor shrank to {edit} cols — "
+                f"too narrow for an e2k assembly line")
 
     def test_columns_come_back_when_there_is_room(self) -> None:
         rows = self._widths((150, 80, 150))
         wide_before, narrow, wide_after = rows
         self.assertEqual((wide_before[1], wide_before[2]), (1, 1))
         self.assertEqual((narrow[1], narrow[2]), (0, 0),
-                         "на 80 клетках колонки не уступили")
+                         "sidebars did not collapse at 80 columns")
         self.assertEqual((wide_after[1], wide_after[2]), (1, 1),
-                         "колонки не вернулись, когда место появилось")
+                         "sidebars did not restore when viewport widened")
 
     def test_explorer_goes_first(self) -> None:
-        """Первым уступает проводник: он справочный, вкладки — работа."""
+        """Explorer yields first at 100 columns while open tabs remain visible."""
         rows = self._widths((150, 100))
         _w, side, expl, _edit = rows[1]
         self.assertEqual((side, expl), (1, 0),
-                         "на 100 клетках ушла не та колонка")
+                         "wrong sidebar collapsed at 100 columns")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — первый экран не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping welcome screen tests")
 class TestEmptyBufferExplainsTheScreen(unittest.TestCase):
-    """Пустой буфер отвечает, что это за окно, и уходит с первым же кодом.
-
-    Заведено по жалобе владельца: «что это вообще за окно, что там можно
-    делать». Экран не объяснял себя нигде — подсказки внизу говорят про
-    клавиши, но не про то, зачем сюда пришли. А приветствие поверх чужого
-    кода — уже не приветствие, а помеха, поэтому оно обязано исчезать.
-    """
+    """An empty CODE buffer displays a welcome overlay that hides as soon as code is entered."""
 
     def _hello(self, body):
         from vliw.tui.screens.code_screen import SideItem
@@ -3204,10 +2840,10 @@ class TestEmptyBufferExplainsTheScreen(unittest.TestCase):
             return hello.display, str(hello.render())
 
         shown, text = self._hello(body)
-        self.assertTrue(shown, "пустой буфер молчит о том, что это за окно")
-        for must in ("КОД", "lcc", "F5"):
+        self.assertTrue(shown, "empty buffer did not display the welcome overlay")
+        for must in ("CODE", "lcc", "F5"):
             self.assertIn(must, text,
-                          f"в первом экране нет «{must}»: {text!r}")
+                          f"welcome overlay is missing {must!r}: {text!r}")
 
     def test_it_disappears_once_there_is_code(self) -> None:
         async def body(sc, pilot):
@@ -3220,18 +2856,12 @@ class TestEmptyBufferExplainsTheScreen(unittest.TestCase):
             return sc.query_one("#code-hello").display
 
         self.assertFalse(self._hello(body),
-                         "приветствие осталось поверх кода")
+                         "welcome overlay stayed visible after code was entered")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — проводник не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping explorer tests")
 class TestExplorerSearchStaysCheap(unittest.TestCase):
-    """Поиск в проводнике не обходит чужие библиотеки и не молчит о пределах.
-
-    Первая версия звала `sorted(folder.rglob("*"))` на КАЖДУЮ набранную
-    букву: в корне этого проекта — 40 497 путей за секунду, из них 35 681 в
-    `.venv`. Обход спускался туда честно, чтобы затем выбросить всё
-    фильтром «имя начинается с точки»; отсекать надо до спуска.
-    """
+    """Explorer search prunes hidden/venv directories before descent and reports hit caps."""
 
     def _screen(self, body):
         async def go():
@@ -3247,38 +2877,32 @@ class TestExplorerSearchStaysCheap(unittest.TestCase):
         return asyncio.run(go())
 
     def test_search_does_not_walk_hidden_and_vendor_trees(self) -> None:
-        """Скрытые каталоги и чужие библиотеки в обход не попадают."""
+        """Hidden directories and virtualenvs are pruned during traversal."""
         import tempfile
         from pathlib import Path
 
         work = Path(tempfile.mkdtemp(prefix="nex-find-"))
-        (work / "мой.s").write_text("{}\n")
+        (work / "mine.s").write_text("{}\n")
         for junk in (".venv/lib", "__pycache__", "node_modules/pkg"):
             d = work / junk
             d.mkdir(parents=True)
-            (d / "мой_чужой.s").write_text("{}\n")
+            (d / "mine_ignored.s").write_text("{}\n")
 
         def body(sc, pilot):
             async def run():
                 sc.explorer_dir = work
-                sc.explorer_query = "мой"
+                sc.explorer_query = "mine"
                 return sc._explorer_rows()
             return run()
 
         rows = self._screen(body)
         names = [label for _key, label, _d in rows]
-        self.assertIn("мой.s", names, "свой файл не найден")
-        self.assertFalse([n for n in names if "чужой" in n],
-                         f"обход залез в скрытое и чужое: {names}")
+        self.assertIn("mine.s", names, "user assembly file not found")
+        self.assertFalse([n for n in names if "ignored" in n],
+                         f"traversal descended into hidden/ignored directories: {names}")
 
     def test_typing_stays_in_the_search_and_not_in_the_code(self) -> None:
-        """Набор в поиске не проваливается в редактор.
-
-        Список проводника пересобирается на каждый знак, и снос его детей
-        уводил фокус в код: слово «probe» оказывалось в начале буфера, а
-        поиск оставался пустым. То есть проводник ломался на первой же
-        букве — ровно там, где им начинают пользоваться.
-        """
+        """Typing in the explorer search input keeps focus and never leaks into the editor."""
         async def go():
             app, _session = _make_app("code")
             with redirect_stdout(io.StringIO()):
@@ -3297,12 +2921,12 @@ class TestExplorerSearchStaysCheap(unittest.TestCase):
                             before == sc.query_one("#code-edit").text)
 
         value, focused, intact = asyncio.run(go())
-        self.assertEqual(value, "probe", "набранное не дошло до поиска")
-        self.assertEqual(focused, "explorer-find", "фокус уехал из поиска")
-        self.assertTrue(intact, "набранное в поиске попало в код")
+        self.assertEqual(value, "probe", "typed query did not reach explorer search")
+        self.assertEqual(focused, "explorer-find", "focus escaped explorer search input")
+        self.assertTrue(intact, "explorer search keystrokes leaked into the editor buffer")
 
     def test_arrows_move_the_selection(self) -> None:
-        """Стрелки ходят по находкам, Enter открывает выделенное."""
+        """Arrow keys move selection across explorer matches and Enter opens the item."""
         async def go():
             app, _session = _make_app("code")
             with redirect_stdout(io.StringIO()):
@@ -3325,16 +2949,12 @@ class TestExplorerSearchStaysCheap(unittest.TestCase):
                     return sc._explorer_at, want, sc.files[sc.file_i]["name"]
 
         at, want, opened = asyncio.run(go())
-        self.assertEqual(at, 1, "стрелка не сдвинула выделение")
+        self.assertEqual(at, 1, "down arrow did not advance explorer selection")
         self.assertTrue(want.endswith(opened),
-                        f"открылось не выделенное: ждали {want}, открыт {opened}")
+                        f"wrong item opened: expected {want}, got {opened}")
 
     def test_recent_folders_come_back_in_one_click(self) -> None:
-        """Каталог, откуда ушли, возвращается одним нажатием.
-
-        Ходить от корня каждый раз — самое дорогое в проводнике: свой
-        каталог у человека один и тот же, а путь к нему длинный.
-        """
+        """Recent explorer directory is accessible via one-click history."""
         from pathlib import Path
         from vliw.tui.screens.code_screen import SideItem, examples_dir
 
@@ -3356,16 +2976,11 @@ class TestExplorerSearchStaysCheap(unittest.TestCase):
             return run()
 
         start, label, now = self._screen(body)
-        self.assertIsNotNone(label, "недавнего каталога нет в списке")
-        self.assertEqual(now, start, "возврат по истории не сработал")
+        self.assertIsNotNone(label, "recent directory missing from history list")
+        self.assertEqual(now, start, "navigating back via directory history failed")
 
     def test_enter_opens_the_first_hit(self) -> None:
-        """Enter в строке поиска открывает находку — без мыши.
-
-        Проводник задуман как «найти свой .s, не выходя из работы». Если
-        после набора имени приходится тянуться к мыши, половина смысла
-        теряется.
-        """
+        """Pressing Enter in the explorer search input opens the top match without a mouse."""
         from vliw.tui.screens.code_screen import examples_dir
 
         def body(sc, pilot):
@@ -3381,43 +2996,33 @@ class TestExplorerSearchStaysCheap(unittest.TestCase):
             return run()
 
         self.assertEqual(self._screen(body), "probe.s",
-                         "Enter не открыл первую находку")
+                         "Enter did not open the first search match")
 
     def test_search_says_when_it_stopped_early(self) -> None:
-        """Оборванный обход объясняет себя, а не притворяется полным.
-
-        Короткий список без объяснения читается как «твоего файла нет» — и
-        это худший ответ из возможных, потому что он неправда.
-        """
+        """Truncated search results explicitly announce the hit limit."""
         import tempfile
         from pathlib import Path
 
         work = Path(tempfile.mkdtemp(prefix="nex-find-many-"))
         for i in range(80):
-            (work / f"файл{i}.s").write_text("{}\n")
+            (work / f"file{i}.s").write_text("{}\n")
 
         def body(sc, pilot):
             async def run():
                 sc.explorer_dir = work
-                sc.explorer_query = "файл"
+                sc.explorer_query = "file"
                 rows = sc._explorer_rows()
                 return len(rows), sc._find_cut
             return run()
 
         found, cut = self._screen(body)
-        self.assertEqual(found, 60, "предел находок не сработал")
-        self.assertIn("60", cut, f"про обрыв обхода не сказано: {cut!r}")
+        self.assertEqual(found, 60, "explorer search hit cap (60) did not trigger")
+        self.assertIn("60", cut, f"truncation notice missing limit: {cut!r}")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — каталог не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping directory tests")
 class TestSideCatalogDeletesOnlyOurFiles(unittest.TestCase):
-    """✕ в проводнике стирает файл рабочего каталога — и только его.
-
-    Удаление необратимо, поэтому проверяются три вещи: спрашивают перед
-    удалением, отменить можно, и файлы САМОГО ПАКЕТА (примеры машины лежат
-    в нём) удалить нельзя — иначе промах мимо имени портит установку
-    инструмента.
-    """
+    """Explorer delete (`x`) prompts for confirmation, allows cancel, and protects package files."""
 
     def _run(self, body):
         import tempfile
@@ -3459,9 +3064,9 @@ class TestSideCatalogDeletesOnlyOurFiles(unittest.TestCase):
 
         asked, cancelled, alive = self._run(body)
         self.assertEqual(asked, ("mine.s", True),
-                         "клик по ✕ удалил файл, не спросив")
-        self.assertEqual(cancelled, ("", True), "отмена не отменила")
-        self.assertFalse(alive, "подтверждение не удалило файл")
+                         "clicking delete removed the file without confirmation")
+        self.assertEqual(cancelled, ("", True), "cancel did not preserve the file")
+        self.assertFalse(alive, "confirming deletion did not remove the file")
 
     def test_package_files_are_not_deletable(self) -> None:
         from vliw.tui.screens.code_screen import SideItem
@@ -3479,21 +3084,15 @@ class TestSideCatalogDeletesOnlyOurFiles(unittest.TestCase):
 
         waiting, alive = self._run(body)
         if waiting is None:
-            self.skipTest("файлов пакета в каталоге нет")
+            self.skipTest("no bundled package files found in directory")
         self.assertEqual(waiting, "",
-                         "инструмент предложил удалить файл своего пакета")
-        self.assertTrue(alive, "файл пакета исчез")
+                         "explorer offered to delete a bundled package file")
+        self.assertTrue(alive, "bundled package file was deleted")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — сохранение не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping save tests")
 class TestSaveUsesTheTabName(unittest.TestCase):
-    """Ctrl+S берёт имя у вкладки, а существующий файл не переписывает молча.
-
-    Имя человек уже задал — при создании файла или по F2. Спрашивать его
-    второй раз в строке команд значит требовать заново то, что сказано.
-    Но если файл с таким именем на диске уже есть, тихая перезапись — это
-    потеря чужой работы, и тогда решает человек.
-    """
+    """Ctrl+S derives filename from the tab title and refuses silent overwrite of existing files."""
 
     def _run(self, body):
         import tempfile
@@ -3530,10 +3129,10 @@ class TestSaveUsesTheTabName(unittest.TestCase):
                     session.code_path)
 
         made, path = self._run(body)
-        self.assertEqual(len(made), 1, f"сохранён не один файл: {made}")
+        self.assertEqual(len(made), 1, f"expected exactly one saved file, got: {made}")
         self.assertTrue(made[0].endswith(".s"), made)
-        self.assertNotIn(" ", made[0], "в имени файла остался пробел")
-        self.assertTrue(path, "путь не запомнен — второй ^S спросит заново")
+        self.assertNotIn(" ", made[0], "saved filename still contains whitespace")
+        self.assertTrue(path, "saved path was not remembered for subsequent ^S")
 
     def test_existing_file_is_not_overwritten_silently(self) -> None:
         from vliw.tui.screens.code_screen import SideItem
@@ -3543,28 +3142,22 @@ class TestSaveUsesTheTabName(unittest.TestCase):
             sc.post_message(SideItem.Picked("new:s"))
             await pilot.pause()
             name = sc.files[sc.file_i]["name"].replace(" ", "_")
-            (work / name).write_text("! чужая работа\n")
+            (work / name).write_text("! existing work\n")
             sc.action_save_code()
             await pilot.pause()
             return ((work / name).read_text(),
                     sc.query_one("#prompt", PromptBar).input.value)
 
         kept, typed = self._run(body)
-        self.assertIn("чужая работа", kept,
-                      "существующий файл переписан без спроса")
+        self.assertIn("existing work", kept,
+                      "existing file was overwritten without confirmation")
         self.assertIn("/code save", typed,
-                      "решение не отдано человеку: команда не подставлена")
+                      "overwrite prompt command was not prefilled for user confirmation")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestCoreIsATabNotAMode(unittest.TestCase):
-    """ЯДРО — вкладка-консоль нижнего дока, а не отдельный экран.
-
-    Его ценность ровно одна: собрать граф выражениями, не умея писать
-    ассемблер e2k, и узнать, во сколько тактов он укладывается. Целого
-    экрана и четверти главного меню эта работа не стоит. Машина одна на
-    сессию, поэтому имена и память здесь те же, что в полноэкранном ЯДРЕ.
-    """
+    """CORE console lives as a bottom dock tab in CODE sharing the same session machine."""
 
     @staticmethod
     def _screen(body):
@@ -3581,7 +3174,7 @@ class TestCoreIsATabNotAMode(unittest.TestCase):
         return asyncio.run(go())
 
     def test_expressions_build_a_graph_and_show_state(self) -> None:
-        """Строки консоли считают, кладут узлы в граф и меняют панельку."""
+        """CORE dock statements evaluate expressions, append DAG ops, and update register state."""
         async def body(screen, pilot, session):
             for line in ("a = 10", "t = a*2 + 3"):
                 screen._exec_core(line)
@@ -3593,15 +3186,11 @@ class TestCoreIsATabNotAMode(unittest.TestCase):
         regs, size, state = self._screen(body)
         self.assertEqual(regs.get("a"), 10)
         self.assertEqual(regs.get("t"), 23)
-        self.assertGreater(size, 0, "выражение не положило ничего в граф")
-        self.assertIn("23", state, "панелька имён не показывает значение")
+        self.assertGreater(size, 0, "expression did not append any ops to the dependency DAG")
+        self.assertIn("23", state, "register status bar does not display computed value")
 
     def test_go_computes_and_hands_the_graph_to_the_session(self) -> None:
-        """`go` считает точным поиском и делает граф участком сессии.
-
-        Без второго консоль была бы калькулятором: посчитала и забыла, а
-        РАЗБОР с АГЕНТОМ продолжали бы говорить про демо-сценарий.
-        """
+        """`go` runs the exact branch-and-bound oracle and promotes the DAG to the session block."""
         async def body(screen, pilot, session):
             screen._exec_core("sum 8")
             await pilot.pause()
@@ -3616,17 +3205,11 @@ class TestCoreIsATabNotAMode(unittest.TestCase):
         scenario, ops, last = self._screen(body)
         self.assertEqual(scenario, "interp")
         self.assertGreater(ops, 0)
-        self.assertIn("участок сессии", last,
-                      "консоль не сказала, куда уехал граф")
+        self.assertIn("session block", last,
+                      "console did not announce that the session block was updated")
 
     def test_the_command_line_is_actually_visible(self) -> None:
-        """Строка ввода обязана иметь высоту: невидимое поле — не поле.
-
-        У Textual box-sizing по умолчанию border-box, и `height: 1` вместе с
-        волоском сверху даёт НОЛЬ строк содержимого. Поле при этом
-        фокусируется и принимает нажатия — то есть набирать приходится
-        вслепую, и заметить это можно только глазами.
-        """
+        """Console input bars must have non-zero content height (border-box regression)."""
         async def body(screen, pilot, session):
             core = screen.query_one("#core-input").size.height
             screen.open_drawer("term")
@@ -3634,19 +3217,13 @@ class TestCoreIsATabNotAMode(unittest.TestCase):
             return core, screen.query_one("#prompt-input").size.height
 
         core, term = self._screen(body)
-        self.assertEqual(core, 1, "строка ввода ЯДРА невидима")
-        self.assertEqual(term, 1, "строка ввода ВЫВОДА невидима")
+        self.assertEqual(core, 1, "CORE dock input bar has zero content height")
+        self.assertEqual(term, 1, "REPORT dock input bar has zero content height")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestLabSleepBar(unittest.TestCase):
-    """Вторая строка шапки РАЗБОРА: факты трёх спящих режимов.
-
-    Экраны уже читают одну Session, но видеть чужое состояние можно было,
-    только физически перейдя в чужой режим. Строка показывает ЯДРО/АГЕНТ/
-    КОД прямо в РАЗБОРЕ: пустой факт не рисуется вовсе, клик по факту
-    открывает тот режим тем же путём, что и мостик журнала.
-    """
+    """LAB top-bar second row shows live status chips for the three sleeping modes."""
 
     @staticmethod
     def _screen(body, start_mode="lab"):
@@ -3655,11 +3232,8 @@ class TestLabSleepBar(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(150, 46)) as pilot:
                     await pilot.pause()
-                    # Курсорный ИИ решётки здесь не участник: его запрос к
-                    # локальной модели может длиться дольше теста (на машине
-                    # с тёплым llama-server это уже ломает чужие тесты —
-                    # см. TestCoreHasTheJournalToo). Подъём токена гасит
-                    # отложенный запуск детерминированно.
+                    # Cancel debounced cursor AI deterministically so background
+                    # inference cannot outlive the test.
                     app.screen._cell_ai_token += 1
                     return await body(app.screen, pilot, session)
 
@@ -3670,24 +3244,24 @@ class TestLabSleepBar(unittest.TestCase):
         return {mode: body for _label, body, mode in sc.sleep_facts()}
 
     def test_fresh_session_shows_no_row(self):
-        """Нечего показать — второй строки нет вовсе: ни места, ни прочерков."""
+        """When no sleeping mode has active state, the sleep bar stays hidden."""
         async def body(sc, pilot, session):
             row = sc.query_one("#topbar-sleep")
             return list(sc.sleep_facts()), row.has_class("on")
 
         facts, shown = self._screen(body)
         self.assertEqual(facts, [])
-        self.assertFalse(shown, "пустая сессия не должна рисовать строку")
+        self.assertFalse(shown, "empty session must not render the sleep bar")
 
     def test_facts_from_sleeping_modes(self):
-        """ЯДРО: граф не отправлен; АГЕНТ: счёт вопросов; КОД: буфер правлен."""
+        """Sleep bar reports CORE unsent graph, AGENT question count, and edited CODE buffer."""
         from vliw.agent.agent import Turn
 
         async def body(sc, pilot, session):
             ws = session.workspace()
             ws.exec("sum 8")
             n = len(ws.snapshot())
-            session.agent().history.append(Turn(question="что тут?"))
+            session.agent().history.append(Turn(question="what is here?"))
             session.code_text = "{\n  adds,0 %r10\n}\n"
             sc.refresh_context()
             await pilot.pause()
@@ -3695,14 +3269,14 @@ class TestLabSleepBar(unittest.TestCase):
             return self._facts(sc), modes, n
 
         facts, modes, n = self._screen(body)
-        self.assertEqual(facts["work"], f"граф {n} оп., не отправлен")
-        self.assertEqual(facts["mind"], "1 вопрос")
-        self.assertEqual(facts["code"], "буфер изменён, не разобран")
+        self.assertEqual(facts["work"], f"graph {n} ops, not sent")
+        self.assertEqual(facts["mind"], "1 question")
+        self.assertEqual(facts["code"], "buffer edited, not run")
         self.assertEqual(modes, ["work", "mind", "code"],
-                         "каждый показанный факт — свой кликабельный кусок")
+                         "each displayed sleep fact must be its own clickable chip")
 
     def test_sent_graph_reports_passed(self):
-        """Граф ядра — текущий граф сессии: «передан», а не «не отправлен»."""
+        """Once the CORE graph is active in the session, it reports `sent`."""
         async def body(sc, pilot, session):
             ws = session.workspace()
             ws.exec("sum 8")
@@ -3713,13 +3287,13 @@ class TestLabSleepBar(unittest.TestCase):
             return self._facts(sc), n
 
         facts, n = self._screen(body)
-        self.assertEqual(facts["work"], f"граф {n} оп., передан")
+        self.assertEqual(facts["work"], f"graph {n} ops, sent")
 
     def test_parsed_buffer_is_silent(self):
-        """Буфер прогнан и не правился — факта про КОД нет, куска и точки нет."""
+        """An already-run, unmodified CODE buffer emits no sleep chip or leading separator."""
         async def body(sc, pilot, session):
             ws = session.workspace()
-            ws.exec("a=2; b=a*a")       # чтобы строка жиля хотя бы одним фактом
+            ws.exec("a=2; b=a*a")       # keep the sleep bar visible with one fact
             session.code_text = "{\n  adds,0 %r10\n}\n"
             session.code_run_text = session.code_text
             sc.refresh_context()
@@ -3730,14 +3304,14 @@ class TestLabSleepBar(unittest.TestCase):
             return (self._facts(sc), len(children), classes)
 
         facts, n_children, classes = self._screen(body)
-        self.assertNotIn("code", facts, "разобранный буфер — не факт")
+        self.assertNotIn("code", facts, "unmodified run buffer must not emit a sleep fact")
         self.assertEqual(n_children, 1,
-                         "один факт — один кусок, без пустых мест")
+                         "one active fact must render exactly one sleep chip")
         self.assertNotIn("sleep-sep", classes,
-                         "разделитель не должен стоять перед единственным")
+                         "separator must not appear before a single sleep chip")
 
     def test_click_on_fact_opens_that_mode(self):
-        """Клик по факту ЯДРА открывает ЯДРО — путь мостика, app.open_mode."""
+        """Clicking the CORE sleep chip navigates to CoreScreen via app.open_mode."""
         async def body(sc, pilot, session):
             ws = session.workspace()
             ws.exec("sum 8")
@@ -3751,14 +3325,14 @@ class TestLabSleepBar(unittest.TestCase):
 
         where = self._screen(body)
         self.assertEqual(where, "CoreScreen",
-                         "клик по факту не открыл режим ЯДРО")
+                         "clicking CORE sleep chip did not open CoreScreen")
 
     def test_click_on_agent_fact_opens_agent(self):
-        """Клик по факту АГЕНТА открывает АГЕНТА."""
+        """Clicking the AGENT sleep chip navigates to AgentScreen."""
         from vliw.agent.agent import Turn
 
         async def body(sc, pilot, session):
-            session.agent().history.append(Turn(question="привет"))
+            session.agent().history.append(Turn(question="hello"))
             sc.refresh_context()
             await pilot.pause()
             await pilot.pause()
@@ -3769,10 +3343,10 @@ class TestLabSleepBar(unittest.TestCase):
 
         where = self._screen(body)
         self.assertEqual(where, "AgentScreen",
-                         "клик по факту не открыл режим АГЕНТ")
+                         "clicking AGENT sleep chip did not open AgentScreen")
 
     def test_other_screens_stay_one_line(self):
-        """Строка — пилот РАЗБОРА: ЯДРО и АГЕНТ её не получают."""
+        """Sleep bar is LAB-only; CORE and AGENT screens do not render it."""
         from vliw.tui.widgets import TopBar
 
         async def go():
@@ -3789,18 +3363,11 @@ class TestLabSleepBar(unittest.TestCase):
             return out
 
         for start, (sleepers, shown) in asyncio.run(go()).items():
-            self.assertEqual(sleepers, [], f"{start}: строка пришла без спроса")
-            self.assertFalse(shown, f"{start}: строка не должна рисоваться")
+            self.assertEqual(sleepers, [], f"{start}: unexpected sleep facts rendered")
+            self.assertFalse(shown, f"{start}: sleep bar must stay hidden")
 
     def test_code_has_no_mode_bar_at_all(self):
-        """У КОДА шапки режима нет: верхняя строка — вкладки файлов.
-
-        Строк наверху было две, и они говорили одно и то же дважды: «КОД
-        редактор» дублировало то, что и так видно, а числа участка стояли
-        ещё и в строке состояния внизу. Сильнее прежней проверки: там
-        требовалось, чтобы вторая строка шапки не рисовалась, здесь — чтобы
-        самой шапки не было.
-        """
+        """CODE has no TopBar mode header; the file-tab strip owns row 0 with block metrics."""
         from vliw.tui.widgets import TopBar
 
         async def go():
@@ -3815,28 +3382,16 @@ class TestLabSleepBar(unittest.TestCase):
                             str(head.content))
 
         bars, y, h, text = asyncio.run(go())
-        self.assertEqual(bars, 0, "шапка режима осталась на экране КОД")
+        self.assertEqual(bars, 0, "TopBar mode header should not exist on CodeScreen")
         self.assertEqual((y, h), (0, 1),
-                         "верхняя строка не одна и не самая верхняя")
-        self.assertIn("NEX", text, "марка потерялась вместе с шапкой")
-        self.assertIn("оп.", text, "числа участка не переехали в верхнюю строку")
+                         "file-tab strip must be the sole top row at y=0")
+        self.assertIn("NEX", text, "NEX brand mark missing from the top tab strip")
+        self.assertIn("ops", text, "basic-block metrics did not move into the top bar")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — раскладку не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping layout tests")
 class TestNothingFallsBelowTheFold(unittest.TestCase):
-    """Ни один виджет не должен уезжать за нижний край экрана.
-
-    Ширину раскладка учитывала с самого начала (классы `narrow`/`tight`),
-    высоту — нет. На невысоком терминале правая колонка РАЗБОРА уходила за
-    край: `#p-detail` рос по содержимому без потолка, а у панелей под ним
-    стоял min-height, которому уже негде было поместиться. Панель МАШИНА
-    вместе с матрицей портов просто оказывалась за экраном — молча, без
-    полосы прокрутки и без единого признака, что там что-то есть.
-
-    Стартовый экран страдал тем же: знак, подпись и четыре карточки по
-    шесть строк требуют 41 строку, и на терминале ниже четвёртая карточка
-    (КОД) не показывалась вовсе.
-    """
+    """No panel or picker card may overflow past the bottom edge on compact terminals."""
 
     SIZES = ((150, 46), (120, 40), (100, 32), (90, 30), (80, 24))
 
@@ -3850,7 +3405,7 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
                     bad = []
                     for node in app.screen.query("*"):
                         r = node.region
-                        # +1 — терпимость к рамке в один символ.
+                        # +1 allows a 1-cell border tolerance.
                         if r.height and r.y + r.height > h + 1:
                             bad.append(node.id or node.__class__.__name__)
                     return bad
@@ -3860,12 +3415,12 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
     def test_screens_fit_at_every_size(self):
         for mode in ("core", "lab", "mind", "code"):
             for w, h in self.SIZES:
-                with self.subTest(режим=mode, размер=f"{w}x{h}"):
+                with self.subTest(mode=mode, size=f"{w}x{h}"):
                     bad = self._overflow(mode, w, h)
-                    self.assertEqual(bad, [], f"за краем: {bad}")
+                    self.assertEqual(bad, [], f"overflowed bottom edge: {bad}")
 
     def test_all_mode_cards_are_visible_on_a_short_screen(self):
-        """Стартовый экран показывает ВСЕ режимы, даже когда места мало."""
+        """Mode picker fits all mode cards on screen even on short terminals."""
         from vliw.tui.screens.picker import PickerScreen
 
         async def go(h):
@@ -3873,13 +3428,13 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 async with app.run_test(size=(120, h)) as pilot:
                     await pilot.pause()
-                    # Список экранов больше не стартовый — открываем его сами.
+                    # Open the mode picker explicitly via ^O.
                     app.to_picker()
                     await pilot.pause()
                     await pilot.pause()
                     sc = app.screen
                     if not isinstance(sc, PickerScreen):
-                        self.skipTest("экран выбора не показан")
+                        self.skipTest("mode picker did not open")
                     cards = sc.query(".mode-card")
                     fit = [c for c in cards
                            if c.region.height
@@ -3887,24 +3442,15 @@ class TestNothingFallsBelowTheFold(unittest.TestCase):
                     return len(cards), len(fit)
 
         for h in (46, 36, 30, 24):
-            with self.subTest(высота=h):
+            with self.subTest(height=h):
                 total, fit = asyncio.run(go(h))
                 self.assertEqual(fit, total,
-                                 f"на высоте {h} видно {fit} из {total} карточек")
+                                 f"at height {h}, only {fit} of {total} picker cards fit")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — дерево не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping widget-tree tests")
 class TestNoDuplicateIds(unittest.TestCase):
-    """Двух виджетов с одним id быть не должно.
-
-    Стоило один раз занять чужое имя (`journal-side` уже принадлежал левой
-    колонке каталога шириной 32) — и правило `width: auto`, написанное для
-    новой подсказки, прилетело в колонку. Вывод журнала схлопнулся до двух
-    символов, развёрнутая панель показывала пустой экран. Ни один тест этого
-    не заметил: за край ничего не уехало, исключений не было, всё «работало».
-
-    Проверка дешёвая и ловит целый класс таких поломок разом.
-    """
+    """Widget IDs must be globally unique across every screen and maximized panel."""
 
     @staticmethod
     def _dupes(mode):
@@ -3923,11 +3469,11 @@ class TestNoDuplicateIds(unittest.TestCase):
 
     def test_every_screen_has_unique_ids(self):
         for mode in ("core", "lab", "mind", "code"):
-            with self.subTest(режим=mode):
+            with self.subTest(mode=mode):
                 self.assertEqual(self._dupes(mode), {})
 
     def test_maximized_panels_too(self):
-        """Разворот панели поднимает в дерево то, что обычно свёрнуто."""
+        """Maximizing each LAB panel must not introduce duplicate widget IDs."""
         from vliw.tui.widgets import Panel
 
         async def go():
@@ -3946,25 +3492,20 @@ class TestNoDuplicateIds(unittest.TestCase):
                             if node.id:
                                 seen[node.id] = seen.get(node.id, 0) + 1
                         dupes = {k: v for k, v in seen.items() if v > 1}
-                        assert not dupes, f"{pid}: повторы {dupes}"
+                        assert not dupes, f"{pid}: duplicate widget IDs {dupes}"
                         sc.minimize()
                         await pilot.pause()
 
         asyncio.run(go())
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestAgentKeyPaste(unittest.TestCase):
-    """Вставка API-ключа прямо в АГЕНТЕ: просьба при входе, приём, маскировка.
-
-    Только экран АГЕНТА: панельные чаты и построчный режим отвечают офлайн
-    молча, как раньше. Ключ нигде не светится: ни в ленте, ни в истории
-    строки (↑), только маска в подтверждении.
-    """
+    """Pasting an API key in AGENT: prompt on entry, session-only storage, masking."""
 
     @staticmethod
     def _isolated():
-        """Временный `.env` + пустое окружение + check без сети."""
+        """Isolate `.env`, clear API env vars, and stub network checks."""
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
@@ -3993,15 +3534,14 @@ class TestAgentKeyPaste(unittest.TestCase):
                         return sc._awaiting_key, bar.input.placeholder
 
         awaiting, placeholder = asyncio.run(go())
-        self.assertTrue(awaiting, "без ключа АГЕНТ должен просить ключ")
-        self.assertIn("API-ключ", placeholder)
+        self.assertTrue(awaiting, "AGENT must prompt for an API key when none is configured")
+        self.assertIn("API key", placeholder)
 
     def test_pasted_key_saved_masked_and_not_in_history(self):
         key = "k" * 32
 
-        # Печатаем через настоящую строку ввода — тем же путём, что человек:
-        # строка падает в history ДО обработки, вычищать её — работа экрана.
-        # Ключ — только в память сессии: файла быть не должно вообще.
+        # Submit through the real prompt bar so input history scrubbing is exercised;
+        # the key stays in session memory only and must never be written to disk.
         async def go():
             import os as _os
             from pathlib import Path
@@ -4029,19 +3569,15 @@ class TestAgentKeyPaste(unittest.TestCase):
                         }
 
         got = asyncio.run(go())
-        self.assertFalse(got["awaiting"], "после вставки ждущий режим снят")
+        self.assertFalse(got["awaiting"], "key-awaiting state did not clear after paste")
         self.assertEqual(got["env_key"], key)
-        self.assertFalse(got["left_file"], "вставка не должна писать на диск")
-        self.assertNotIn(key, got["history"], "ключ остался в истории ↑")
+        self.assertFalse(got["left_file"], "pasting an API key must not write to disk")
+        self.assertNotIn(key, got["history"], "raw API key leaked into prompt history")
         self.assertFalse(any(key in t for t in got["dialog"]),
-                         "ключ попал в переписку")
+                         "raw API key leaked into the conversation feed")
 
     def test_command_output_lands_in_dialog(self):
-        """Команда в АГЕНТЕ отвечает пузырём в диалог: консоли здесь нет.
-
-        GIT-панель убрана осознанно, и прятать отчёт команды некуда —
-        `/scenarios` (чистый список, без счёта) обязан оказаться в ленте.
-        """
+        """Slash commands in AGENT render their output as bubbles in the dialog feed."""
         async def go():
             from rich.text import Text as _Text
 
@@ -4078,23 +3614,19 @@ class TestAgentKeyPaste(unittest.TestCase):
                         await pilot.pause()
                         sc = app.screen
                         self.assertTrue(sc._awaiting_key)
-                        await pilot.press(*"почему медленно?", "enter")
+                        await pilot.press(*"why is makespan high?", "enter")
                         await app.workers.wait_for_complete()
                         await pilot.pause()
                         return sc._awaiting_key, len(session.dialog)
 
         awaiting, n = asyncio.run(go())
-        self.assertFalse(awaiting, "вопрос вместо ключа снимает ожидание")
-        self.assertGreater(n, 0, "вопрос ушёл в диалог, а не потерялся")
+        self.assertFalse(awaiting, "asking a question instead of a key must exit key-awaiting mode")
+        self.assertGreater(n, 0, "question must be delivered to the dialog feed")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestModelCatalogPanel(unittest.TestCase):
-    """Окно каталога моделей в АГЕНТЕ: мини-панель, разворот, клик применяет.
-
-    Всё только на сессию: ни один тест не пишет на диск, сеть глушится
-    (каталог — curated или мок).
-    """
+    """Model catalog in AGENT: compact panel, maximized view, click-to-select (session-only)."""
 
     @staticmethod
     def _isolated():
@@ -4113,9 +3645,7 @@ class TestModelCatalogPanel(unittest.TestCase):
 
     @staticmethod
     async def _click_center(pilot, widget, times: int = 1):
-        # Строка может быть ниже видимой области (каталог длинный):
-        # подматываем к ней. Клик — относительно виджета (так считает сам
-        # Pilot), а не экрана: координаты родителя здесь врут.
+        # Scroll the target row into view and click relative to the widget.
         try:
             from textual.containers import VerticalScroll as _VS
 
@@ -4180,7 +3710,7 @@ class TestModelCatalogPanel(unittest.TestCase):
         self.assertEqual(wide, "model")
         self.assertIn("mprov:deepseek", tools)
         self.assertTrue(any(t.startswith("model:") for t in tools),
-                        "в каталоге нет строк моделей")
+                        "model catalog rendered zero rows")
 
     def test_click_model_applies_and_closes(self):
         async def go():
@@ -4228,7 +3758,7 @@ class TestModelCatalogPanel(unittest.TestCase):
         environ, wide, maximized = asyncio.run(go())
         self.assertEqual(environ.get("NEX_PROVIDER"), "deepseek")
         self.assertEqual(environ.get("NEX_MODEL"), "deepseek-chat")
-        self.assertIsNone(maximized, "после клика окно закрывается")
+        self.assertIsNone(maximized, "catalog overlay should close after selecting a model")
 
     def test_key_field_adopts_without_disk(self):
         async def go():
@@ -4263,8 +3793,8 @@ class TestModelCatalogPanel(unittest.TestCase):
 
         environ, cleared, left_file = asyncio.run(go())
         self.assertEqual(environ.get("DEEPSEEK_API_KEY"), "sk-test-0123456789abcdef")
-        self.assertEqual(cleared, "", "ключ не остаётся в поле ввода")
-        self.assertFalse(left_file, "каталог не пишет на диск")
+        self.assertEqual(cleared, "", "API key input was not cleared after submit")
+        self.assertFalse(left_file, "catalog key entry must not write to disk")
 
     def test_free_first_with_mocked_catalog(self):
         async def go():
@@ -4311,26 +3841,19 @@ class TestModelCatalogPanel(unittest.TestCase):
                         await pilot.pause()
                         sc = app.screen
                         self.assertTrue(sc._awaiting_key)
-                        await pilot.press(*"почему медленно?", "enter")
+                        await pilot.press(*"why is makespan high?", "enter")
                         await app.workers.wait_for_complete()
                         await pilot.pause()
                         return sc._awaiting_key, len(session.dialog)
 
         awaiting, n = asyncio.run(go())
-        self.assertFalse(awaiting, "вопрос вместо ключа снимает ожидание")
-        self.assertGreater(n, 0, "вопрос ушёл в диалог, а не потерялся")
+        self.assertFalse(awaiting, "asking a question instead of a key must exit key-awaiting mode")
+        self.assertGreater(n, 0, "question must be delivered to the dialog feed")
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — полноэкранный режим не проверяем")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed — skipping full-screen TUI tests")
 class TestHeadquartersPanel(unittest.TestCase):
-    """ШТАБ — отдельный главный блок, ПОДКЛЮЧЕНИЕ — компактный мини-блок.
-
-    Штаб раньше жил внутри разворота МОДЕЛИ: без подключённой модели его
-    было не найти, а мини-панель не умела ни выбрать API, ни принять ключ.
-    Теперь штаб виден всегда (сводка + поле задачи), подключение чинится
-    в мини (кнопки API + ключ), а каталог с поиском-фильтром — только
-    в развороте. Всё только на сессию, сеть глушится моком.
-    """
+    """HQ is a standalone main panel while CONNECTION stays a compact mini-panel."""
 
     @staticmethod
     def _isolated():
@@ -4380,8 +3903,8 @@ class TestHeadquartersPanel(unittest.TestCase):
 
         topic, text, has_task = asyncio.run(go())
         self.assertEqual(topic, "hq")
-        self.assertIn("нет подключений", text)
-        self.assertTrue(has_task, "поле задачи штаба видно без разворота")
+        self.assertIn("no connections", text)
+        self.assertTrue(has_task, "HQ mission input must be visible without maximizing")
 
     def test_hq_expands_with_missions(self):
         async def go():
@@ -4428,7 +3951,7 @@ class TestHeadquartersPanel(unittest.TestCase):
                         r = note.render()
                         return r.plain if isinstance(r, _Text) else str(r)
 
-        self.assertIn("подключи", asyncio.run(go()))
+        self.assertIn("connect", asyncio.run(go()))
 
     def test_hqclear_keeps_working(self):
         async def go():
@@ -4474,7 +3997,7 @@ class TestHeadquartersPanel(unittest.TestCase):
                         return sc._wide, sc._model_prov, marks
 
         wide, prov, marks = asyncio.run(go())
-        self.assertEqual(wide, "", "выбор API не разворачивает панель")
+        self.assertEqual(wide, "", "picking an API in CONNECTION must not maximize the panel")
         self.assertEqual(prov, "gemini")
         self.assertIn("*", marks["mprov:gemini"])
 
@@ -4511,8 +4034,8 @@ class TestHeadquartersPanel(unittest.TestCase):
         environ, cleared, left_file = asyncio.run(go())
         self.assertEqual(environ.get("MISTRAL_API_KEY"),
                          "sk-test-0123456789abcdef")
-        self.assertEqual(cleared, "", "ключ не остаётся в поле ввода")
-        self.assertFalse(left_file, "мини-подключение не пишет на диск")
+        self.assertEqual(cleared, "", "API key input was not cleared after submit")
+        self.assertFalse(left_file, "mini CONNECTION key paste must not write to disk")
 
     def test_filter_help_says_it_filters(self):
         async def go():
@@ -4533,7 +4056,7 @@ class TestHeadquartersPanel(unittest.TestCase):
                         return str(sc.query_one("#model-filter-help",
                                                 Static).render())
 
-        self.assertIn("фильтр", asyncio.run(go()))
+        self.assertIn("filter", asyncio.run(go()))
 
 
 if __name__ == "__main__":

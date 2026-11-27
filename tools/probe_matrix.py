@@ -1,39 +1,7 @@
-"""Переснять матрицу портов у ассемблера и сверить с vliw/core/model.py.
+"""Re-probe the e2k port capability matrix and pair bans against the assembler.
 
-Это тот же приём, которым матрица снималась изначально (см. шапку
-`vliw/core/model.py`), но выполненный целиком автоматически и за секунды:
-для каждой пары (операция, канал) собирается минимальная широкая команда с
-этой операцией ровно в этом канале и отдаётся ассемблеру. Если аппаратно так
-нельзя, `as` отвечает прямым отказом:
-
-    Error: `muls' cannot be encoded in ALC2
-
-Это ответ про САМО ЖЕЛЕЗО — про кодировку широкой команды, — а не про то, что
-решил сделать планировщик компилятора. Тем и ценен: вывод `lcc -O3` показывает
-лишь то, что компилятор ЗАХОТЕЛ, и именно на этом первая версия модели
-ошиблась, приписав умножителю монополию.
-
-Зачем гонять повторно, если матрица уже снята: она — источник истины для
-генератора датасета, валидатора и профиля e2k-v6-measured. Проверка стоит
-секунд, а расхождение обесценивает всё, что на ней построено.
-
-ВТОРАЯ ПРОБА — СОЧЕТАНИЯ. Матрица портов отвечает на вопрос «исполнима ли
-операция в этом канале», по одной операции за раз. Но у машины есть и второй,
-независимый класс ограничений: две операции, каждая из которых по отдельности
-законна, вместе в одну широкую команду не кодируются. Тем же приёмом (собрать
-и посмотреть, примет ли ассемблер) перебираются все пары — и находятся ровно
-два запрета, оба на «швах» между кластерами каналов. Подробности и вывод из
-этого — у EXPECTED_COMBO_BANS ниже.
-
-    python tools/probe_matrix.py            # снять и сверить (матрица + сочетания)
-    python tools/probe_matrix.py --show     # плюс таблица целиком
-
-То же самое одной командой инструмента: `python -m vliw verify`.
-
-Компилятор ставится не в проект: путь ищется по обычным местам, переопределяется
-переменной окружения `E2K_AS`. Если ассемблера нет — скрипт не падает, а
-сообщает, что проверить нечем (код возврата 0: на машине без тулчейна это не
-провал сборки, а отсутствие возможности).
+    python tools/probe_matrix.py            # probe and compare with model.py
+    python tools/probe_matrix.py --show     # also print full matrix
 """
 
 from __future__ import annotations
@@ -53,14 +21,14 @@ if str(_ROOT) not in sys.path:
 
 from vliw.core.model import E2K_V6_MEASURED as MODEL  # noqa: E402
 
-# Класс операции модели → мнемоника lcc и форма операндов. Мнемоники ровно те,
-# что стоят в шапке model.py: разночтения между «моделью» и «железом» не должно
-# возникать из-за того, что проверили не ту инструкцию.
+# Model op class -> lcc mnemonic template ({c}=channel, {d}=dest register).
 #
-# `{c}` — номер канала, `{d}` — регистр-приёмник. Приёмник параметризован ради
-# попарной пробы ниже: две операции в одной широкой команде должны писать в
-# РАЗНЫЕ регистры, иначе ассемблер откажет по конфликту приёмника, и это
-# неотличимо от запрета на само сочетание.
+#
+#
+# Separate dest registers prevent false write-port conflicts in pair probes.
+#
+#
+#
 OPS = {
     "ADD":   "adds,{c}\t%r3, %r4, %r{d}",
     "SUB":   "subs,{c}\t%r3, %r4, %r{d}",
@@ -69,45 +37,45 @@ OPS = {
     "MUL":   "muls,{c}\t%r3, %r4, %r{d}",
     "DIV":   "sdivs,{c}\t%r3, %r4, %r{d}",
     "LOAD":  "ldw,{c}\t0x0, [ _f64,_lts0 a ], %r{d}",
-    # У записи форма операндов другая: база, смещение, значение — и значение
-    # обязано быть регистром. С литеральным адресом, как у загрузки, ассемблер
-    # отвечает «Register should be specified for SRC3», то есть отказывает по
-    # синтаксису, а не по каналу. Проверка на такой отказ ниже не зря: иначе
-    # опечатка в мнемонике выглядела бы как «порт не поддерживает операцию».
+    # STORE requires a register for SRC3; syntax errors are separated from channel bans.
+    #
+    #
+    #
+    #
     "STORE": "stw,{c}\t%dr2, 0x0, %r{d}",
 }
 
-# Операции, которыми представлен каждый класс при попарной пробе. ADD берётся
-# за всю простую арифметику (SUB/AND/SHL кодируются так же и дали бы те же
-# ответы) — иначе перебор раздувается вчетверо без новой информации.
+# Representative ops per class for pairwise bundle probing.
+#
+#
 PAIR_REPS = ("ADD", "MUL", "DIV", "LOAD", "STORE")
 
-# ОЖИДАЕМЫЕ запреты на СОЧЕТАНИЯ операций в одной широкой команде.
+# EXPECTED pair bans in a single wide instruction (cross-cluster seams).
 #
-# Матрица портов отвечает на вопрос «исполнима ли операция в этом канале».
-# Но у e2k есть и ВТОРОЙ, независимый класс ограничений: две операции, каждая
-# из которых по отдельности законна в своём канале, вместе в одну широкую
-# команду не кодируются. Ассемблер знает ровно два таких запрета:
+#
+#
+#
+#
 #
 #     the combination of STORE in ALC2 with LOAD in ALC3 is prohibited
 #     the combination of STORE in ALC5 with LOAD in ALC0 is prohibited
 #
-# Оба лежат на «швах» между кластерами каналов (ALC0-2 и ALC3-5): запись в
-# последнем канале одного кластера не сочетается с загрузкой в первом канале
-# соседнего. Это и есть кластерность машины — но проявленная как СТРУКТУРНЫЙ
-# ЗАПРЕТ в широкой команде, а не как межкластерная задержка.
+# Both lie on seams between channel clusters ALC0-2 and ALC3-5.
 #
-# ВНИМАНИЕ: в vliw/core/model.py этого ограничения СЕЙЧАС НЕТ — модель знает
-# только матрицу «порт → операции». Расхождение известное и намеренно
-# зафиксировано здесь, а не замолчано: см. раздел в examples/probes/README.md.
+#
+#
+#
+# NOTE: vliw/core/model.py intentionally omits pair bans (see examples/probes/README.md).
+#
+#
 EXPECTED_COMBO_BANS: set[tuple[tuple[str, int], tuple[str, int]]] = {
     (("STORE", 2), ("LOAD", 3)),
     (("STORE", 5), ("LOAD", 0)),
 }
 
-# Минимальная законная программа: пролог (setwd), одна проверяемая широкая
-# команда, эпилог. Меньше — ассемблер ругается уже на структуру, и отказ
-# нельзя будет отличить от отказа по каналу.
+# Minimal valid assembly wrapper: prologue, one wide instruction, epilogue.
+#
+#
 SKELETON = """\
 \t.text
 \t.global\tmain
@@ -156,7 +124,7 @@ def find_as() -> str | None:
 
 
 def _assemble(as_bin: str, body: str, tmp: Path, tag: str) -> tuple[bool, str]:
-    """Собрать одну широкую команду. Возвращает (принято, текст отказа)."""
+    """Assemble one wide instruction; return `(accepted, error_text)`."""
     src = tmp / f"{tag}.s"
     src.write_text(SKELETON.format(body=body), encoding="utf-8")
     r = subprocess.run([as_bin, "-mcpu=elbrus-v6", str(src), "-o", str(src.with_suffix(".o"))],
@@ -169,26 +137,21 @@ def _assemble(as_bin: str, body: str, tmp: Path, tag: str) -> tuple[bool, str]:
 
 
 def probe(as_bin: str, op: str, channel: int, tmp: Path) -> tuple[bool, str]:
-    """Принимает ли канал эту операцию. Возвращает (принимает, текст отказа)."""
+    """Check if channel accepts this op; return `(accepted, error_text)`."""
     body = "\t  " + OPS[op].format(c=channel, d=5)
     ok, msg = _assemble(as_bin, body, tmp, f"{op}_{channel}")
     if ok:
         return True, ""
-    # Отказ именно по кодировке канала, а не по синтаксису — иначе мы бы
-    # «доказали» отсутствие порта опечаткой в мнемонике.
+    # Ensure rejection is a channel-encoding error, not a syntax error.
+    #
     if "cannot be encoded in ALC" not in msg:
-        return False, f"НЕ ПРО КАНАЛ: {msg}"
+        return False, f"NOT A CHANNEL ERROR: {msg}"
     return False, msg
 
 
 def probe_pair(as_bin: str, a: tuple[str, int], b: tuple[str, int],
                tmp: Path) -> tuple[bool, str]:
-    """Собираются ли две операции в ОДНУ широкую команду.
-
-    Обе по отдельности законны в своих каналах (это проверено выше), каналы
-    разные, приёмники разные — поэтому отказ может быть только про само
-    сочетание.
-    """
+    """Check if two individually valid ops assemble together in one wide instruction."""
     (opA, cA), (opB, cB) = a, b
     body = ("\t  " + OPS[opA].format(c=cA, d=5) + "\n"
             "\t  " + OPS[opB].format(c=cB, d=6))
@@ -197,22 +160,19 @@ def probe_pair(as_bin: str, a: tuple[str, int], b: tuple[str, int],
 
 def probe_combinations(as_bin: str, measured: dict[str, tuple[int, ...]],
                        tmp: Path) -> tuple[set, list[str]]:
-    """Полный попарный перебор: какие сочетания ассемблер не кодирует.
-
-    Возвращает (найденные запреты, отказы не про сочетание).
-    """
+    """Exhaustive pairwise probe; returns `(banned_pairs, non_combo_errors)`."""
     cells = [(op, c) for op in PAIR_REPS for c in measured.get(op, ())]
     bans: set[tuple[tuple[str, int], tuple[str, int]]] = set()
     odd: list[str] = []
     for a, b in itertools.combinations(cells, 2):
         if a[1] == b[1]:
-            continue        # один канал двумя операциями — тривиально нельзя
+            continue        # two ops on the same channel is trivially impossible
         ok, msg = probe_pair(as_bin, a, b, tmp)
         if ok:
             continue
         if "prohibited" in msg or "combination" in msg:
-            # Порядок в паре нормализуем: запрет симметричен, а ассемблер
-            # называет стороны в своём порядке (STORE раньше LOAD).
+            # Normalize pair order since bans are symmetric.
+            #
             bans.add(tuple(sorted((a, b))))
         else:
             odd.append(f"{a[0]},{a[1]} + {b[0]},{b[1]}: {msg}")
@@ -220,19 +180,15 @@ def probe_combinations(as_bin: str, measured: dict[str, tuple[int, ...]],
 
 
 def run(show: bool = False) -> bool:
-    """Переснять и сверить матрицу. True — совпадает (или ассемблера нет).
-
-    Вынесено из main() отдельно, чтобы `vliw/cli.py` (команда `/verify`) могло
-    вызвать ровно ту же проверку в процессе, без второго питона subprocess'ом.
-    """
+    """Probe and verify capability matrix against model.py (True if match or no assembler)."""
     as_bin = find_as()
     if not as_bin:
-        print("ассемблера e2k нет (ни E2K_AS, ни ~/e2k-toolchain, ни в PATH) — "
-              "проверить матрицу нечем")
-        print("это не провал: на машине без тулчейна модель просто не "
-              "перепроверяется, источником истины остаётся vliw/core/model.py")
+        print("e2k assembler not found (checked E2K_AS, ~/e2k-toolchain, PATH) — "
+              "cannot probe capability matrix")
+        print("not an error: without the toolchain, vliw/core/model.py remains "
+              "the source of truth")
         return True
-    print(f"ассемблер: {as_bin}\nпрофиль:   {MODEL.name}, портов {MODEL.width}\n")
+    print(f"assembler: {as_bin}\nprofile:   {MODEL.name}, {MODEL.width} ports\n")
 
     width = MODEL.width
     measured: dict[str, tuple[int, ...]] = {}
@@ -246,13 +202,13 @@ def run(show: bool = False) -> bool:
                 accepted, msg = probe(as_bin, op, ch, tmp)
                 if accepted:
                     ok.append(ch)
-                elif msg.startswith("НЕ ПРО КАНАЛ"):
+                elif msg.startswith("NOT A CHANNEL ERROR"):
                     broken.append(f"{op},{ch}: {msg}")
             measured[op] = tuple(ok)
 
     if broken:
-        print("!! ассемблер отказал не по кодировке канала — проверка "
-              "недостоверна для этих пар:")
+        print("!! assembler rejected for non-channel reason — probe "
+              "inconclusive for these pairs:")
         for b in broken[:8]:
             print("   ", b)
         print()
@@ -269,59 +225,59 @@ def run(show: bool = False) -> bool:
     for op in OPS:
         model_ch = MODEL.channels_for(op)
         if measured[op] != model_ch:
-            diffs.append(f"{op}: ассемблер {measured[op]}, model.py {model_ch}")
+            diffs.append(f"{op}: assembler {measured[op]}, model.py {model_ch}")
 
     if diffs:
-        print("РАСХОЖДЕНИЯ (истина — ассемблер, править model.py):")
+        print("MISMATCHES (assembler is ground truth, update model.py):")
         for d in diffs:
             print("   ", d)
         return False
 
-    print(f"матрица портов совпадает с vliw/core/model.py по всем "
-          f"{len(OPS)}×{width} парам")
-    print("(латентности и occupancy этим способом не проверяются: они меряются "
-          "цепочками зависимых и потоками независимых операций, см. "
+    print(f"port matrix matches vliw/core/model.py across all "
+          f"{len(OPS)}x{width} pairs")
+    print("(latencies and occupancy are not probed here; they are measured via "
+          "dependent chains and independent bursts, see "
           "examples/probes/README.md)")
 
     return _report_combinations(as_bin, measured)
 
 
 def _report_combinations(as_bin: str, measured: dict[str, tuple[int, ...]]) -> bool:
-    """Второй класс ограничений: запреты на СОЧЕТАНИЯ в широкой команде."""
+    """Probe and report wide-instruction pair bans."""
     with tempfile.TemporaryDirectory(prefix="e2kpairs-") as td:
         bans, odd = probe_combinations(as_bin, measured, Path(td))
 
     want = {tuple(sorted(p)) for p in EXPECTED_COMBO_BANS}
-    print(f"\nсочетания в широкой команде: найдено запретов {len(bans)}")
+    print(f"\nwide-instruction pair bans found: {len(bans)}")
     for a, b in sorted(bans):
-        print(f"    {a[0]},{a[1]} + {b[0]},{b[1]} — вместе не кодируются")
+        print(f"    {a[0]},{a[1]} + {b[0]},{b[1]} — cannot co-encode")
 
     if odd:
-        print("!! отказ не про сочетание — проверка недостоверна для этих пар:")
+        print("!! non-combo error — probe inconclusive for these pairs:")
         for o in odd[:8]:
             print("   ", o)
 
     if bans != want:
-        print("\nРАСХОЖДЕНИЕ с ожидаемым набором запретов "
-              "(EXPECTED_COMBO_BANS в этом файле):")
+        print("\nMISMATCH with expected ban set "
+              "(EXPECTED_COMBO_BANS in this file):")
         for p in sorted(want - bans):
-            print(f"    ожидали, но ассемблер разрешает: {p}")
+            print(f"    expected ban, but assembler allows: {p}")
         for p in sorted(bans - want):
-            print(f"    НОВЫЙ запрет, которого мы не знали: {p}")
+            print(f"    NEW previously unknown ban: {p}")
         return False
 
-    print("    совпадает с ожидаемым набором")
-    print("    ВАЖНО: в vliw/core/model.py этих запретов НЕТ — модель знает "
-          "только матрицу «порт → операции».")
-    print("    Расхождение известное, не забытое: см. examples/probes/README.md, "
-          "раздел про сочетания.")
+    print("    matches expected ban set")
+    print("    NOTE: vliw/core/model.py omits pair bans (models port->ops only)."
+          "")
+    print("    Known gap documented in examples/probes/README.md."
+          "")
     return True
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--show", action="store_true", help="напечатать матрицу целиком")
+    ap.add_argument("--show", action="store_true", help="print full capability matrix")
     args = ap.parse_args(argv)
     return 0 if run(show=args.show) else 1
 

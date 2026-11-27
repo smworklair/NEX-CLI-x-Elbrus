@@ -1,99 +1,88 @@
-# nnl_vliw: NNL-ядра выбирают группу портфеля
+# `nnl_vliw`: NNL Cores Selecting a Portfolio Group
 
-> **Статус: эксперимент.** В CLI не включён. Рабочая NNL-обёртка планировщика — `nex_core/`
-> (см. [`../docs/TINY.md`](../docs/TINY.md)).
+> **Status: experiment.** Not wired into the CLI. The active NNL scheduler wrapper is `nex_core/` (see [`../docs/TINY.md`](../docs/TINY.md)).
 
-Проверка архитектуры NNL (Neural Network Lego) на задаче планировщика VLIW для Эльбруса.
-Обучены два ядра по два блока (~100 тыс. и ~200 тыс. чисел). Ядра отвечают, какая группа портфеля
-крошек достигает лучшего результата на графе, и проверяют друг друга.
+Evaluation of the NNL (Neural Network Lego) architecture on Elbrus VLIW scheduling.
+Two cores of two blocks each (~100K and ~200K parameters) were trained to predict which TINY AI portfolio group achieves the best result on a graph, and to cross-check each other.
 
-**Короткий итог.** Технически NNL работает: блоки собираются, проходят линтер, вставка не меняет соседей.
-По качеству ядра на уровне обычных классификаторов, выбор группы слабый, перекрёстная проверка
-не лучше случайного отказа. Для боевого пути (`TinyFlashScheduler`) это не нужно.
+**Bottom line.** Technically, NNL works: blocks assemble cleanly, pass the linter, and hot-plugging does not perturb neighbors. In quality, the cores match standard classifiers on the same features, group selection is weak, and cross-core verification performs no better than random abstention. The production path (`TinyFlashScheduler`) does not need this.
 
-## Как NNL ложится на задачу
+## How NNL Maps to the Task
 
-- **Композиция одна.** Ядро — матплата с блоками; ответ даёт общий softmax по «ничего» и ответам блоков.
-  «Ничего» означает «не знаю, запусти портфель целиком».
-- **Блоки делят область графа.** Ядро А — по делителям, ядро Б — по памяти.
-- **Шина.** Блок пишет понятие своей области, второй читает его на такте 2.
-- **Ядро проверяет ядро.** Разные разбиения, размеры токена (48 и 64) и соль хеширования.
-- **Язык.** Граф превращается в мешок токенов: типы операций, критический путь, ресурсная граница,
-  ширина, рёбра, операции на критическом пути. Ответ графа язык не видит — есть тест.
+- **Single composition.** Each core is a motherboard with blocks; output is a joint softmax over "none" and block answers. "None" means "unsure, run the full portfolio".
+- **Blocks partition the graph domain.** Core A partitions by dividers; Core B partitions by memory operations.
+- **Bus.** One block writes its domain concept; the second reads it on cycle 2.
+- **Cross-core check.** Different partitions, token dimensions (48 vs. 64), and hashing salts.
+- **Language.** A graph is encoded as a bag of tokens: op types, critical path, resource bound, width, edges, and operations on the critical path. A unit test verifies the token language leaks no ground-truth label.
 
-## Что лежит в папке
+## Directory Layout
 
 ```text
 nnl_vliw/
-  NNL/ архитектуры/ обучение/ СТАНДАРТ_БЛОКА.md   копия ядра NNL, без правок
-  язык.py           граф → токены и понятия
-  ядра.py           два ядра: области, размеры, ответы
-  данные.py         метки и токены → строки обучения
-  обучить.py        обучение
-  оценка.py         загрузка через Матплату, композиция, политики
-  база_sklearn.py   контрольная база: обычные классификаторы
-  блоки/А, блоки/Б  обученные блоки: паспорт + веса
-  блоки_помощь/     блок для экрана-помощника
-  результаты/       оценка по трём сидам и база sklearn
-tools/portfolio_labels.py   метки групп портфеля
-tools/gen_graphs.py         сырые графы
-tests/test_nnl_vliw.py      тесты
+  NNL/ архитектуры/ обучение/ СТАНДАРТ_БЛОКА.md   unmodified copy of NNL core
+  язык.py           graph -> tokens and concepts
+  ядра.py           two cores: domains, dimensions, answers
+  данные.py         labels and tokens -> training rows
+  обучить.py        training
+  оценка.py         loading via Motherboard, composition, policies
+  база_sklearn.py   control baseline: standard classifiers
+  блоки/А, блоки/Б  trained blocks: passport + weights
+  блоки_помощь/     block for the setup assistant screen
+  результаты/       evaluation across 3 seeds and sklearn baseline
+tools/portfolio_labels.py   portfolio group labels
+tools/gen_graphs.py         raw graphs
+tests/test_nnl_vliw.py      tests
 ```
 
-## Данные
+## Data
 
-Группы от дешёвой к дорогой: `greedy`, `prio`, `defer`, `hold`, `rule`, `beam`.
-Для каждого графа считается лучший makespan каждой группы. Метка — самая дешёвая группа,
-достигающая лучшего результата портфеля.
+Groups ordered from cheap to expensive: `greedy`, `prio`, `defer`, `hold`, `rule`, `beam`.
+For each graph, the best makespan of every group is computed. The label is the cheapest group achieving the full portfolio's best makespan.
 
-Обучение: 64 100 графов, из них 2 502 трудных. В пул идут все трудные и столько же жадных.
-Проверка: `eval_hard` (300, 267 трудных), `eval_wide` (300, жадного хватает везде),
-`eval_real` (947 настоящих блоков, 43 трудных). На настоящем коде ядра не обучались.
+Training: 64,100 graphs, 2,502 of which are hard. The training pool includes all hard graphs plus an equal number of greedy-optimal graphs.
+Evaluation: `eval_hard` (300, 267 hard), `eval_wide` (300, greedy suffices everywhere), `eval_real` (947 real blocks, 43 hard). The cores were never trained on real code.
 
-## Результаты
+## Results
 
-Лишние такты относительно полного портфеля, меньше — лучше:
+Excess cycles relative to the full portfolio (lower is better):
 
-| `eval_hard`, 267 из 300 трудных | лишних тактов |
+| `eval_hard`, 267 of 300 hard | excess cycles |
 |---|---:|
-| всегда жадный | 275 |
-| ядро А | 97 / 89 / 122 |
-| ядро Б | 148 / 118 / 120 |
-| логрегрессия / бустинг / лес | 130 / 132 / 176 |
-| перекрёсток А и Б | 66 / 62 / 70 |
-| случайный отказ при тех же долях | 55 / 57 / 79 |
+| always greedy | 275 |
+| Core A | 97 / 89 / 122 |
+| Core B | 148 / 118 / 120 |
+| logistic regression / boosting / random forest | 130 / 132 / 176 |
+| cross-check A & B | 66 / 62 / 70 |
+| random abstention at same rates | 55 / 57 / 79 |
 
-| `eval_real`, 43 из 947 трудных | лишних тактов |
+| `eval_real`, 43 of 947 hard | excess cycles |
 |---|---:|
-| всегда жадный | 47 |
-| правило «есть DIV → портфель» | 41 |
-| ядро А | 41 / 39 / 38 |
-| ядро Б | 45 / 44 / 46 |
-| перекрёсток ядер | 33 / 34 / 33 |
-| случайный отказ | 31 / 28 / 25 |
+| always greedy | 47 |
+| rule "has DIV -> full portfolio" | 41 |
+| Core A | 41 / 39 / 38 |
+| Core B | 45 / 44 / 46 |
+| cross-check A & B | 33 / 34 / 33 |
+| random abstention | 31 / 28 / 25 |
 
-Макро-точность на dev по шести группам (случайный ответ — 0,17): ядро А ~0,375, ядро Б ~0,34,
-логрегрессия 0,390. На `eval_wide` всё как у жадного.
+Macro accuracy on dev across six groups (random = 0.17): Core A ~0.375, Core B ~0.34, logistic regression 0.390. On `eval_wide`, all methods tie greedy.
 
-## Выводы
+## Conclusions
 
-- **NNL-часть работает.** Матплата проверяет sha256, подмена весов отвергается, линтер принимает блоки.
-- **Качество на уровне обычных классификаторов.** Ради качества добавлять NNL здесь нет оснований.
-- **Выбор группы по таким признакам слабый:** ~0,37 при шести группах.
-- **На настоящем коде почти нет эффекта:** из 947 графов жадного не хватает на 43,
-  ядра возвращают меньше пятой части этих тактов.
-- **Перекрёстная проверка не работает как сигнал ошибки:** при согласии ядро А право в 62% случаев,
-  при расхождении — в 77%; по тактам перекрёсток хуже случайного отказа в 5 из 6 случаев.
+- **The NNL machinery works.** Motherboard verifies SHA-256, rejects tampered weights, and blocks pass the linter.
+- **Quality matches standard classifiers.** There is no quality-based case for adding NNL here.
+- **Group selection from these features is weak:** ~0.37 across six groups.
+- **Negligible effect on real code:** greedy misses optimal on only 43 of 947 graphs, and the cores recover less than a fifth of those lost cycles.
+- **Cross-core verification does not signal errors:** when cores agree, Core A is right 62% of the time; when they disagree, 77%. In excess cycles, cross-checking loses to random abstention in 5 of 6 cases.
 
-## Ограничения
+## Limitations
 
-- Группы портфеля частично взаимозаменяемы; метка «самая дешёвая» зависит от порядка групп.
-- Только три сида, один набор настоящих блоков, 43 трудных графа.
-- Такты модельные, не железо; `loop_mode` не моделируется.
-- Время работы ядра не измерялось — только качество выбора.
-- Метки обучения в репозитории не лежат (десятки МБ).
+- Portfolio groups partially overlap; the "cheapest" label depends on group ordering.
+- Only three seeds, one real-block dataset, 43 hard graphs.
+- Cycles are model-based, not hardware; `loop_mode` is not modeled.
+- Core inference latency was not benchmarked — only selection quality.
+- Training labels are excluded from the repository (tens of MB).
 
-## Воспроизведение
+## Reproducing
 
 ```bash
 python3 tools/portfolio_labels.py eval_hard.jsonl eval_wide.jsonl eval_real.jsonl --out labels/
@@ -103,19 +92,14 @@ python3 tools/gen_graphs.py --n 24000 --out labels/train_gen.jsonl
 python3 tools/portfolio_labels.py labels/train_gen.jsonl --out labels/
 python3 -m nnl_vliw.обучить --метки labels/ --выход /tmp/блоки --зерно 1
 python3 -m nnl_vliw.оценка  --метки labels/ --блоки /tmp/блоки --json /tmp/оценка.json
-python3 -m nnl_vliw.база_sklearn --метки labels/      # нужен scikit-learn
+python3 -m nnl_vliw.база_sklearn --метки labels/      # requires scikit-learn
 python3 -m unittest tests.test_nnl_vliw
 ```
 
-## Блок помощи
+## Help Block
 
-`nnl_vliw/блоки_помощь/Помощь_ассистент` понимает вопросы об установке и работе NEX CLI:
-548 вопросов, 13 тем + беседа + «не тема», dev-точность 0,655. Инференс —
-`vliw/help_nnl.py` на чистом Python по копии весов `vliw/help_weights.json`.
-Переобучить: `python tools/train_help_block.py`.
+`nnl_vliw/блоки_помощь/Помощь_ассистент` handles questions about installing and using NEX CLI: 548 questions, 13 topics + chat + off-topic, dev accuracy 0.655. Inference runs via `vliw/help_nnl.py` in pure Python using the weight copy at `vliw/help_weights.json`. Retrain with `python tools/train_help_block.py`.
 
-## Что дальше
+## Next Steps
 
-Менять нужно признаки и задачу, а не архитектуру: по мешку токенов выбор группы упирается в потолок ~0,4.
-Варианты — покомандные признаки крошек, другая задача («достигнута ли нижняя граница»),
-больше настоящих трудных примеров.
+Features and problem formulation need to change, not the architecture: bag-of-tokens group selection hits a ~0.4 ceiling. Promising directions include per-instruction TINY AI features, a different target ("is the lower bound already reached?"), and more real hard examples.

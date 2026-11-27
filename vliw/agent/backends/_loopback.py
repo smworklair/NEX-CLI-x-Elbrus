@@ -1,10 +1,10 @@
-"""Loopback-валидатор адреса local-сервера.
+"""Loopback URL validator for local LLM servers.
 
-Local-сервер — только замкнутая петля: `localhost`, `127.0.0.0/8`, `::1`.
-Remote URL в «локальном» провайдере означал бы, что разговор уходит чужому
-серверу под видом локального. Живёт отдельным файлом: его подключает и
-`openai_compat`, и `llm` (пока `models.local_base_url` не добавит главный
-агент), без цикла импорта.
+Local servers are restricted to loopback addresses only: `localhost`,
+`127.0.0.0/8`, `::1`. Allowing a remote URL in the "local" provider would
+silently send conversations to a remote host under a local label. Lives in
+its own module so both `openai_compat` and `llm` can import it without
+circular dependencies.
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ DEFAULT_LOCAL_URL = "http://localhost:11434/v1"
 
 
 def local_base_url(url: str = DEFAULT_LOCAL_URL) -> str:
-    """Нормализованный loopback-адрес или ValueError с человеческой причиной."""
+    """Return normalized loopback URL or raise ValueError with a clear reason."""
     raw = (url or "").strip()
     if not raw:
-        raise ValueError("Local: адрес сервера не задан (NEX_LOCAL_URL)")
+        raise ValueError("Local: server URL is not set (NEX_LOCAL_URL)")
     parsed = urllib.parse.urlparse(raw)
     if parsed.scheme != "http":
-        raise ValueError("Local: нужен http:// адрес на loopback")
+        raise ValueError("Local: requires an http:// loopback URL")
     host = (parsed.hostname or "").lower()
     if host in ("localhost", "::1"):
         ok = True
@@ -32,10 +32,10 @@ def local_base_url(url: str = DEFAULT_LOCAL_URL) -> str:
         except ValueError:
             ok = False
     if not ok:
-        raise ValueError("Local: только loopback-адреса "
+        raise ValueError("Local: loopback addresses only "
                          "(localhost / 127.0.0.0/8 / ::1)")
     if parsed.query or parsed.fragment:
-        raise ValueError("Local: лишние query/fragment в адресе сервера")
+        raise ValueError("Local: unexpected query/fragment in server URL")
     port = f":{parsed.port}" if parsed.port else ""
     path = parsed.path.rstrip("/")
     return f"http://{parsed.hostname}{port}{path}"

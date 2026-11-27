@@ -1,13 +1,14 @@
-"""Обучение крошки-1: клонирование порядка оракула (behavioral cloning).
+"""Tiny-1 training: behavioral cloning of the oracle ordering.
 
-Учитель — не Phi и не Qwen, а точный CP-SAT из train_merged.jsonl
-(completion там доказуемо оптимален, см. tools/vliw_gen.py).
-Учим MLP повторять порядок оракула: цель узла = (n - rank)/n, лосс MSE.
+The teacher is exact CP-SAT from train_merged.jsonl (not Phi or Qwen;
+completions are proven optimal, see tools/vliw_gen.py).
+Trains an MLP to match oracle order: target = (n - rank)/n, MSE loss.
 
-Тяжелые по DIV/STORE графы (ловушки slotclash/memstream) апсемплим весом,
-иначе их 1-6% утонут в легких, где baseline и так оптимален (см. CAB.md).
+DIV/STORE-heavy graphs (slotclash/memstream traps) are upsampled by weight,
+otherwise their 1-6% share drowns in easy graphs where baseline is already
+optimal (see CAB.md).
 
-Нужен numpy ТОЛЬКО для обучения. Инференс (model.py) — stdlib.
+Requires numpy ONLY for training. Inference (model.py) is pure stdlib.
 """
 
 from __future__ import annotations
@@ -46,10 +47,10 @@ def load_samples(path: str, max_graphs: int, seed: int, target: str = "rank",
     with open(path, encoding="utf-8") as f:
         lines = f.readlines()
     if extra_path and extra_repeat > 0:
-        # Подмес тяжёлого набора (train_hard: DIV 25% против 5% в merged).
-        # Вес ×4 в лоссе не спасает, когда ловушек одна на двадцать:
-        # повторяем строки ДО шаффла, чтобы доля в батче стала честной.
-        # max_graphs режет общий пул — бюджет как у базового рецепта.
+        # Mix in the hard set (train_hard: 25% DIV vs 5% in merged).
+        # A 4x loss weight is not enough when traps are 1 in 20:
+        # repeat rows BEFORE shuffling so batch share is balanced.
+        # max_graphs caps the combined pool to match the base budget.
         with open(extra_path, encoding="utf-8") as f:
             extra = f.readlines()
         lines += extra * extra_repeat
@@ -66,28 +67,27 @@ def load_samples(path: str, max_graphs: int, seed: int, target: str = "rank",
             dag = build_dag(entries)
             pl = parse_placements(ex["completion"])
             if len(pl) != len(dag):
-                continue  # битый пример — пропускаем, не чиним
+                continue  # broken sample — skip without patching
             n = len(dag)
             if target == "rank":
                 order = oracle_order(pl, n)
                 rank = {node: r for r, node in enumerate(order)}
                 y_of = lambda i: (n - rank[i]) / n
             elif target == "cycle":
-                # Абсолютный такт оракула: на инференсе станет defer_until
-                # (запрет «не раньше»), c клипом по жадному makespan.
+                # Absolute oracle cycle: becomes defer_until at inference,
+                # clipped to greedy makespan.
                 y_of = lambda i: float(pl[i][0])
             elif target == "hold":
-                # Длительность держки: насколько позже раннего старта
-                # оракул ставит узел. Абсолютный такт скачет от графа
-                # к графу и по нормированным фичам не учится (сеть
-                # underpredict'ит в safe-early — см. вскрытие графа 7
-                # в docs/TINY.md); держка инвариантна к размеру графа,
-                # у большинства узлов — честный ноль.
+                # Hold duration: how many cycles after ASAP the oracle
+                # issues the node. Absolute cycle varies across graph
+                # sizes and learns poorly from normalized features (the
+                # net underpredicts safe-early — see graph 7 analysis in
+                # docs/TINY.md); hold is size-invariant and mostly zero.
                 from vliw.core.dag import compute_metrics as _cm
                 asap = _cm(dag, prof).asap
                 y_of = lambda i: float(max(0, pl[i][0] - asap[i]))
             else:
-                raise SystemExit(f"неизвестный target {target!r}")
+                raise SystemExit(f"unknown target {target!r}")
             X = featurize(dag, prof)
             n_div = sum(1 for _, op, _ in entries if op == "DIV")
             n_store = sum(1 for _, op, _ in entries if op == "STORE")
@@ -104,7 +104,7 @@ def load_samples(path: str, max_graphs: int, seed: int, target: str = "rank",
     X = np.asarray(Xs, dtype=np.float64)
     y = np.asarray(ys, dtype=np.float64)
     w = np.asarray(ws, dtype=np.float64)
-    w *= len(w) / w.sum()  # средний вес 1
+    w *= len(w) / w.sum()  # mean weight = 1
     return X, y, w, n_graphs, n_div_heavy
 
 
@@ -112,7 +112,7 @@ def train(X, y, w, hidden=(128, 64), epochs=25, lr=3e-3, seed=0, l2=1e-5):
     rng = np.random.default_rng(seed)
     F = X.shape[0] and X.shape[1]
     h1, h2 = hidden
-    # He-иниц. — та же схема, что TinyPriority.init (с точностью до ГПСЧ).
+    # He init — same scheme as TinyPriority.init (up to RNG).
     W1 = rng.normal(0, math.sqrt(2.0 / F), (F, h1))
     b1 = np.zeros(h1)
     W2 = rng.normal(0, math.sqrt(2.0 / h1), (h1, h2))
@@ -143,7 +143,7 @@ def train(X, y, w, hidden=(128, 64), epochs=25, lr=3e-3, seed=0, l2=1e-5):
             loss = float((wb * err * err).mean())
             tot += loss * len(idx)
             cnt += len(idx)
-            # backward (MSE с весами + L2)
+            # backward (weighted MSE + L2)
             g = (2.0 * wb * err / len(idx))  # dL/dpred
             gW3 = a2.T @ g + l2 * W3
             gb3 = float(g.sum())
@@ -169,12 +169,12 @@ def train(X, y, w, hidden=(128, 64), epochs=25, lr=3e-3, seed=0, l2=1e-5):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Обучение крошки-1 (numpy, CPU)")
+    ap = argparse.ArgumentParser(description="Train Tiny-1 (numpy, CPU)")
     ap.add_argument("--train", default="train_merged.jsonl")
     ap.add_argument("--train-extra", default="",
-                    help="второй файл (напр. train_hard.jsonl), подмешать повторами")
+                    help="second file (e.g. train_hard.jsonl) to mix in with repeats")
     ap.add_argument("--extra-repeat", type=int, default=0,
-                    help="сколько раз повторить train-extra в пуле до шаффла")
+                    help="how many times to repeat train-extra in the pool before shuffling")
     ap.add_argument("--out", default="vliw/tiny/weights.json")
     ap.add_argument("--max-graphs", type=int, default=8000)
     ap.add_argument("--epochs", type=int, default=25)
@@ -182,8 +182,8 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--target", choices=["rank", "cycle", "hold"], default="rank",
-                    help="rank: порядок оракула (priority); cycle: такт оракула "
-                         "(defer, legacy); hold: держка после раннего старта (defer)")
+                    help="rank: oracle order (priority); cycle: oracle cycle "
+                         "(defer, legacy); hold: delay after ASAP (defer)")
     a = ap.parse_args()
     train_path = a.train if Path(a.train).is_absolute() or Path(a.train).exists() \
         else str(_ROOT / a.train)

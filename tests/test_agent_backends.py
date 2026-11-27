@@ -1,8 +1,8 @@
-"""Универсальные backend'ы агента: фабрика, тела запросов, разбор ответов.
+"""Universal agent backends: factory, request payloads, and response parsing.
 
-Без сети: HTTP-слой мокается, проверяется склейка «фабрика -> backend ->
-текст», а не чужие серверы. Формат — как в Nex-pilot: один интерфейс,
-по файлу на провайдер.
+Runs offline: the HTTP layer is mocked to verify the factory -> backend -> text
+pipeline rather than external servers. Follows a single-interface,
+one-file-per-provider layout.
 """
 
 from __future__ import annotations
@@ -145,8 +145,8 @@ class TestProviderConfigIntegration(unittest.TestCase):
 
 class TestFactory(unittest.TestCase):
     def setUp(self) -> None:
-        # Настоящий `.env` глушим: фабрика читает его через `setting()`,
-        # и сохранённые пользователем значения ломали бы проверки «нужно Х».
+        # Mask the real `.env`: the factory reads it via `setting()`, and
+        # user-saved values would make missing-config checks nondeterministic.
         patcher = mock.patch.object(llm, "_dotenv_values", lambda: {})
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -180,27 +180,27 @@ class TestFactory(unittest.TestCase):
 class TestBodies(unittest.TestCase):
     def test_openai_complete_parses_choices(self) -> None:
         be = bcompat.OpenAICompatBackend("k", base_url="https://x/v1", model="m")
-        payload = {"choices": [{"message": {"content": "  привет  "},
+        payload = {"choices": [{"message": {"content": "  hello  "},
                                 "finish_reason": "stop"}],
                    "usage": {"completion_tokens": 5}}
         with mock.patch.object(bcompat, "post_json_retry", lambda *a, **k: payload):
-            self.assertEqual(be.complete("s", "q"), "привет")
+            self.assertEqual(be.complete("s", "q"), "hello")
             text, used = be.structured("s", "q", {"type": "object"})
-            self.assertEqual((text, used), ("привет", 5))
+            self.assertEqual((text, used), ("hello", 5))
 
     def test_openai_stream_yields_deltas(self) -> None:
         be = bcompat.OpenAICompatBackend("k", base_url="https://x/v1", model="m")
         chunks = [{"choices": [{"delta": {"content": "a"}}]},
-                  {"choices": [{"delta": {"content": "б"}}]}]
+                  {"choices": [{"delta": {"content": "b"}}]}]
         with mock.patch.object(bcompat, "post_sse", lambda *a, **k: iter(chunks)):
-            self.assertEqual(list(be.stream("s", "q")), ["a", "б"])
+            self.assertEqual(list(be.stream("s", "q")), ["a", "b"])
 
     def test_yandex_complete_parses_result(self) -> None:
         be = byandex.YandexBackend(api_key="k", folder_id="f")
-        payload = {"result": {"alternatives": [{"message": {"text": " готово "}}],
+        payload = {"result": {"alternatives": [{"message": {"text": " done "}}],
                                "usage": {"completionTokens": 3}}}
         with mock.patch.object(byandex, "post_json_retry", lambda *a, **k: payload):
-            self.assertEqual(be.complete("s", "q"), "готово")
+            self.assertEqual(be.complete("s", "q"), "done")
 
     def test_gigachat_body_asks_json_object(self) -> None:
         be = bgiga.GigaChatBackend(client_id="id", client_secret="s")
@@ -210,14 +210,13 @@ class TestBodies(unittest.TestCase):
 
 
 class TestContentShapes(unittest.TestCase):
-    """Content бывает и строкой, и списком чанков — оба разбираются."""
-    """Content бывает и строкой, и списком чанков — оба разбираются."""
+    """Content can be either a string or a list of chunks — both must parse."""
 
     def test_string_and_list(self) -> None:
         self.assertEqual(bbase.content_str("hi"), "hi")
         self.assertEqual(
             bbase.content_str([{"type": "text", "text": "a"},
-                               {"type": "text", "text": "б"}]), "aб")
+                               {"type": "text", "text": "b"}]), "ab")
         self.assertEqual(bbase.content_str([{"type": "other"}]), "")
         self.assertEqual(bbase.content_str(None), "")
         self.assertEqual(bbase.content_str(42), "")
@@ -285,12 +284,12 @@ class TestGigaChatTokenExpiry(unittest.TestCase):
     def test_absolute_expiry_not_added_to_now(self) -> None:
         import time as _time
 
-        exp_abs = int(_time.time()) + 1800  # так отдаёт Сбер: unix-время
+        exp_abs = int(_time.time()) + 1800  # Sber returns an absolute unix timestamp
         be, net = self._backend_with_token_response(
             {"access_token": "tok", "expires_at": exp_abs})
         with net:
             self.assertEqual(be._fetch_token(), "tok")
-        # Было: now() + expires_at = токен «на десятилетия». Должно: ~exp-60.
+        # Regression guard: previously now() + expires_at produced a decades-long expiry; must be ~exp-60.
         self.assertLess(abs(be._token_until - (exp_abs - 60)), 5)
 
     def test_relative_expiry(self) -> None:
@@ -344,7 +343,7 @@ class TestEnvFile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = f"{d}/.env"
             with open(p, "w", encoding="utf-8") as f:
-                f.write("# комментарий\nNEX_PROVIDER=mistral\nMISTRAL_API_KEY=old\n")
+                f.write("# comment\nNEX_PROVIDER=mistral\nMISTRAL_API_KEY=old\n")
             written = envfile.save(p, {"MISTRAL_API_KEY": "new", "NEX_MODEL": "m",
                                        "GONE": None})
             self.assertEqual(sorted(written), ["MISTRAL_API_KEY", "NEX_MODEL"])
@@ -352,7 +351,7 @@ class TestEnvFile(unittest.TestCase):
             self.assertEqual(data["MISTRAL_API_KEY"], "new")
             self.assertEqual(data["NEX_MODEL"], "m")
             text = Path(p).read_text(encoding="utf-8")
-            self.assertIn("# комментарий", text)
+            self.assertIn("# comment", text)
             self.assertIn("NEX_PROVIDER=mistral", text)
 
     def test_delete_and_quoting(self) -> None:
@@ -400,15 +399,15 @@ class TestKeyUpdates(unittest.TestCase):
 
 class TestHumanError(unittest.TestCase):
     def test_maps_to_actions(self) -> None:
-        self.assertIn("/key", llm._human_error("mistral", "ключ не задан для le chat"))
+        self.assertIn("/key", llm._human_error("mistral", "API key not set for le chat"))
         out = llm._human_error("deepseek", "deepseek: HTTP 401: bad")
-        self.assertIn("отклонён", out)
+        self.assertIn("rejected", out)
         self.assertIn("/key", out)
         out = llm._human_error("gemini", "gemini: HTTP 429: quota exceeded")
-        self.assertIn("квота", out)
+        self.assertIn("quota", out)
         self.assertIn("/ai", out)
         out = llm._human_error("openai", "openai: HTTP 404: no such model")
-        self.assertIn("модель не найдена", out)
+        self.assertIn("model not found", out)
         self.assertIn("openai: HTTP 500: boom",
                       llm._human_error("openai", "openai: HTTP 500: boom"))
 
@@ -418,12 +417,12 @@ class TestHumanError(unittest.TestCase):
             key="k" * 146)
         self.assertIn("User not found", out)
         self.assertIn("146", out)
-        self.assertIn("дважды", out)
-        # HTTP-слой обычно уже извлёк message — эта форма тоже разбирается.
+        self.assertIn("twice", out)
+        # The HTTP layer usually already extracted `message` — this form must also parse.
         out = llm._human_error("custom", "custom: HTTP 401: User not found.",
                                key="k" * 73)
         self.assertIn("User not found", out)
-        self.assertNotIn("дважды", out)
+        self.assertNotIn("twice", out)
 
     def test_check_reports_human_text(self) -> None:
         with mock.patch.object(llm, "provider", lambda: "mistral"), \
@@ -431,7 +430,7 @@ class TestHumanError(unittest.TestCase):
                                   mock.Mock(side_effect=llm.LLMError("HTTP 401: no"))):
             ok, detail = llm.check()
             self.assertFalse(ok)
-            self.assertIn("отклонён", detail)
+            self.assertIn("rejected", detail)
 
     def test_check_spots_foreign_key(self) -> None:
         with mock.patch.object(llm, "provider", lambda: "mistral"), \
@@ -461,13 +460,13 @@ class TestStatusHint(unittest.TestCase):
                 mock.patch.object(llm, "describe", lambda: "le chat · m"), \
                 mock.patch.object(llm, "is_local", lambda: False):
             lines = agent_view.render_status(
-                False, "ключ не задан (le chat) — вставьте: /key <ключ>")
+                False, "API key not set (le chat) — set via: /key <key>")
             text = "\n".join(lines)
-            self.assertIn("Дальше: /key <ключ>", text)
-            self.assertIn("/key <ключ>", text)
+            self.assertIn("Next: /key <key>", text)
+            self.assertIn("/key <key>", text)
             self.assertNotIn("NEX_API_KEY", text)
-            lines = agent_view.render_status(True, "le chat · m: готово")
-            self.assertNotIn("Дальше:", "\n".join(lines))
+            lines = agent_view.render_status(True, "le chat · m: ready")
+            self.assertNotIn("Next:", "\n".join(lines))
 
     def test_foreign_key_hint_wins_over_reinsert(self) -> None:
         from vliw.ui import agent_view
@@ -475,11 +474,11 @@ class TestStatusHint(unittest.TestCase):
         with mock.patch.object(llm, "provider", lambda: "mistral"), \
                 mock.patch.object(llm, "describe", lambda: "le chat · m"), \
                 mock.patch.object(llm, "is_local", lambda: False):
-            detail = ("ключ отклонён (le chat) — вставьте заново: /key <ключ>. "
-                      "похоже на ключ OpenRouter (sk-or-v1-…) — ему нужен: "
+            detail = ("key rejected (le chat) — paste again: /key <key>. "
+                      "looks like an OpenRouter key (sk-or-v1-…) — use: "
                       "/ai openrouter key=...")
             text = "\n".join(agent_view.render_status(False, detail))
-            self.assertIn("Дальше: /ai openrouter", text)
+            self.assertIn("Next: /ai openrouter", text)
 
 
 class TestKeySourceHint(unittest.TestCase):
@@ -489,8 +488,8 @@ class TestKeySourceHint(unittest.TestCase):
         self.assertIn("yandex", llm.key_source_hint("yandex").lower())
 
     def test_no_key_error_points_to_source(self) -> None:
-        out = llm._human_error("mistral", "ключ не задан для le chat")
-        self.assertIn("/key <ключ>", out)
+        out = llm._human_error("mistral", "API key not set for le chat")
+        self.assertIn("/key <key>", out)
         self.assertIn("console.mistral.ai", out)
 
 
@@ -502,17 +501,17 @@ class TestKeyGuide(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             out = _run_cmd(cli.cmd_key, "", d)
-            self.assertIn("Что такое ключ", out)
+            self.assertIn("An API key is a token", out)
             self.assertIn("console.mistral.ai", out)
             self.assertIn("/ai mistral key=...", out)
-            self.assertNotIn("форма:", out)
+            self.assertNotIn("usage:", out)
             self.assertEqual(envfile.load(f"{d}/.env"), {})
 
 
 class TestLooksLikeKey(unittest.TestCase):
     def test_questions_are_not_keys(self) -> None:
-        for q in ("привет", "почему этот участок медленный?", "что это",
-                  "спасибо", "/key abc", "", "slotclash"):
+        for q in ("hello", "why is this basic block slow?", "what is this",
+                  "thanks", "/key abc", "", "slotclash"):
             with self.subTest(q=q):
                 self.assertFalse(llm.looks_like_key_text(q))
 
@@ -537,7 +536,7 @@ class TestRepairPastedKey(unittest.TestCase):
         self.assertTrue(notes)
 
     def test_real_world_double_openrouter_key(self) -> None:
-        """Живой случай: 146 символов = дважды склеенный ключ на 73."""
+        """Real-world case: 146 chars = a 73-char OpenRouter key pasted twice."""
         real = "sk-or-v1-" + "a" * 64
         self.assertEqual(len(real), 73)
         clean, notes = llm.repair_pasted_key(real + real)
@@ -546,7 +545,7 @@ class TestRepairPastedKey(unittest.TestCase):
 
 
 class TestGigachatReadyKey(unittest.TestCase):
-    """Готовый ключ Сбера — base64(id:secret) одной строкой."""
+    """Sber GigaChat ready key — single-line base64(id:secret)."""
 
     def _b64(self, cid: str, sec: str) -> str:
         import base64
@@ -564,7 +563,7 @@ class TestGigachatReadyKey(unittest.TestCase):
         self.assertIsNone(llm.try_decode_gigachat_key("AIza123"))
         self.assertIsNone(llm.try_decode_gigachat_key("not-base64!!!"))
         self.assertIsNone(llm.try_decode_gigachat_key(""))
-        self.assertIsNone(llm.try_decode_gigachat_key("a:b"))  # короткие части
+        self.assertIsNone(llm.try_decode_gigachat_key("a:b"))  # parts too short
 
     def test_adopt_detects_ready_key(self) -> None:
         import tempfile
@@ -577,7 +576,7 @@ class TestGigachatReadyKey(unittest.TestCase):
                 self.assertEqual(os.environ["NEX_PROVIDER"], "gigachat")
                 self.assertEqual(os.environ["GIGACHAT_CLIENT_ID"], cid)
                 self.assertEqual(os.environ["GIGACHAT_SECRET"], sec)
-                self.assertIn("пару", " ".join(notes))
+                self.assertIn("pair", " ".join(notes))
                 self.assertNotIn(cid, shown)
         _ = label
 
@@ -627,7 +626,7 @@ class TestVercelBackend(unittest.TestCase):
 
 
 class TestAdoptPastedKey(unittest.TestCase):
-    """Вставка — только в память сессии: на диск ничего не пишется."""
+    """Pasted keys stay in session memory only: nothing is written to disk."""
 
     def _adopt(self, text: str, extra: dict | None = None):
         import tempfile
@@ -646,7 +645,7 @@ class TestAdoptPastedKey(unittest.TestCase):
         self.assertEqual(environ["NEX_PROVIDER"], "mistral")
         self.assertEqual(environ["MISTRAL_API_KEY"], "k" * 32)
         self.assertNotIn("k" * 32, shown)
-        self.assertFalse(left_file, "вставка не должна писать на диск")
+        self.assertFalse(left_file, "pasting a key must not write to disk")
 
     def test_openrouter_key_sets_openrouter_provider(self) -> None:
         (label, _, _), _, environ = self._adopt("sk-or-v1-abc123")
@@ -686,7 +685,7 @@ class TestAdoptPastedKey(unittest.TestCase):
                                        encoding="utf-8")
             with mock.patch.object(llm, "_PROJECT_ROOT", Path(d)), \
                     mock.patch.dict(os.environ, {}, clear=True):
-                # Ключ есть в файле, но не в сессии — просьба нужна.
+                # Key exists in file, not in session — prompt is still needed.
                 self.assertFalse(llm.has_session_key())
             with mock.patch.object(llm, "_PROJECT_ROOT", Path(d)), \
                     mock.patch.dict(os.environ, {"NEX_API_KEY": "k" * 32},
@@ -790,10 +789,10 @@ class TestModelCatalog(unittest.TestCase):
 
         with mock.patch.object(
                 catalog, "_fetch_json",
-                side_effect=catalog.LLMError("ключ отклонён (HTTP 401)")):
+                side_effect=catalog.LLMError("key rejected (HTTP 401)")):
             with self.assertRaises(catalog.LLMError) as ctx:
                 catalog.catalog("mistral", api_key="bad")
-            self.assertIn("отклонён", str(ctx.exception))
+            self.assertIn("rejected", str(ctx.exception))
 
     def test_local_loopback_only(self) -> None:
         from vliw.agent import models as catalog
@@ -836,7 +835,7 @@ class TestProviderUpdates(unittest.TestCase):
 
 
 class TestEnvPersistence(unittest.TestCase):
-    """Настройки из `.env` работают без переменных окружения (как после рестарта)."""
+    """Settings from `.env` work without environment variables (as after restart)."""
 
     def _env(self, tmp: str, dotenv: str = ""):
         if dotenv:
@@ -895,7 +894,7 @@ class TestEnvPersistence(unittest.TestCase):
 
 
 def _run_cmd(fn, arg: str, tmp: str, extra: dict | None = None) -> str:
-    """Вызвать CLI-команду с временным `.env` и чистым окружением."""
+    """Invoke a CLI command with a temporary `.env` and clean environment."""
     env = {"NEX_PROVIDER": "mistral"}
     env.update(extra or {})
     buf = io.StringIO()
@@ -908,17 +907,17 @@ def _run_cmd(fn, arg: str, tmp: str, extra: dict | None = None) -> str:
 
 
 class TestCliAiKey(unittest.TestCase):
-    """`/ai <провайдер>` и `/key <ключ>`: смена, память сессии, маскировка.
+    """`/ai <provider>` and `/key <key>`: switching, session memory, and masking.
 
-    Команды пишут ТОЛЬКО в память процесса (на диск — ничего): закрыл
-    терминал — настроек нет. Поэтому тесты смотрят в окружение, а не в файл.
+    Commands write ONLY to process memory (nothing to disk), so tests inspect
+    `os.environ` rather than `.env`.
     """
 
     def _run_mem(self, fn, arg: str, extra: dict | None = None):
-        """Команда с пустым окружением. Возвращает (вывод, окружение, файл?)."""
+        """Run command with a clean env. Returns (stdout, environ, wrote_file)."""
         import tempfile
 
-        from vliw import cli  # noqa: F401 — импорт ради побочного эффекта
+        from vliw import cli  # noqa: F401 — side-effect import
 
         with tempfile.TemporaryDirectory() as d:
             env = {"NEX_PROVIDER": "mistral"}
@@ -938,7 +937,7 @@ class TestCliAiKey(unittest.TestCase):
             cli.cmd_ai, "deepseek", {"NEX_MODEL": "deepseek-chat"})
         self.assertEqual(environ["NEX_PROVIDER"], "deepseek")
         self.assertNotIn("NEX_MODEL", environ)
-        self.assertFalse(left_file, "команда не должна писать на диск")
+        self.assertFalse(left_file, "command must not write to disk")
         _ = out
 
     def test_ai_unknown_and_custom_without_url(self) -> None:
@@ -948,9 +947,9 @@ class TestCliAiKey(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             out = _run_cmd(cli.cmd_ai, "nosuch", d)
-            self.assertIn("неизвестный провайдер", out)
+            self.assertIn("unknown provider", out)
             out = _run_cmd(cli.cmd_ai, "custom model=m", d)
-            self.assertIn("нужен адрес сервера", out)
+            self.assertIn("server URL required", out)
             self.assertEqual(envfile.load(f"{d}/.env"), {})
 
     def test_ai_custom_and_gigachat_forms(self) -> None:
@@ -980,7 +979,7 @@ class TestCliAiKey(unittest.TestCase):
         self.assertFalse(left_file)
 
     def test_ai_spaced_equals_parsed(self) -> None:
-        """`key = abc` с пробелами — раньше ключ молча терялся (видели живьём)."""
+        """Spaces around `=` (`key = abc`) must be parsed instead of silently dropped."""
         from vliw import cli
 
         out, environ, _ = self._run_mem(cli.cmd_ai, "vercel key = vck_test123")

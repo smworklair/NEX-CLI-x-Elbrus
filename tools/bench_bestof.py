@@ -1,21 +1,6 @@
-"""Замер best-of-N на подвыборке eval_wide.jsonl — источник таблицы в docs/LEARNED.md.
+"""Benchmark best-of-N sampling on a strided subset of eval_wide.jsonl.
 
-Зачем отдельный скрипт, а не `/learned --bench`: замер идёт часами, и ему
-нужны две вещи, которых у CLI-команды не должно быть — подвыборка файла
-(каждый 4-й граф: полный файл — это сутки на температуру) и дамп прогресса
-в JSON после КАЖДОЙ строки, чтобы сбой на двенадцатом часу не терял
-полученное.
-
-Считает четыре прогона на одних и тех же графах:
-  * baseline — t=0, один жадный ответ, repair включён (точка сравнения из
-    docs/LEARNED.md: 27% на первых 15; здесь — на тех же 75, что и best-of);
-  * best-of-8 при t=0.4 / 0.7 / 1.0 — сэмплы k=0..7, каждому repair,
-    выбор по минимуму нарушений, потом makespan.
-
-Прогон с N=8 отвечает сразу на все k<=8 (первые k сэмплов) — отдельные
-забеги для best-of-2 и best-of-4 не нужны, таблица строится из одного дампа.
-
-Запуск (часы; в фоне — nohup):
+Usage:
     .venv/bin/python tools/bench_bestof.py [out.json]
 """
 
@@ -31,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 STRIDE = 4
-"""Каждый 4-й граф из 300: 75 примеров, репрезентативно по всему файлу."""
+"""Every 4th graph out of 300 (75 representative examples)."""
 
 N = 8
 TEMPERATURES = (0.4, 0.7, 1.0)
@@ -39,7 +24,7 @@ SEED = 1
 
 
 def make_subset(src: Path, out: Path, stride: int) -> int:
-    """Каждый stride-й пример в отдельный файл. Возвращает число строк."""
+    """Write every stride-th example to a subset file; return row count."""
     lines = [l for l in src.read_text(encoding="utf-8").splitlines()
              if l.strip()]
     picked = lines[::stride]
@@ -48,8 +33,7 @@ def make_subset(src: Path, out: Path, stride: int) -> int:
 
 
 def dump_bench(res, path: Path) -> None:
-    """BenchResult → JSON. Сэмплы каждой строки — тоже: по ним строится
-    таблица k=1,2,4,8 без повторных прогонов."""
+    """Serialize BenchResult (including all samples for k=1,2,4,8 slicing) to JSON."""
     data = {
         "seconds": res.seconds,
         "best_of": ({"n": res.best_of.n, "temperature": res.best_of.temperature,
@@ -68,12 +52,7 @@ def dump_bench(res, path: Path) -> None:
 
 
 def load_rows(path: Path) -> list:
-    """Готовые строки из дампа обратно в BenchRow — для возобновления.
-
-    Читается ровно то, что писал `dump_bench`; при любой порче дампа
-    возвращается пустой список, и прогон считается с нуля — это безопаснее,
-    чем досчитывать поверх испорченного.
-    """
+    """Reload completed rows from a partial JSON dump for resuming."""
     from vliw.learned.bench import BenchRow, SampleOutcome
 
     if not path.exists():
@@ -95,19 +74,14 @@ def load_rows(path: Path) -> list:
 
 
 def _fmt_row(k: int, row) -> str:
-    mark = "ok " if row.kind == "валидно" else "…  "
-    extra = f"сэмплы {row.valid_samples}/{len(row.samples)}" if row.samples else ""
+    mark = "ok " if row.kind == "valid" else "…  "
+    extra = f"samples {row.valid_samples}/{len(row.samples)}" if row.samples else ""
     return (f"  [{k:>3}] {mark} n={row.n:<3} {row.kind:<9} {extra} "
             + (row.first_error or "")[:60])
 
 
 def summary(out_dir: Path) -> int:
-    """Таблица по готовым дампам: доля валидных по k против baseline.
-
-    Вынесено в отдельный режим, потому что таблица нужна ПОСЛЕ многочасового
-    прогона, а сам прогон трогать уже нельзя (и не надо — все сэмплы уже
-    лежат в дампах).
-    """
+    """Render best-of-k comparison table from saved JSON dumps."""
     tags = ["baseline"] + [f"t{t:g}" for t in TEMPERATURES]
     dumps = {}
     for tag in tags:
@@ -115,13 +89,13 @@ def summary(out_dir: Path) -> int:
         if p.exists():
             dumps[tag] = json.loads(p.read_text(encoding="utf-8"))
     if not dumps:
-        print(f"в {out_dir} нет дампов — прогон ещё не начат", file=sys.stderr)
+        print(f"no dumps found in {out_dir} — run not started", file=sys.stderr)
         return 1
 
     rows_n = {len(d["rows"]) for d in dumps.values()}
-    print(f"# best-of на подвыборке eval_wide.jsonl (каждый {STRIDE}-й)")
+    print(f"# best-of on eval_wide.jsonl subset (every {STRIDE}th)")
     if len(rows_n) > 1:
-        print(f"ВНИМАНИЕ: прогон завершён не везде, строк: {sorted(rows_n)}")
+        print(f"WARNING: incomplete runs, row counts: {sorted(rows_n)}")
     n = min(rows_n)
 
     def valid_at(tag: str, k: int) -> int:
@@ -129,7 +103,7 @@ def summary(out_dir: Path) -> int:
                    if any(s["valid"] for s in (r["samples"] or [])[:k]))
 
     def gap_mean(tag: str, k: int) -> float | None:
-        """Средний разрыв выбранных валидных расписаний среди первых k."""
+        """Mean gap to optimum among valid schedules within the first k samples."""
         gaps = []
         for r in dumps[tag]["rows"][:n]:
             ok = [s for s in (r["samples"] or [])[:k] if s["valid"]]
@@ -138,8 +112,8 @@ def summary(out_dir: Path) -> int:
         return sum(gaps) / len(gaps) if gaps else None
 
     ks = sorted({1, 2, 4, N})
-    print(f"\nграфов в сравнении: {n}\n")
-    header = "| прогон | " + " | ".join(f"best-of-{k}" for k in ks) + " |"
+    print(f"\ngraphs compared: {n}\n")
+    header = "| run | " + " | ".join(f"best-of-{k}" for k in ks) + " |"
     print(header)
     print("|---|" + "---|" * len(ks))
     for tag in tags:
@@ -147,8 +121,8 @@ def summary(out_dir: Path) -> int:
             continue
         if tag == "baseline":
             v = dumps[tag]["rows"][:n]
-            ok = sum(1 for r in v if r["kind"] == "валидно")
-            print(f"| baseline (t=0, жадный) | {ok}/{n} " + "| " * (len(ks) - 1) + "|")
+            ok = sum(1 for r in v if r["kind"] == "valid")
+            print(f"| baseline (t=0, greedy) | {ok}/{n} " + "| " * (len(ks) - 1) + "|")
             continue
         cells = []
         for k in ks:
@@ -157,7 +131,7 @@ def summary(out_dir: Path) -> int:
         print(f"| t={dumps[tag]['best_of']['temperature']:g} | "
               + " | ".join(cells) + " |")
 
-    print("\nсредний разрыв до оптимума среди валидных (такты):")
+    print("\nmean gap to optimum among valid (cycles):")
     for tag in tags:
         if tag == "baseline" or tag not in dumps:
             continue
@@ -168,9 +142,9 @@ def summary(out_dir: Path) -> int:
         print(f"  t={dumps[tag]['best_of']['temperature']:g}: "
               + "  ".join(f"k={k}: {c}" for k, c in zip(ks, cells)))
 
-    # Качество одного сэмпла — база для честного «даёт ли best-of что-то
-    # сверх первого сэмпла».
-    print("\nдоля валидных сэмплов (качество ОДНОГО сэмпла):")
+    # Single-sample validity rate as baseline for best-of gain.
+    #
+    print("\nsingle-sample validity rate:")
     for tag in tags:
         if tag == "baseline" or tag not in dumps:
             continue
@@ -193,23 +167,23 @@ def main() -> int:
 
     src = ROOT / "eval_wide.jsonl"
     if not src.exists():
-        print(f"нет {src}", file=sys.stderr)
+        print(f"missing {src}", file=sys.stderr)
         return 1
     out_dir = ROOT / "build" / "bestof"
     out_dir.mkdir(parents=True, exist_ok=True)
     dataset = out_dir / f"eval_wide_s{STRIDE}.jsonl"
     total = make_subset(src, dataset, STRIDE)
-    print(f"подвыборка: каждый {STRIDE}-й из {src.name} -> {total} примеров",
+    print(f"subset: every {STRIDE}th of {src.name} -> {total} examples",
           flush=True)
 
     machine = get_profile("e2k-v6-measured")
     adapter = runtime.resolve_adapter("lora-eos")
     if adapter is None:
-        print("адаптер lora-eos не найден", file=sys.stderr)
+        print("adapter lora-eos not found", file=sys.stderr)
         return 1
 
-    # Один и тот же планировщик на все прогоны: бэкенд (llama-server с
-    # весами) поднимается один раз, между прогонами меняются только
+    # Reuse one scheduler/llama-server across runs.
+    #
     # temperature/seed.
     sch = LearnedScheduler(adapter=adapter, repair=True)
 
@@ -221,20 +195,20 @@ def main() -> int:
         print(f"\n=== {tag} ===", flush=True)
         dump = out_dir / f"bestof_{tag}.json"
 
-        # Возобновление. Замер идёт часами и уже один раз оборвался на
-        # середине (перезапуск WSL). Дамп построчный, значит досчитывать
-        # можно ровно с той строки, на которой оборвалось: готовые строки
-        # читаются обратно, датасет режется с этого места, результаты
-        # склеиваются. Порядок строк сохраняется — иначе таблица k=1,2,4,8
-        # поехала бы относительно baseline.
+        # Resume support: reload completed rows and slice remaining dataset.
+        #
+        #
+        #
+        #
+        #
         done_rows = load_rows(dump)
         if len(done_rows) >= total:
-            print(f"  уже посчитано {len(done_rows)}/{total} — пропускаю",
+            print(f"  already completed {len(done_rows)}/{total} — skipping",
                   flush=True)
             continue
         run_from = dataset
         if done_rows:
-            print(f"  в дампе {len(done_rows)}/{total} — досчитываю остаток",
+            print(f"  found {len(done_rows)}/{total} in dump — resuming",
                   flush=True)
             rest = out_dir / f"rest_{tag}.jsonl"
             lines = [l for l in dataset.read_text(encoding="utf-8").splitlines()
@@ -245,15 +219,15 @@ def main() -> int:
 
         t0 = time.time()
 
-        # Явный сброс на baseline: bench меняет атрибуты планировщика под
-        # best-of, и без сбоя порядок прогонов когда-нибудь сделает «жадный»
-        # baseline сэмплированным — молча.
+        # Explicitly reset sampling attributes for baseline.
+        #
+        #
         if bo is None:
             sch.temperature, sch.seed = 0.0, None
 
-        # Дамп после КАЖДОЙ строки: двенадцатый час прогона нельзя терять
-        # из-за одного сбоя. Частичный результат — те же строки, что у
-        # финального, просто ещё не все.
+        # Checkpoint JSON after every row to preserve multi-hour runs.
+        #
+        #
         partial = BenchResult(best_of=bo)
         partial.rows.extend(done_rows)
 
@@ -268,10 +242,10 @@ def main() -> int:
         res.rows = done_rows + res.rows
         res.seconds = time.time() - t0
         dump_bench(res, dump)
-        print(f"--- {tag}: {res.valid}/{len(res.rows)} валидно, "
-              f"{res.seconds / 60:.0f} мин", flush=True)
+        print(f"--- {tag}: {res.valid}/{len(res.rows)} valid, "
+              f"{res.seconds / 60:.0f} min", flush=True)
 
-    print("\nвсе прогоны закончены:", flush=True)
+    print("\nall runs finished:", flush=True)
     for tag, _ in jobs:
         print(f"  {out_dir / ('bestof_' + tag + '.json')}", flush=True)
     return 0

@@ -1,42 +1,37 @@
-"""CAB: один ответ модели — несколько законных расписаний, выбор точным критерием.
+"""CAB: one model response -> multiple valid schedules, selected by exact metric.
 
-ЗАЧЕМ
------
-До сих пор модель обязана была быть бухгалтером: помнить матрицу каналов,
-следить, кто уже занял канал в этом такте, считать готовность операндов.
-В этом она плоха — `docs/archive/DIAG3.md` считает поштучно: 315 незаконных каналов,
-208 конфликтов, 26 неготовых операндов. Хороша она в другом: из 98 законных
-ответов прогона 1 девяносто семь были ТОЧНЫМ оптимумом CP-SAT.
+WHY
+---
+Previously the model had to act as bookkeeper: remember the channel matrix,
+track occupied ports per cycle, and compute operand readiness. It is poor at
+that (`docs/archive/DIAG3.md`: 315 invalid channels, 208 conflicts, 26 unready
+operands), yet great at ordering: 97 of 98 valid run-1 answers hit the exact
+CP-SAT optimum.
 
-Отсюда смена разделения труда. У модели забирается вся бухгалтерия и
-остаётся ровно то, что она умеет, — ПОРЯДОК: кого рассматривать раньше.
-Бухгалтерию ведёт `list_schedule` из `core/baseline.py`, который по
-построению не выдаст инструкцию раньше предков и не посадит две на один
-канал. Любое расписание отсюда законно, доказывать это нечем — оно законно
-механизмом, а не удачей.
+So we split the labor: take bookkeeping away from the model and keep only what
+it does well — ORDERING (who to consider first). `list_schedule` from
+`core/baseline.py` handles bookkeeping and by construction never issues an op
+before its predecessors or puts two ops on one channel. Every schedule from it
+is valid by mechanism, not luck.
 
-ЧТО ИМЕННО БЕРЁТСЯ У МОДЕЛИ
+WHAT WE TAKE FROM THE MODEL
 
-* `order_from_model` — порядок. Операции сортируются по её же `(такт, канал)`;
-  выбор канала при этом ВЫБРАСЫВАЕТСЯ целиком. Это не потеря, а смысл: канал
-  — самая частая её ошибка, а порядок — самое ценное, что она даёт.
-* `floor_from_model` — такты, но только как «не раньше». Планировщик вправе
-  операцию отодвинуть и не вправе подтянуть. Это преемник доктрины
-  `repair.py` («такты модели не трогаем»), без её тупика: repair честно
-  сдаётся, когда законного канала нет вовсе, а здесь законное расписание
-  получается всегда.
+* `order_from_model` — ordering. Ops are sorted by its `(cycle, channel)`;
+  channel choice is DISCARDED entirely. That is the point: channel is its
+  most frequent error, while ordering is its most valuable signal.
+* `floor_from_model` — cycles as "no earlier than" (`defer_until`). The
+  scheduler may push an op later, never earlier. Successor to `repair.py`
+  without its dead end: always yields a valid schedule.
 
-ЧЕГО ЗДЕСЬ НЕТ
---------------
-Оптимальности. `list_schedule` — жадный проход, он не доказывает ничего и
-может проиграть оракулу. Здесь считается только законность и makespan.
+WHAT IS NOT HERE
+----------------
+Optimality. `list_schedule` is greedy; it proves nothing and may lose to the
+oracle. Only validity and makespan are guaranteed.
 
-И честности задаром тоже нет. Такты в вариантах «порядок» и «порядок+такты»
-ставит планировщик, а не модель, поэтому makespan там — ГИБРИД, и подписан
-он гибридом. По той же причине рост доли законных расписаний до 100% ничего
-не говорит об улучшении модели: законность здесь определительная, свойство
-механизма. Сравнивать после CAB надо не «сколько законных», а «на сколько
-тактов хуже оракула».
+Honesty matters too: cycles in "order" and "order+cycles" are placed by the
+scheduler, not the model, so those results are labeled as hybrids. Reaching
+100% valid after CAB is a property of the mechanism, not model improvement;
+compare by gap to oracle instead.
 """
 
 from __future__ import annotations
@@ -51,11 +46,10 @@ from ..core.schedule import Schedule
 
 @dataclass(frozen=True)
 class Variant:
-    """Один кандидат портфеля.
+    """One portfolio candidate.
 
-    `name` — короткая подпись для колонки, `how` — фраза человеку о том, чья
-    именно это работа. Разделены, потому что в отчёте нужно и то и другое:
-    в таблице тесно, а под таблицей нужно понимать, что откуда взялось.
+    `name` is a short column label; `how` explains to the user whose work it
+    is. Kept separate because tables are tight while footnotes need provenance.
     """
 
     name: str
@@ -74,17 +68,15 @@ class Variant:
 
 def order_from_model(placements: dict[int, tuple[int, int]], n: int,
                      height) -> list[float]:
-    """Ответ модели → вектор приоритетов для `list_schedule`.
+    """Model response -> priority vector for `list_schedule`.
 
-    Чем больше число, тем раньше инструкцию рассмотрят. Размещённые моделью
-    идут в её собственном порядке `(такт, канал)`; неразмещённые — следом, по
-    убыванию критического пути, то есть по правилу baseline.
+    Higher value means considered earlier. Model-placed ops follow its
+    `(cycle, channel)` order; unplaced ops follow by descending critical path
+    (the baseline rule).
 
-    Почему неразмещённые именно в хвост, а не вперемешку. Модель о них не
-    высказалась вовсе (оборвалась, потеряла формат), и придумывать за неё
-    место нечестно. Хвост по height — это плавный откат к жадной эвристике
-    ровно на той части графа, где мнения модели нет: чем меньше она успела
-    сказать, тем ближе результат к baseline, а не к случайности.
+    Unplaced ops go at the tail rather than interleaved: the model gave no
+    opinion on them (truncated/malformed), so a height-ordered tail gives a
+    smooth fallback to greedy on the uncovered portion of the graph.
     """
     def key(i: int):
         place = placements.get(i)
@@ -102,12 +94,11 @@ def order_from_model(placements: dict[int, tuple[int, int]], n: int,
 
 def floor_from_model(placements: dict[int, tuple[int, int]],
                      limit: int) -> dict[int, int]:
-    """Такты модели как запрет «не раньше» (`defer_until`).
+    """Model cycles as "no earlier than" constraints (`defer_until`).
 
-    `limit` отсекает галлюцинации: такт больше потолка (длины жадного
-    расписания) — это не мнение о планировании, а сбой формата, и уважать
-    его нельзя. Иначе одно число вроде «такт 900» растянуло бы расписание на
-    900 тактов, причём совершенно законно, — и замер стал бы бессмысленным.
+    `limit` clips hallucinations: a cycle above the ceiling (greedy makespan)
+    is a formatting failure, not a scheduling hint, and must not be honored
+    (otherwise a single "cycle 900" would legitimately stretch the schedule).
     """
     return {i: c for i, (c, _ch) in placements.items() if 0 < c <= limit}
 
@@ -115,13 +106,12 @@ def floor_from_model(placements: dict[int, tuple[int, int]],
 def variants(dag: DAG, model: MachineModel,
              placements: dict[int, tuple[int, int]],
              *, extra: tuple[Variant, ...] = ()) -> list[Variant]:
-    """Портфель кандидатов на один граф. Генерация модели не вызывается.
+    """Build portfolio candidates for one DAG without invoking model generation.
 
-    `extra` — то, что посчитано выше по течению на том же ответе (сырое
-    расписание модели и починенное `repair.py`). Они идут в портфель
-    наравне, чтобы отбор мог предпочесть ответ самой модели, когда он не
-    хуже, — и чтобы в отчёте было видно, что алгоритм ничего не «улучшил»
-    там, где улучшать было нечего.
+    `extra` holds upstream candidates from the same response (raw model
+    schedule and `repair.py` output). They compete on equal footing so
+    selection prefers the model's own answer on ties and reporting never
+    overstates algorithmic gains.
     """
     metrics = compute_metrics(dag, model)
     n = len(dag)
@@ -130,15 +120,15 @@ def variants(dag: DAG, model: MachineModel,
                               height=metrics.height)
     out = [
         *extra,
-        Variant("жадный", "baseline, модель не участвовала", greedy,
+        Variant("greedy", "baseline, model did not participate", greedy,
                 tuple(greedy.validate())),
     ]
 
     prio = order_from_model(placements, n, metrics.height)
     by_order, _ = list_schedule(dag, model, priority=prio, height=metrics.height)
     out.append(Variant(
-        "порядок",
-        "порядок от модели, такты и каналы — планировщик",
+        "order",
+        "model ordering, cycles and channels by scheduler",
         by_order, tuple(by_order.validate())))
 
     defer = floor_from_model(placements, greedy.makespan)
@@ -146,23 +136,21 @@ def variants(dag: DAG, model: MachineModel,
         by_both, _ = list_schedule(dag, model, priority=prio,
                                    defer_until=defer, height=metrics.height)
         out.append(Variant(
-            "порядок+такты",
-            "порядок от модели, её такты как «не раньше», каналы — планировщик",
+            "order+cycles",
+            "model ordering, its cycles as defer_until, channels by scheduler",
             by_both, tuple(by_both.validate())))
 
     return out
 
 
 def choose(cands: list[Variant]) -> Variant:
-    """Лучший законный кандидат: меньше тактов — лучше.
+    """Pick the best valid candidate: fewer cycles wins.
 
-    При равенстве побеждает тот, кто раньше в списке, а первым идёт ответ
-    самой модели. Это не косметика: иначе портфель приписывал бы алгоритму
-    победы там, где модель справилась сама и её просто пересчитали в то же
-    число тактов.
+    Ties go to the earlier entry, with the model's own response placed first
+    so the portfolio never credits the algorithm when the model matched it.
 
-    Если законных нет вообще (пустой граф или вырожденный вход) — вернём
-    первого, чтобы вызывающий печатал диагноз, а не ловил исключение.
+    If no valid candidate exists (empty/degenerate input), returns the first
+    so the caller prints diagnostics instead of raising.
     """
     legal = [(i, c) for i, c in enumerate(cands) if c.legal]
     if not legal:

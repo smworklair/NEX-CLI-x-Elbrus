@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Ответы NNL-ассистента по темам — чистый stdlib.
+"""Topic-based answers for the NNL assistant — pure stdlib.
 
-Экран установки запускается там, где может не быть ни textual, ни rich, ни
-numpy. Поэтому здесь только текст и подстановка путей; оформление (цвет,
-перенос, рамки) делает `vliw.ui.setup_screen`.
+The setup screen runs in environments where textual, rich, or numpy may not
+be installed. Therefore this module only produces text and substitutes paths;
+formatting (colors, wrapping, borders) is handled by `vliw.ui.setup_screen`.
 
-Ответ — список абзацев. Строка с отступом в четыре пробела считается командой:
-экран красит её и не смешивает с пояснениями.
+An answer is a list of paragraphs. A line indented by four spaces is treated
+as a shell command: the screen highlights it separately from explanatory text.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from . import VERSION_LABEL
 
 
 def _py() -> str:
-    """Текущий интерпретатор, готовый для вставки в командную строку."""
+    """Current Python interpreter, quoted for shell copy-paste if needed."""
     return f'"{sys.executable}"' if " " in sys.executable else sys.executable
 
 
@@ -36,7 +36,7 @@ def _project_text() -> str:
     p = _project()
     if p is not None:
         return str(p)
-    return "путь\\к\\каталогу\\проекта" if os.name == "nt" else "путь/к/каталогу/проекта"
+    return r"path\to\project\dir" if os.name == "nt" else "path/to/project/dir"
 
 
 def _activate() -> str:
@@ -52,7 +52,7 @@ def _venv_python() -> str:
 
 
 def _pip_install() -> str:
-    """Установка проекта с интерфейсом — из каталога проекта."""
+    """Install the project with the TUI interface — from the project directory."""
     if _project() is not None:
         return f'{_py()} -m pip install -e ".[tui]"'
     return f'{_py()} -m pip install "textual>=8.2" "rich>=13"'
@@ -63,41 +63,41 @@ def _tui_only() -> str:
 
 
 ЗАГОЛОВКИ: dict[str, str] = {
-    "зачем": "зачем нужен NEX CLI",
-    "требования": "что нужно на компьютере",
-    "установка": "как установить",
-    "textual": "textual и rich — полноэкранный интерфейс",
+    "зачем": "what NEX CLI is for",
+    "требования": "system requirements",
+    "установка": "how to install",
+    "textual": "textual and rich — full-screen interface",
     "система": "Windows / Linux / macOS",
-    "проверка": "как проверить установку и прогнать тесты",
-    "запуск": "как запустить",
-    "проблема": "не запускается — что делать",
-    "venv": "виртуальное окружение",
-    "обновление": "как обновить",
-    "удаление": "как удалить",
-    "данные": "сценарии и данные",
-    "агент": "агент и API-ключи",
-    "nnl": "как NNL понимает вопрос",
-    "беседа": "приветствие",
+    "проверка": "how to verify installation and run tests",
+    "запуск": "how to launch",
+    "проблема": "won't start — troubleshooting",
+    "venv": "virtual environment",
+    "обновление": "how to update",
+    "удаление": "how to uninstall",
+    "данные": "scenarios and data",
+    "агент": "agent and API keys",
+    "nnl": "how NNL understands your question",
+    "беседа": "greeting",
 }
 
 
 def _зачем() -> list[str]:
     return [
-        f"NEX CLI {VERSION_LABEL} — рабочее место для планирования инструкций "
-        "под VLIW-машину Эльбрус e2k.",
+        f"NEX CLI {VERSION_LABEL} is a workspace for instruction scheduling "
+        "on the Elbrus e2k VLIW architecture.",
         "",
-        "Он берёт граф программы и показывает, как инструкции ложатся на каналы "
-        "и порты машины: где возникает конфликт за порт, сколько тактов теряется "
-        "впустую и что можно ускорить перестановкой. Внутри три режима:",
-        "  КОД — редактор .s, расписание, разбор и замечания в одном окне;",
-        "  РАЗБОР — весь граф целиком, диагноз и сценарии;",
-        "  АГЕНТ — вопросы к LLM о том, что происходит на текущем графе.",
+        "It takes a program dependency graph and shows how instructions map onto "
+        "machine channels and ports: where port conflicts occur, how many cycles "
+        "are lost to stalls, and what can be sped up by reordering. Three modes inside:",
+        "  CODE — .s editor, schedule, analysis, and linter diagnostics in one window;",
+        "  LAB — full dependency graph, diagnostics, and built-in scenarios;",
+        "  AGENT — LLM Q&A grounded in the current graph and schedule.",
         "",
-        "Планировщик, оракул и разовые команды работают на чистом Python. "
-        "Полноэкранные панели построены на Textual — если его нет или терминал "
-        "не интерактивный, открывается этот экран.",
+        "The scheduler, oracle, and one-shot commands run on pure Python. "
+        "Full-screen panes are built on Textual — if it is missing or the terminal "
+        "is non-interactive, this setup screen opens instead.",
         "",
-        "Быстрая проверка без установки:",
+        "Quick check without installing:",
         f"    {_py()} -m vliw run slotclash",
         f"    {_py()} -m vliw compare",
         f"    {_py()} -m vliw --help",
@@ -106,61 +106,61 @@ def _зачем() -> list[str]:
 
 def _требования() -> list[str]:
     return [
-        f"Минимум — Python {МИН_PYTHON} или новее (рекомендуется 3.12), 64-битный.",
+        f"Minimum — Python {МИН_PYTHON} or newer (3.12 recommended), 64-bit.",
         "",
-        "Что нужно:",
-        "  • около 100 МБ на диске вместе с textual и rich;",
-        "  • обычный терминал с UTF-8 (PowerShell, Windows Terminal, bash, zsh);",
-        "  • интернет — только чтобы скачать пакеты; для работы он не нужен.",
+        "What you need:",
+        "  • about 100 MB of disk space including textual and rich;",
+        "  • a standard UTF-8 terminal (PowerShell, Windows Terminal, bash, zsh);",
+        "  • internet access — only to download packages; not needed at runtime.",
         "",
-        "Что НЕ нужно:",
-        "  • видеокарта и CUDA;",
-        "  • настоящий Эльбрус — модель машины e2k встроена в проект;",
-        "  • numpy, torch и другие тяжёлые пакеты для планировщика и этого экрана.",
+        "What you do NOT need:",
+        "  • a GPU or CUDA;",
+        "  • real Elbrus hardware — the e2k machine model is built into the project;",
+        "  • numpy, torch, or other heavy packages for the scheduler and this screen.",
         "",
-        "Проверить версию Python:",
+        "Check your Python version:",
         f"    {_py()} --version",
         "",
-        "Поддерживаются Windows 10/11, Linux (Ubuntu, Debian, Fedora, Arch) "
-        "и macOS.",
+        "Supported on Windows 10/11, Linux (Ubuntu, Debian, Fedora, Arch), "
+        "and macOS.",
     ]
 
 
 def _установка() -> list[str]:
     проект = _project() is not None
     шаги = [
-        "Правильный порядок установки — по шагам, ничего не пропуская.",
+        "Recommended installation order — step by step, without skipping:",
         "",
-        "1. Проверьте Python (нужен 3.10+):",
+        "1. Check Python (3.10+ required):",
         f"    {_py()} --version",
         "",
-        "2. Перейдите в каталог проекта — там, где лежит pyproject.toml:",
+        "2. Change to the project directory (where pyproject.toml lives):",
         f"    cd {_project_text()}",
         "",
-        "3. Создайте отдельное окружение, чтобы не трогать системный Python:",
+        "3. Create an isolated environment so system Python stays clean:",
         f"    {_py()} -m venv .venv",
         "",
-        "4. Активируйте его:",
+        "4. Activate it:",
         f"    {_activate()}",
         "",
-        "5. Обновите pip и поставьте проект вместе с интерфейсом:",
+        "5. Upgrade pip and install the project with the TUI interface:",
         "    python -m pip install --upgrade pip",
     ]
     if проект:
-        шаги.append(f'    python -m pip install -e ".[tui]"')
+        шаги.append('    python -m pip install -e ".[tui]"')
     else:
         шаги.append('    python -m pip install "textual>=8.2" "rich>=13"')
     шаги += [
         "",
-        "6. Запустите:",
+        "6. Launch:",
         "    python -m vliw",
         "",
-        "Если активация окружения не работает, обойдитесь полным путём:",
+        "If environment activation fails, use the full interpreter path:",
         f"    {_venv_python()} -m pip install --upgrade pip",
         f'    {_venv_python()} -m pip install -e ".[tui]"',
         f"    {_venv_python()} -m vliw",
         "",
-        "Только интерфейс, без установки самого проекта:",
+        "Interface packages only, without installing the project itself:",
         f"    {_tui_only()}",
     ]
     return шаги
@@ -168,190 +168,189 @@ def _установка() -> list[str]:
 
 def _textual() -> list[str]:
     return [
-        "Textual — библиотека полноэкранного интерфейса: панели, вкладки, "
-        "клавиши, выбор КОД / РАЗБОР / АГЕНТ. Rich отвечает за цветной вывод и "
-        "таблицы; Textual использует его внутри.",
+        "Textual is the full-screen UI library: panes, tabs, keybindings, and "
+        "the CODE / LAB / AGENT switcher. Rich handles colored output and "
+        "tables; Textual uses it under the hood.",
         "",
-        "Без этих двух пакетов NEX CLI не падает: планировщик и команды "
-        "работают, но вместо полноэкранного интерфейса открывается этот экран.",
+        "Without these two packages NEX CLI does not crash: the scheduler and "
+        "CLI commands still work, but this helper screen opens instead of the "
+        "full-screen interface.",
         "",
-        "Поставить оба пакета:",
+        "Install both packages:",
         f"    {_tui_only()}",
         "",
-        "Поставить проект целиком вместе с ними (из каталога проекта):",
+        "Install the full project along with them (from the project directory):",
         f"    {_pip_install()}",
         "",
-        "Проверить, что модули видны:",
+        "Verify both modules are importable:",
         f'    {_py()} -c "import textual, rich; '
         'print(textual.__version__, rich.__version__)"',
         "",
-        "Если написано «No module named textual» — пакет поставлен другому "
-        "Python. Ставьте и запускайте одним и тем же интерпретатором:",
+        "If you see 'No module named textual', the package was installed into "
+        "a different Python. Install and run with the exact same interpreter:",
         f'    {_py()} -m pip install "textual>=8.2" "rich>=13"',
         f"    {_py()} -m vliw",
         "",
-        "После установки окно нужно закрыть и открыть заново: Textual "
-        "загружается при старте процесса.",
+        "After installing, restart the command: Textual is loaded at process startup.",
         "",
-        "Если полноэкранные панели не нужны, Textual можно не ставить — "
-        "построчный режим работает на чистом Python:",
+        "If you don't need full-screen panes, you can skip Textual — "
+        "line-by-line plain mode works on pure Python:",
         f"    {_py()} -m vliw --plain",
     ]
 
 
 def _система() -> list[str]:
     return [
-        "Windows (PowerShell или cmd):",
-        "  • проверьте Python:  py -3 --version",
-        "  • создайте окружение:  py -3 -m venv .venv",
-        r"  • активируйте:  .venv\Scripts\activate",
-        "  • поставьте:  python -m pip install -e \".[tui]\"",
-        "  • запустите:  python -m vliw",
+        "Windows (PowerShell or cmd):",
+        "  • check Python:  py -3 --version",
+        "  • create venv:  py -3 -m venv .venv",
+        r"  • activate:  .venv\Scripts\activate",
+        '  • install:  python -m pip install -e ".[tui]"',
+        "  • launch:  python -m vliw",
         "",
-        "Если PowerShell запрещает activate, запустите политику один раз:",
+        "If PowerShell blocks activate, relax the execution policy once:",
         "    Set-ExecutionPolicy -Scope CurrentUser RemoteSigned",
-        "либо не активируйте, а вызывайте интерпретатор напрямую:",
+        "or skip activation and call the venv interpreter directly:",
         r"    .venv\Scripts\python.exe -m vliw",
         "",
-        "Кириллица в старом cmd может ломаться — включите UTF-8:",
+        "If legacy cmd garbles Unicode characters, enable UTF-8:",
         "    chcp 65001",
         "",
         "Linux / macOS:",
-        "  • проверьте Python:  python3 --version",
-        "  • поставьте venv, если его нет:  sudo apt install python3-venv",
-        "  • создайте окружение:  python3 -m venv .venv",
-        "  • активируйте:  source .venv/bin/activate",
-        "  • поставьте:  python -m pip install -e \".[tui]\"",
-        "  • запустите:  python -m vliw",
+        "  • check Python:  python3 --version",
+        "  • install venv if missing:  sudo apt install python3-venv",
+        "  • create venv:  python3 -m venv .venv",
+        "  • activate:  source .venv/bin/activate",
+        '  • install:  python -m pip install -e ".[tui]"',
+        "  • launch:  python -m vliw",
         "",
-        "Если команда python3 не найдена, попробуйте python. На Windows "
-        "остерегайтесь заглушки Microsoft Store из WindowsApps — лучше "
-        "поставить Python с python.org и вызывать его полным путём.",
+        "If python3 is not found, try python. On Windows, watch out for the "
+        "Microsoft Store stub in WindowsApps — it's better to install Python "
+        "from python.org and call it by full path.",
     ]
 
 
 def _проверка() -> list[str]:
     return [
-        "Проверка по шагам — от Python к интерфейсу:",
+        "Step-by-step verification — from Python to the TUI:",
         "",
-        "1. Версия Python:",
+        "1. Python version:",
         f"    {_py()} --version",
         "",
-        "2. Видны ли пакеты интерфейса:",
+        "2. Check if UI packages are visible:",
         f'    {_py()} -c "import textual, rich; '
         'print(textual.__version__, rich.__version__)"',
         "",
-        "3. Отвечает ли сам NEX CLI:",
+        "3. Check that NEX CLI responds:",
         f"    {_py()} -m vliw --version",
         f"    {_py()} -m vliw --help",
         "",
-        "4. Диагностика модели и сценария:",
+        "4. Model and scenario diagnostics:",
         f"    {_py()} -m vliw doctor",
         f"    {_py()} -m vliw selfcheck --seeds 20",
         "",
-        "5. Полный набор тестов проекта (идёт несколько минут):",
+        "5. Full project test suite (takes a few minutes):",
         f"    {_py()} -m unittest discover -s tests",
         "",
-        "Если первые три команды работают, а полноэкранный интерфейс не "
-        "открывается — проблема в терминале: запускайте из настоящего окна, "
-        "а не из перенаправленного вывода или встроенной консоли IDE.",
+        "If the first three commands work but the full-screen UI won't open, "
+        "the issue is the terminal: run from a real interactive terminal, "
+        "not a redirected pipe or non-TTY IDE console.",
         "",
-        "Проверить, что терминал настоящий:",
+        "Verify you are in a real TTY:",
         f'    {_py()} -c "import sys; '
         'print(sys.stdin.isatty(), sys.stdout.isatty())"',
-        "Должно быть: True True",
+        "Expected output: True True",
     ]
 
 
 def _запуск() -> list[str]:
     return [
-        "Основной запуск — из каталога проекта, с активированным окружением:",
+        "Standard launch — from the project directory with venv activated:",
         "    python -m vliw",
         "",
-        "Откроется выбор режима: КОД, РАЗБОР, АГЕНТ, ЯДРО. Стрелки и Enter — "
-        "навигация, Esc — назад, Ctrl+C — выход.",
+        "Opens the mode picker: CODE, LAB, AGENT, CORE. Arrow keys and Enter "
+        "to navigate, Esc to go back, Ctrl+C to exit.",
         "",
-        "Сразу в нужный режим:",
+        "Jump straight into a mode:",
         "    python -m vliw code",
         "    python -m vliw lab",
         "    python -m vliw mind",
         "",
-        "Одна команда без интерфейса:",
+        "Single command without the full-screen UI:",
         "    python -m vliw run slotclash",
         "    python -m vliw compare",
         "    python -m vliw scenarios",
         "",
-        "Построчный режим, если панели не нужны или терминал их не тянет:",
+        "Line-by-line plain mode if panes aren't needed or the terminal can't render them:",
         "    python -m vliw --plain",
         "",
-        "После установки пакета появляется короткая команда:",
+        "After installing the package, the short command is available:",
         "    vliw",
         "",
-        "Полный список команд:  python -m vliw --help",
+        "Full list of commands:  python -m vliw --help",
     ]
 
 
 def _проблема() -> list[str]:
     return [
-        "Порядок разбора — он закрывает почти все случаи:",
+        "Diagnostic checklist — covers almost every failure mode:",
         "",
-        "1. Убедитесь, что окно настоящее, а не пайп или консоль IDE:",
+        "1. Make sure you're in a real terminal, not a pipe or IDE console:",
         f'    {_py()} -c "import sys; '
         'print(sys.stdin.isatty(), sys.stdout.isatty())"',
-        "Нужно True True. Если False — откройте PowerShell, Windows Terminal "
-        "или обычный терминал Linux.",
+        "Must print True True. If False, open PowerShell, Windows Terminal, "
+        "or a standard Linux/macOS terminal.",
         "",
-        "2. Посмотрите текст ошибки в построчном режиме:",
+        "2. Inspect the raw error message in plain mode:",
         "    python -m vliw --plain",
-        "Здесь видно настоящий traceback, а не только красивый экран.",
+        "This shows the real traceback instead of falling back to the setup screen.",
         "",
-        "3. Проверьте пакеты интерфейса:",
+        "3. Check UI packages:",
         f'    {_py()} -c "import textual, rich; '
         'print(textual.__version__, rich.__version__)"',
-        "Если модуль не найден:",
+        "If a module is missing:",
         f"    {_tui_only()}",
         "",
-        "4. Проверьте, что Python не старше 3.10:",
+        "4. Check that Python is 3.10 or newer:",
         f"    {_py()} --version",
         "",
-        "5. Прогоните диагностику:",
+        "5. Run built-in diagnostics:",
         f"    {_py()} -m vliw doctor",
         "",
-        "Частые причины: textual поставлен другому Python; запуск из "
-        "Microsoft Store-заглушки; терминал не поддерживает полноэкранный "
-        "режим; старый cmd без UTF-8 (помогает chcp 65001).",
+        "Common causes: textual installed into a different Python; launching via "
+        "the Microsoft Store stub; terminal lacks full-screen support; legacy cmd "
+        "without UTF-8 (fix with chcp 65001).",
         "",
-        "Если ничего не помогло — пришлите последние строки traceback из "
-        "команды с --plain: по ним видно, какой модуль или файл сломан.",
+        "If nothing helped, share the last lines of the traceback from "
+        "--plain: they pinpoint which module or file failed.",
     ]
 
 
 def _venv() -> list[str]:
     return [
-        "Виртуальное окружение (venv) — отдельная папка с собственным Python и "
-        "пакетами. Оно не даёт установке NEX CLI сломать системный Python и "
-        "наоборот.",
+        "A virtual environment (venv) is an isolated folder with its own Python "
+        "and packages. It keeps NEX CLI dependencies separate from system Python.",
         "",
-        "Создать в каталоге проекта:",
+        "Create in the project directory:",
         f"    cd {_project_text()}",
         f"    {_py()} -m venv .venv",
         "",
-        "Активировать:",
+        "Activate:",
         f"    {_activate()}",
-        "В приглашении появится (.venv). Дальше python и pip — уже из окружения.",
+        "Your prompt will show (.venv). From then on, python and pip use the venv.",
         "",
-        "Поставить пакеты и запустить:",
+        "Install packages and launch:",
         "    python -m pip install --upgrade pip",
         '    python -m pip install -e ".[tui]"',
         "    python -m vliw",
         "",
-        "Выйти из окружения:  deactivate",
+        "Leave the environment:  deactivate",
         "",
-        "Если pip не найден или ругается ensurepip:",
+        "If pip is missing or ensurepip fails:",
         f"    {_py()} -m ensurepip --upgrade",
         f"    {_py()} -m pip install --upgrade pip",
         "",
-        "Удалить окружение — просто удалить папку:",
+        "Delete the environment by removing its folder:",
         r"    rmdir /s /q .venv        (Windows)",
         "    rm -rf .venv             (Linux / macOS)",
     ]
@@ -359,146 +358,144 @@ def _venv() -> list[str]:
 
 def _обновление() -> list[str]:
     return [
-        "Если проект установлен из исходников:",
+        "If the project is installed from source:",
         f"    cd {_project_text()}",
         "    git pull",
-        "    python -m pip install --upgrade -e \".[tui]\"",
+        '    python -m pip install --upgrade -e ".[tui]"',
         "",
-        "Обновить только пакеты интерфейса:",
-        "    python -m pip install --upgrade \"textual>=8.2\" \"rich>=13\"",
+        "Update only the UI packages:",
+        '    python -m pip install --upgrade "textual>=8.2" "rich>=13"',
         "",
-        "Проверить версии после обновления:",
+        "Verify versions after updating:",
         f"    {_py()} -m vliw --version",
         f'    {_py()} -c "import textual, rich; '
         'print(textual.__version__, rich.__version__)"',
         "",
-        "Если обновление сломалось, пересоздайте окружение с нуля:",
+        "If the update broke the environment, recreate .venv from scratch:",
         r"    rmdir /s /q .venv        (Windows)",
         "    rm -rf .venv             (Linux / macOS)",
         f"    {_py()} -m venv .venv",
         f"    {_activate()}",
         '    python -m pip install -e ".[tui]"',
         "",
-        "Настройки и сценарии лежат отдельно от пакетов, поэтому пересоздание "
-        "venv их не затрагивает.",
+        "Settings and scenarios live outside site-packages, so recreating "
+        "the venv won't touch them.",
     ]
 
 
 def _удаление() -> list[str]:
     return [
-        "Удаление в три шага — от пакета к папкам:",
+        "Uninstall in three steps — from package to folders:",
         "",
-        "1. Убрать сам NEX CLI из текущего окружения:",
+        "1. Remove NEX CLI from the current environment:",
         f"    {_py()} -m pip uninstall vliw-ai-scheduler",
         "",
-        "2. Убрать окружение целиком (если ставили в .venv):",
+        "2. Remove the virtual environment (if installed in .venv):",
         r"    rmdir /s /q .venv        (Windows)",
         "    rm -rf .venv             (Linux / macOS)",
         "",
-        "3. Удалить каталог проекта, если он больше не нужен.",
+        "3. Delete the project directory if you no longer need it.",
         "",
-        "Пакеты интерфейса удаляйте только если они не нужны другим программам:",
+        "Only uninstall UI packages if no other tools depend on them:",
         f"    {_py()} -m pip uninstall textual rich",
         "",
-        "Кэш pip можно почистить отдельно:",
+        "Optionally clear the pip cache:",
         f"    {_py()} -m pip cache purge",
         "",
-        "Ключи API, которые вы вводили через key или ai, в файлы не пишутся — "
-        "удалять нечего.",
+        "API keys entered via /key or /ai are kept in memory only — "
+        "nothing is written to disk.",
     ]
 
 
 def _данные() -> list[str]:
     return [
-        "Сценарии встроены в проект — это небольшие графы с разными ловушками "
-        "машины e2k. Посмотреть список:",
+        "Built-in scenarios are compact dependency graphs illustrating specific "
+        "e2k VLIW hazards. List them:",
         "    python -m vliw scenarios",
         "",
-        "Главный сценарий — slotclash: очередь инструкций, где деление "
-        "монопольно занимает порт и блокирует остальные. На нём видно, зачем "
-        "планировщику перестановки.",
+        "The flagship scenario is slotclash: an instruction sequence where division "
+        "monopolizes a port and stalls other ops, showing why reordering matters.",
         "",
-        "Прогнать один сценарий и сравнить с оракулом:",
+        "Run a scenario and compare against the oracle:",
         "    python -m vliw run slotclash",
         "    python -m vliw compare",
         "",
-        "Загрузить настоящий .s от компилятора lcc:",
+        "Load a real .s file from the lcc compiler:",
         "    python -m vliw load examples/probe.s",
         "",
-        "Сводка по всем сценариям и случайные графы:",
+        "Summary across all scenarios and random graphs:",
         "    python -m vliw all",
         "    python -m vliw sweep --seeds 20",
         "",
-        "Каталог real_candidates_100_400 содержит реальные замеры кандидатов; "
-        "eval_real — набор для оценки качества расписаний.",
+        "The real_candidates_100_400 folder contains real candidate measurements; "
+        "eval_real is the evaluation suite for schedule quality.",
     ]
 
 
 def _агент() -> list[str]:
     return [
-        "Агент — необязательная часть: он отвечает на вопросы о текущем графе "
-        "через LLM. Без ключа интерфейс и планировщик работают как обычно.",
+        "The agent is optional: it answers questions about the current graph "
+        "using an LLM. Without an API key, the UI and scheduler work normally.",
         "",
-        "Ключ задаётся на сессию, в файлы не сохраняется:",
+        "Set a key for the current session (not saved to disk):",
         "    python -m vliw",
-        "    /key ВАШ_КЛЮЧ",
-        "    /ai openai key=ВАШ_КЛЮЧ model=gpt-4o-mini",
+        "    /key YOUR_KEY",
+        "    /ai openai key=YOUR_KEY model=gpt-4o-mini",
         "",
-        "Или переменными окружения:",
+        "Or via environment variables:",
         "    OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,",
         "    MISTRAL_API_KEY, YANDEX_API_KEY, NEX_API_KEY",
         "",
-        "Локальная модель (Ollama, vLLM) — через local-server и любой непустой "
-        "ключ:",
-        "    /ai local-server key=local model=ваша-модель",
+        "Local model (Ollama, vLLM) via local-server with any non-empty key:",
+        "    /ai local-server key=local model=your-model",
         "",
-        "Проверить состояние:  /ai",
-        "Спросить одной командой:  python -m vliw ask \"почему расписание такое?\"",
+        "Check status:  /ai",
+        'Ask in one shot:  python -m vliw ask "why is the schedule shaped like this?"',
         "",
-        "Если агент молчит, проверьте ключ и интернет; при ошибке сети он "
-        "честно отвечает офлайн, а не подменяет ответ выдумкой.",
+        "If the agent is silent, check your key and internet connection; on "
+        "network errors it responds honestly offline rather than fabricating answers.",
     ]
 
 
 def _беседа() -> list[str]:
     return [
-        "Здравствуйте! Я NNL-ассистент NEX CLI.",
+        "Hello! I'm the NEX CLI NNL assistant.",
         "",
-        "Помогу разобраться, зачем нужен планировщик, что установить на новом "
-        "компьютере, почему не открывается полноэкранный интерфейс и как "
-        "проверить, что всё работает.",
+        "I can help you understand what the scheduler does, what to install on "
+        "a new machine, why the full-screen interface isn't opening, and how to "
+        "verify everything works.",
         "",
-        "Спросите обычными словами — например:",
-        "  «как установить», «что нужно для запуска», «нет textual»,",
-        "  «не запускается интерфейс», «как на Windows», «как удалить».",
+        "Ask in plain words — for example:",
+        '  "how to install", "system requirements", "missing textual",',
+        '  "interface won\'t start", "how on Windows", "how to uninstall".',
         "",
-        "Можно выбрать пункт меню цифрой или задать вопрос через «?».",
+        'You can pick a menu item by number or ask a question with "?".',
     ]
 
 
 def _nnl() -> list[str]:
     return [
-        "NNL — не большая языковая модель, а набор маленьких обученных блоков. "
-        "Каждый блок решает одну узкую задачу: подсказать расписание, оценить "
-        "выигрыш, отнести вопрос к теме.",
+        "NNL is not a large language model — it is a collection of small trained "
+        "blocks. Each block solves one narrow task: suggest a schedule, estimate "
+        "a gain, or route a question to a topic.",
         "",
-        "Блок помощи устроен так:",
-        "  1. вопрос режется на слова и куски слов по 3-4 символа;",
-        "  2. каждый кусок по crc32 попадает в строку таблицы E;",
-        "  3. строки усредняются в один вектор h;",
-        "  4. линейный слой h·U + b даёт счёты тем, softmax — вероятности.",
+        "How the help block works:",
+        "  1. splits the question into words and 3-4 character n-grams;",
+        "  2. hashes each token via crc32 into a row of embedding table E;",
+        "  3. averages the rows into a single vector h;",
+        "  4. linear layer h·U + b scores topics; softmax converts to probabilities.",
         "",
-        "Веса получены обучением на живых формулировках вопросов, а не написаны "
-        "руками. Но это классификатор тем, а не понимание смысла: контекст "
-        "разговора он не помнит.",
+        "Weights were trained on real question phrasings rather than hand-coded. "
+        "However, it is a topic classifier, not a conversational model: it does "
+        "not remember dialogue context.",
         "",
-        "Поэтому перед блоком стоит разбор по ключевым словам: он ловит точные "
-        "имена (textual, venv, slotclash) и отличает вопрос «зачем нужны "
-        "установки» от команды «установи». Полноценный разговор с моделью — это "
-        "режим АГЕНТ: ему нужен API-ключ, и только он видит контекст диалога.",
+        "That's why keyword matching runs before the block: it catches exact "
+        "names (textual, venv, slotclash) and distinguishes questions about "
+        "installation from launch commands. Full LLM conversation lives in "
+        "AGENT mode, which requires an API key and sees the full dialogue.",
         "",
-        "Честно: агент в режиме АГЕНТ не дообучался на ваших диалогах. В CLI "
-        "работают keyword-разбор и обученный NNL-классификатор тем.",
+        "To be transparent: the agent in AGENT mode is not fine-tuned on your "
+        "chats. The CLI relies on keyword routing and the trained NNL classifier.",
     ]
 
 
@@ -521,83 +518,84 @@ _ОТВЕТЫ = {
 }
 
 
-# Короткий ответ — то, что ассистент говорит сразу. Это не справка: три-пять
-# строк, после которых экран предлагает действие. Полный текст (`ответ`) прячется
-# за пунктом «Подробнее», чтобы вопрос не превращался в стену команд.
+# Short answer — what the assistant says immediately. Not a full manual: 3-5
+# lines followed by a suggested action. The full text (`ответ`) is tucked behind
+# "More details" so a simple question doesn't turn into a wall of commands.
 _КРАТКО: dict[str, list[str]] = {
     "зачем": [
-        "NEX CLI — планировщик инструкций для VLIW-машины Эльбрус e2k. Он "
-        "показывает, где инструкции конфликтуют за порты и сколько тактов "
-        "можно вернуть перестановкой.",
-        "Панели КОД / РАЗБОР / АГЕНТ — это Textual. Планировщик и разовые "
-        "команды работают и без него.",
+        "NEX CLI is an instruction scheduler for the Elbrus e2k VLIW architecture. "
+        "It shows where instructions contend for ports and how many cycles "
+        "can be recovered by reordering.",
+        "The CODE / LAB / AGENT panes use Textual. The scheduler and one-shot "
+        "commands work without it.",
     ],
     "требования": [
-        "Нужен Python 3.10+ (лучше 3.12) и около 100 МБ на диске. Видеокарта, "
-        "numpy и настоящий Эльбрус не нужны.",
-        "Интернет нужен только для установки textual и rich.",
+        "Requires Python 3.10+ (3.12 recommended) and ~100 MB of disk space. "
+        "No GPU, numpy, or real Elbrus hardware needed.",
+        "Internet is only needed to install textual and rich.",
     ],
     "установка": [
-        "Могу поставить textual и rich в текущее окружение Python и сразу "
-        "открыть NEX CLI — без ручного ввода команд.",
+        "I can install textual and rich into the current Python environment and "
+        "launch NEX CLI right away — no manual commands required.",
     ],
     "textual": [
-        "Textual отвечает за полноэкранные панели и вкладки, rich — за цвет и "
-        "таблицы. Без них NEX CLI работает, но вместо панелей открывается этот "
-        "экран-помощник.",
+        "Textual powers the full-screen panes and tabs; rich handles colors and "
+        "tables. Without them NEX CLI still runs, but opens this helper screen "
+        "instead of the full-screen UI.",
     ],
     "система": [
-        "Windows: команды через py -3 или python. Linux и macOS: python3. "
-        "В PowerShell активация venv — .venv\\Scripts\\activate.",
-        "Если старый терминал путает кириллицу, включите UTF-8: chcp 65001.",
+        "Windows: use py -3 or python. Linux and macOS: python3. "
+        "In PowerShell, activate venv via .venv\\Scripts\\activate.",
+        "If legacy cmd garbles Unicode, enable UTF-8 with chcp 65001.",
     ],
     "проверка": [
-        "Проверю Python, pip, textual, rich и терминал. Ничего не изменю.",
+        "I will check Python, pip, textual, rich, and your terminal without "
+        "modifying anything.",
     ],
     "запуск": [
-        "Открою NEX CLI. Если textual нет — сначала поставлю его, иначе "
-        "полноэкранные панели не поднимутся.",
+        "I will launch NEX CLI. If textual is missing, I'll install it first so "
+        "the full-screen panes can start.",
     ],
     "проблема": [
-        "Проверю окружение и поставлю недостающее, затем попробую открыть "
-        "NEX CLI заново. Если снова не выйдет — покажу, как увидеть traceback.",
+        "I will check your environment, install anything missing, and retry "
+        "launching NEX CLI. If it still fails, I'll show how to get a traceback.",
     ],
     "venv": [
-        "Отдельное окружение .venv защищает системный Python. Покажу точные "
-        "команды; выполнять их нужно в каталоге проекта.",
+        "An isolated .venv protects your system Python. I'll show the exact "
+        "commands to run inside the project directory.",
     ],
     "обновление": [
-        "Обновлю textual и rich. Если проект установлен из исходников — "
-        "подскажу команду git pull и переустановки.",
+        "I will update textual and rich. If the project is installed from source, "
+        "I'll also show the git pull and reinstall commands.",
     ],
     "удаление": [
-        "Покажу безопасный порядок удаления. Сам удалять не буду: это "
-        "необратимо.",
+        "I will show the safe uninstall steps. I won't delete anything "
+        "automatically since that is irreversible.",
     ],
     "данные": [
-        "Внутри есть готовые сценарии; главный — slotclash, где деление "
-        "монопольно занимает порт и блокирует остальные инструкции.",
-        "Открою NEX CLI — сценарий запускается оттуда одной командой.",
+        "Built-in scenarios are included; the flagship is slotclash, where "
+        "division monopolizes a port and blocks other instructions.",
+        "I'll open NEX CLI — you can run the scenario from there with one command.",
     ],
     "агент": [
-        "Агент необязателен: планировщик и интерфейс работают без ключа. "
-        "Ключ задаётся на сессию и не сохраняется в файлы.",
+        "The agent is optional: the scheduler and UI work without a key. "
+        "Keys are kept in memory for the session only and never written to disk.",
     ],
     "беседа": [
-        "Здравствуйте! Скажите, что нужно: запустить NEX CLI, поставить "
-        "интерфейс, проверить окружение или разобрать ошибку.",
+        "Hello! Tell me what you need: launch NEX CLI, install the UI, "
+        "check your environment, or troubleshoot an error.",
     ],
     "nnl": [
-        "NNL — набор маленьких обученных блоков, а не большая языковая модель. "
-        "Блок помощи считает мешок слов и линейно выбирает тему ответа.",
-        "Контекст диалога он не помнит: вопрос понимается по словам. Полный "
-        "агент с LLM — отдельный режим АГЕНТ, ему нужен API-ключ.",
+        "NNL is a set of small trained blocks, not a large language model. "
+        "The help block computes a bag of words and linearly classifies the topic.",
+        "It does not remember conversation context. Full LLM chat is in AGENT "
+        "mode, which requires an API key.",
     ],
 }
 
 
 def кратко(тема: str) -> list[str]:
-    """Первые строки ответа — для ассистента, который предлагает действие."""
+    """Opening lines of the answer — for the assistant before offering an action."""
     if тема in _КРАТКО:
         return list(_КРАТКО[тема])
     полный = ответ(тема) or []
@@ -605,7 +603,7 @@ def кратко(тема: str) -> list[str]:
 
 
 def ответ(тема: str) -> list[str] | None:
-    """Абзацы ответа по теме; None — неизвестная тема."""
+    """Paragraphs of the answer for a topic; None if unknown."""
     fn = _ОТВЕТЫ.get(тема)
     return fn() if fn else None
 
@@ -615,28 +613,28 @@ def темы() -> list[str]:
 
 
 def не_понял(вопрос_ли: bool = True) -> list[str]:
-    """Мягкий отказ, когда блок не узнал тему."""
+    """Polite fallback when the block did not recognize the topic."""
     if not вопрос_ли:
         return _беседа()
     return [
-        "Не уверен, что понял вопрос: он не похож на вопрос об установке или "
-        "работе NEX CLI.",
+        "I'm not sure I understood that — it doesn't look like a question about "
+        "installing or using NEX CLI.",
         "",
-        "Я отвечаю на темы:",
-        "  • зачем нужен NEX CLI и что он делает;",
-        "  • требования и установка (Python, venv, textual, rich);",
-        "  • запуск, ошибки и почему не открывается интерфейс;",
-        "  • Windows / Linux / macOS;",
-        "  • проверка, тесты, обновление и удаление;",
-        "  • сценарии, данные и агент.",
+        "I can answer questions about:",
+        "  • what NEX CLI is for and what it does;",
+        "  • system requirements and installation (Python, venv, textual, rich);",
+        "  • launching, errors, and why the UI won't open;",
+        "  • Windows / Linux / macOS specifics;",
+        "  • verification, tests, updating, and uninstalling;",
+        "  • scenarios, data, and the LLM agent.",
         "",
-        "Сформулируйте иначе или выберите пункт меню — например, «как "
-        "установить» или «не запускается интерфейс».",
+        'Try rephrasing or pick a menu item — e.g. "how to install" '
+        'or "interface won\'t start".',
     ]
 
 
 def подсказки() -> list[str]:
-    return [f"«{q}»" for q in (
-        "как установить", "что нужно для запуска", "почему не открывается",
-        "нет textual", "как на Windows", "как проверить", "как удалить",
+    return [f'"{q}"' for q in (
+        "how to install", "system requirements", "why won't it open",
+        "missing textual", "how on Windows", "how to verify", "how to uninstall",
     )]

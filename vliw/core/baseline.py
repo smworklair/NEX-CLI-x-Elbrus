@@ -1,23 +1,8 @@
-"""Baseline: жадный list scheduler по длине остаточного критического пути.
+"""Baseline: greedy list scheduler ordered by remaining critical-path height.
 
-Это ровно то, что стоит в реальных компиляторах (в LLVM `MachineScheduler`
-устроен так же по сути): на каждом такте берём готовые инструкции,
-сортируем по убыванию высоты в графе и раздаём по свободным каналам,
-пока каналы не кончатся.
-
-Планировщик намеренно сделан не соломенным чучелом:
-  * он work-conserving — если инструкция с высоким приоритетом не влезает
-    в оставшиеся каналы, он идёт дальше по списку и заполняет слот тем,
-    что влезает;
-  * он не тратит «дорогие» каналы зря — сложение уходит на канал, который
-    умеет меньше всего операций.
-
-Его слабость принципиальна и не лечится подкруткой: приоритет по критическому
-пути видит только длину цепочек и ничего не знает о том, сколько ресурсов
-потребуют инструкции в следующих тактах.
-
-Функция `list_schedule` вынесена наружу: тот же самый жадный движок с другим
-вектором приоритетов используется оракулом (точным поиском) как база для перебора.
+Work-conserving and channel-cost aware (assigns flexible ops to least-capable
+channels first). Exposed `list_schedule()` is reused by the oracle and learned
+portfolios with custom priority vectors and `defer_until` constraints.
 """
 
 from __future__ import annotations
@@ -31,10 +16,7 @@ from .schedule import ChannelState, Schedule
 
 
 def channel_costs(model: MachineModel) -> list[int]:
-    """«Ценность» канала = сколько классов операций он умеет.
-
-    Дешёвые каналы раздаём первыми, чтобы не занять умножитель сложением.
-    """
+    """Channel scarcity = number of op classes supported (cheaper channels assigned first)."""
     return [
         sum(1 for op in model.ops if ch in model.channels_for(op))
         for ch in range(model.width)
@@ -50,11 +32,10 @@ def list_schedule(
     collect_trace: bool = False,
     height: Sequence[int] | None = None,
 ) -> tuple[Schedule, list[DecisionStep]]:
-    """Один проход жадного потактового планирования.
+    """Single cycle-by-cycle greedy list-scheduling pass.
 
-    `priority` — чем больше, тем раньше инструкция будет рассмотрена.
-    `defer_until` — искусственный запрет выдавать инструкцию раньше такта
-    (нужен перебору, который проверяет, не выгоднее ли придержать деление).
+    Higher `priority` is considered first; `defer_until` forbids issuing
+    before the given cycle.
     """
     n = len(dag)
     if height is None:
@@ -73,7 +54,7 @@ def list_schedule(
     while unscheduled:
         guard += 1
         if guard > 100000:
-            raise RuntimeError("планировщик зациклился")
+            raise RuntimeError("scheduler stuck in loop")
 
         ready = sorted(
             (
@@ -98,8 +79,8 @@ def list_schedule(
                     if model.occupancy(dag[p.instr].op) > 1
                     and chans.free_at[p.channel] > cycle
                 ],
-                rule="приоритет = убывание остаточного критического пути (height); "
-                "при равенстве — меньший номер инструкции",
+                rule="priority = descending remaining critical path (height); "
+                "tie-breaker = lower instruction ID",
             )
 
         issued_any = False
@@ -110,17 +91,17 @@ def list_schedule(
             cand = Candidate(instr=i, ready_at=ready_time[i], height=int(height[i]))
 
             if defer.get(i, 0) > cycle:
-                cand.reason = f"придержана перебором до такта {defer[i]}"
+                cand.reason = f"deferred by search until cycle {defer[i]}"
                 if step:
                     step.candidates.append(cand)
                 continue
             if not free:
                 if not chans.free_channels(cycle, tuple(range(model.width))):
-                    cand.reason = "все каналы этого такта заняты"
+                    cand.reason = "all channels occupied in this cycle"
                 else:
                     cand.reason = (
-                        f"свободные каналы не исполняют {op} "
-                        f"(нужен один из {','.join(map(str, capable))})"
+                        f"free channels do not execute {op} "
+                        f"(requires one of {','.join(map(str, capable))})"
                     )
                 if step:
                     step.candidates.append(cand)
@@ -139,20 +120,20 @@ def list_schedule(
             cand.chosen = True
             cand.channel = ch
             cand.reason = (
-                f"наивысший приоритет из готовых (h={int(height[i])}), "
-                f"канал {ch} свободен"
+                f"highest priority among ready ops (h={int(height[i])}), "
+                f"channel {ch} free"
             )
             if occ > 1:
-                cand.reason += f"; займёт канал монопольно до такта {cycle + occ}"
+                cand.reason += f"; holds channel exclusively until cycle {cycle + occ}"
             if step:
                 step.candidates.append(cand)
 
         if step is not None:
             if not issued_any:
-                step.rule = "простой"
+                step.rule = "stall"
                 step.comment = (
-                    "выдать нечего: операнды ещё не готовы или все подходящие "
-                    "каналы заняты"
+                    "nothing to issue: operands not ready or all capable "
+                    "channels busy"
                 )
             trace.append(step)
         cycle += 1
@@ -161,7 +142,7 @@ def list_schedule(
 
 
 class GreedyListScheduler:
-    name = "Baseline: жадный list scheduler (критический путь)"
+    name = "Baseline: greedy list scheduler (critical path)"
     kind = "heuristic"
     short = "baseline"
 
@@ -179,9 +160,9 @@ class GreedyListScheduler:
             trace=trace,
             optimal=None,
             notes=[
-                "Решение принимается только по текущему такту — заглядывания "
-                "вперёд нет.",
-                "Приоритет height не знает, сколько каналов потребуют "
-                "инструкции в следующих тактах.",
+                "Decisions consider only the current cycle with no lookahead."
+                "",
+                "Height priority has no visibility into upcoming channel demand "
+                "in future cycles.",
             ],
         )

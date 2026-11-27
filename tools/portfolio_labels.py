@@ -1,23 +1,8 @@
-"""Метки «какая группа портфеля нужна»: для каждого графа лучший makespan каждой группы.
+"""Label which portfolio group is needed per DAG (best makespan per group).
 
-Повторяет цикл TinyScheduler.schedule, но не просто берёт лучшее, а запоминает лучший makespan
-каждой группы. Группы идут от дешёвой к дорогой:
-
-    greedy  — жадный baseline;
-    prio    — порядок по голове priority;
-    defer   — priority + отсрочки головы defer;
-    hold    — priority + держки головы hold;
-    rule    — ручные держки монопольного порта (rule_hold, rule_hold_far);
-    beam    — веера по держкам, по приоритетам и по высотам.
-
-Ответ графа — самая дешёвая группа, которая достигает лучшего makespan портфеля.
-Если таких несколько, ответы графа — все группы, достигшие лучшего (для оценки ядра
-верным считается любая из них), а `дешёвая` — первая из них.
-
-Запуск:
-    python3 tools/portfolio_labels.py train_hard.jsonl train_sample.jsonl ... --out labels/
-Каждый вход -> <out>/<имя>.labels.jsonl со строками
-    {"ключ", "n", "prompt", "лучший", "по_группам": {группа: makespan|null}, "ответы": [...], "дешёвая"}
+Groups ordered cheapest to most expensive: greedy, prio, defer, hold, rule, beam.
+Usage:
+    python3 tools/portfolio_labels.py train_hard.jsonl ... --out labels/
 """
 
 from __future__ import annotations
@@ -51,7 +36,7 @@ def _init() -> None:
 
 
 def группы_графа(dag, T=None, model=None) -> dict:
-    """{группа: лучший makespan или None, если группа не применима}."""
+    """{group: best makespan or None if group is unavailable}."""
     T = T or _T
     model = model or _MODEL
     out: dict = {g: None for g in ГРУППЫ}
@@ -105,8 +90,8 @@ def строка(arg):
     g = группы_графа(dag)
     best = min(v for v in g.values() if v is not None)
     ответы = [k for k in ГРУППЫ if g[k] == best]
-    return {"ключ": key, "n": len(dag), "prompt": prompt, "лучший": best,
-            "по_группам": g, "ответы": ответы, "дешёвая": ответы[0]}
+    return {"key": key, "n": len(dag), "prompt": prompt, "best": best,
+            "by_group": g, "answers": ответы, "cheapest": ответы[0]}
 
 
 def main() -> int:
@@ -115,14 +100,14 @@ def main() -> int:
             _s.reconfigure(errors="replace")
         except Exception:  # noqa: BLE001
             pass
-    ap = argparse.ArgumentParser(description="Метки групп портфеля")
-    ap.add_argument("inputs", nargs="+", help=".jsonl с полем prompt")
+    ap = argparse.ArgumentParser(description="Portfolio group labels")
+    ap.add_argument("inputs", nargs="+", help=".jsonl files containing a prompt field")
     ap.add_argument("--out", default="labels")
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--exclude", default="",
-                    help="через запятую: .jsonl, чьи prompt выбросить (проверочные наборы, чтобы обучающие метки их не содержали)")
-    ap.add_argument("--unique", action="store_true", help="выбросить повторы prompt внутри файла")
+                    help="comma-separated .jsonl files whose prompts to exclude (eval sets)")
+    ap.add_argument("--unique", action="store_true", help="deduplicate prompts within each file")
     a = ap.parse_args()
     запрещено: set = set()
     for name in [x.strip() for x in a.exclude.split(",") if x.strip()]:
@@ -148,8 +133,8 @@ def main() -> int:
             for r in res:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         from collections import Counter
-        c = Counter(r["дешёвая"] for r in res)
-        print(f"{p.name}: {len(res)} графов -> {dst}; дешёвая группа: {dict(c)}", flush=True)
+        c = Counter(r["cheapest"] for r in res)
+        print(f"{p.name}: {len(res)} graphs -> {dst}; cheapest group: {dict(c)}", flush=True)
     return 0
 
 

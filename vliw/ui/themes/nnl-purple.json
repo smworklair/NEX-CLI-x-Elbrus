@@ -1,6 +1,6 @@
 {
   "name": "nnl-purple",
-  "description": "Экран запуска: глубокий фиолетовый, сиреневые акценты; успех, ошибка и предупреждение сохраняют смысл (зелёный/красный/амбра).",
+  "description": "Launch screen: deep purple, lilac accents; success, error, and warning preserve semantic colors (green/red/amber).",
   "roles": {
     "text": {
       "color": 253

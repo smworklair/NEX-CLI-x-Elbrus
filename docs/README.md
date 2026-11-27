@@ -1,66 +1,58 @@
-# Документация: маршрут
+# Documentation Roadmap
 
-Читать всё подряд не нужно. У маршрута три уровня — выберите тот, который нужен сейчас.
-Внутри уровня документы идут по порядку, в каждом есть ссылки «назад» и «дальше».
+You don't need to read everything front to back. The roadmap has three levels — pick the one you need right now. Within each level, documents follow a sequence with back and next links.
 
-Специалисту по Эльбрусу, который хочет сразу проверить цифры, — [`METHOD.md`](METHOD.md) (этап 3).
+If you are an Elbrus specialist who wants to verify the numbers immediately, jump straight to [`METHOD.md`](METHOD.md) (stage 3).
 
-## Уровень 1. Понять, о чём проект
+## Level 1. Understand the Project
 
-**3–5 минут. Один документ.**
+**3–5 minutes. One document.**
 
-| документ | зачем |
+| document | purpose |
 |---|---|
-| [`../README.md`](../README.md) | что делает NEX CLI, какие результаты и какие границы |
+| [`../README.md`](../README.md) | what NEX CLI does, its results, and its boundaries |
 
-Этого достаточно, чтобы понять идею: Эльбрус выполняет до шести операций за такт, NEX CLI
-сравнивает способы разложить готовый `.s` по тактам и честно показывает, где выигрыш есть,
-а где нет.
+This is enough to grasp the core idea: Elbrus executes up to six operations per cycle, and NEX CLI compares ways to pack compiled `.s` code into wide instructions while honestly showing where gains exist and where they don't.
 
-## Уровень 2. Запустить
+## Level 2. Run It
 
-**10–15 минут. Два документа, этапы 1–2.**
+**10–15 minutes. Two documents, stages 1–2.**
 
-| этап | документ | зачем |
+| stage | document | purpose |
 |---|---|---|
-| 1 | [`../QUICKSTART.md`](../QUICKSTART.md) | клон, установка, первый запуск и первый прогон |
-| 2 | [`CLI.md`](CLI.md) | все команды, флаги, коды возврата, типовые ошибки |
+| 1 | [`../QUICKSTART.md`](../QUICKSTART.md) | clone, install, first launch, and first run |
+| 2 | [`CLI.md`](CLI.md) | all commands, flags, exit codes, common issues |
 
-После этого у вас работает `python -m vliw`, и вы умеете прогнать сценарий. Дальше можно
-не читать ничего — инструмент уже пригоден.
+After this, `python -m vliw` works on your machine and you know how to run scenarios. You don't have to read further — the tool is already usable.
 
-## Уровень 3. Разобраться
+## Level 3. Dive Deeper
 
-**По потребности. Этапы 3–12, порядок важен только при чтении подряд.**
+**As needed. Stages 3–13; order only matters if reading straight through.**
 
-| этап | документ | когда открывать |
+| stage | document | when to open |
 |---|---|---|
-| 3 | [`METHOD.md`](METHOD.md) | проверить, откуда числа и где границы модели |
-| 4 | [`CODE_MODE.md`](CODE_MODE.md) | принести настоящий `.s` от `lcc` и прогнать |
-| 5 | [`LAB_MODE.md`](LAB_MODE.md) | увидеть решётку тактов × каналов и «почему здесь» |
-| 6 | [`CORE_MODE.md`](CORE_MODE.md) | понять, откуда берётся граф зависимостей |
-| 7 | [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md) | спросить агента и проверить его ответ |
-| 8 | [`ORCHESTRA.md`](ORCHESTRA.md) | ключ, провайдеры, штаб, крошки |
-| 9 | [`TINY.md`](TINY.md) | что считает TINY AI и как его переобучить |
-| 10 | [`ISA.md`](ISA.md) | проверить модель машины: каналы, латентности, источники |
-| 11 | [`REAL_VS_SYNTH.md`](REAL_VS_SYNTH.md) | понять границу между кодом `lcc` и синтетикой |
-| 12 | [`LEARNED.md`](LEARNED.md) | узнать историю LLM-трека и его отрицательный итог |
-| 13 | [`ENTHUSIAST.md`](ENTHUSIAST.md) | менять код, обучать свою модель, копать дальше |
+| 3 | [`METHOD.md`](METHOD.md) | check where the numbers come from and model boundaries |
+| 4 | [`CODE_MODE.md`](CODE_MODE.md) | bring a real `.s` file from `lcc` and run it |
+| 5 | [`LAB_MODE.md`](LAB_MODE.md) | inspect the cycles × channels grid and "why here" |
+| 6 | [`CORE_MODE.md`](CORE_MODE.md) | see how a dependency graph is built |
+| 7 | [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md) | ask the agent and verify its answers |
+| 8 | [`ORCHESTRA.md`](ORCHESTRA.md) | keys, providers, HQ, TINY AI |
+| 9 | [`TINY.md`](TINY.md) | what TINY AI computes and how to retrain it |
+| 10 | [`ISA.md`](ISA.md) | inspect the machine model: channels, latencies, sources |
+| 11 | [`REAL_VS_SYNTH.md`](REAL_VS_SYNTH.md) | understand the gap between `lcc` output and synthetic data |
+| 12 | [`LEARNED.md`](LEARNED.md) | read the history of the LLM track and its negative outcome |
+| 13 | [`ENTHUSIAST.md`](ENTHUSIAST.md) | modify code, train your own model, dig further |
 
-Ориентиры: спор с цифрами — этапы 3 и 10, обучение — этапы 9 и 12, интерфейс — этапы 4–6 и 13.
+Landmarks: questioning the numbers — stages 3 and 10; training — stages 9 and 12; interface — stages 4–6 and 13.
 
-## Ответвления
+## Side Branches
 
-Это не этапы маршрута, а отдельные ветки:
+Not part of the linear path, but standalone references:
 
-- [`WINDOWS.md`](WINDOWS.md) — отличия запуска на Windows (после этапа 2).
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — правила PR и проверки (после этапа 12).
-- [`archive/`](archive/) — исторические заметки и отрицательные результаты. Не инструкции.
-- Карты подпроектов: [`../vliw/tui/README.md`](../vliw/tui/README.md),
-  [`../vliw/tiny/README.md`](../vliw/tiny/README.md), [`../tools/README.md`](../tools/README.md).
-- NNL: рабочее ядро — `nex_core/` (см. [`TINY.md`](TINY.md)); эксперименты, не входящие в CLI, —
-  [`../nnl_vliw/README.md`](../nnl_vliw/README.md), [`../nnl_isa/README.md`](../nnl_isa/README.md).
+- [`WINDOWS.md`](WINDOWS.md) — Windows-specific differences (after stage 2).
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — PR rules and checks (after stage 12).
+- [`archive/`](archive/) — historical notes and negative results. Not user guides.
+- Subproject maps: [`../vliw/tui/README.md`](../vliw/tui/README.md), [`../vliw/tiny/README.md`](../vliw/tiny/README.md), [`../tools/README.md`](../tools/README.md).
+- NNL: active core — `nex_core/` (see [`TINY.md`](TINY.md)); experiments not wired into the CLI — [`../nnl_vliw/README.md`](../nnl_vliw/README.md), [`../nnl_isa/README.md`](../nnl_isa/README.md).
 
-Главный отрицательный результат не спрятан: на настоящем коде обученная LLM не выигрывает
-у случайного перебора ни на одном графе из 13. Методика и сырые данные —
-[`real_candidates_100_400/model_eval/REPORT.md`](../real_candidates_100_400/model_eval/REPORT.md).
+The main negative result is not hidden: on real code, the fine-tuned LLM fails to beat random search on any of the 13 graphs. Methodology and raw data: [`real_candidates_100_400/model_eval/REPORT.md`](../real_candidates_100_400/model_eval/REPORT.md).

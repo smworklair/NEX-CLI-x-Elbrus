@@ -1,7 +1,7 @@
-"""Четыре рабочих места workstation: ядро, разбор, агент, код.
+"""Four workstation panes: CORE, LAB, AGENT, CODE.
 
-Здесь только имена и маршрутизация фокуса (`/mode`). Раскладки экранов —
-в пакете `vliw.tui`, построчный вывод — в соседних view-модулях.
+Only pane names and focus routing (`/mode`). Full-screen layouts live in
+`vliw.tui`; plain-mode renderers live in sibling view modules.
 """
 
 from __future__ import annotations
@@ -9,10 +9,10 @@ from __future__ import annotations
 PANES = ("work", "lab", "mind", "code")
 
 META = {
-    "work": {"title": "ЯДРО", "sub": "интерпретатор", "role": "work"},
-    "lab":  {"title": "РАЗБОР", "sub": "исследование", "role": "lab"},
-    "mind": {"title": "АГЕНТ", "sub": "диалог", "role": "mind"},
-    "code": {"title": "КОД", "sub": "редактор", "role": "code"},
+    "work": {"title": "CORE",  "sub": "interpreter", "role": "work"},
+    "lab":  {"title": "LAB",   "sub": "analysis",    "role": "lab"},
+    "mind": {"title": "AGENT", "sub": "dialogue",    "role": "mind"},
+    "code": {"title": "CODE",  "sub": "editor",      "role": "code"},
 }
 
 FOCUS_ALIASES = {

@@ -1,4 +1,4 @@
-"""Режим «по блокам»: разрез .s на базовые блоки (vliw/core/blocks.py)."""
+"""Basic-block mode: partitioning .s files into basic blocks (vliw/core/blocks.py)."""
 
 import subprocess
 import sys
@@ -15,7 +15,7 @@ from vliw.core.model import get_profile
 ROOT = Path(__file__).resolve().parent.parent
 ASM_DIR = ROOT / "real_candidates_100_400" / "asm"
 
-# Четыре блока: с переходом; цикл loop_mode; провал вниз по метке; return.
+# Four basic blocks: branch-terminated; loop_mode block; label fall-through; return.
 SAMPLE = """\
 \t.text
 \t.global\tf
@@ -66,10 +66,10 @@ class TestSplit(unittest.TestCase):
 
     def test_transfer_closes_block_and_label_closes_fallthrough(self):
         bl = split_blocks(SAMPLE)
-        # блок f закончился на `ct`, следующая метка начала новый блок
+        # Block f ends at `ct`; the next label begins a new basic block
         self.assertIn("ct", bl[0].text)
         self.assertNotIn(".L1:", bl[0].text)
-        # .L2 не заканчивается переходом, его закрыла метка .L3
+        # .L2 has no control transfer; label .L3 terminates its fall-through
         self.assertNotIn("return", bl[2].text)
         self.assertIn("return", bl[3].text)
 
@@ -77,18 +77,18 @@ class TestSplit(unittest.TestCase):
         gs = block_graphs(SAMPLE, source="f.s")
         self.assertEqual([g.n for g in gs], [3, 2, 2, 1])
         self.assertEqual(gs[0].dag.key, "f#0")
-        # третья операция блока 0 читает результаты обеих предыдущих
+        # Third op in block 0 has RAW dependencies on both earlier ops
         self.assertEqual(gs[0].dag[2].preds, (0, 1))
-        # значения снаружи блока зависимостей не создают
+        # Live-in values from outside the block create no intra-block DAG edges
         self.assertEqual(gs[1].dag[0].preds, ())
 
     def test_min_ops_filter(self):
         gs = block_graphs(SAMPLE, min_ops=3)
         self.assertEqual([g.block.label for g in gs], ["f"])
-        self.assertEqual(len(block_graphs(SAMPLE, min_ops=0)), 4)  # 0 → как 1
+        self.assertEqual(len(block_graphs(SAMPLE, min_ops=0)), 4)  # 0 behaves like 1
 
     def test_ops_are_partitioned(self):
-        """Блоки разбивают все операции без потерь и повторов."""
+        """Basic blocks partition all operations with no drops or duplicates."""
         whole = asm_parser.parse_asm(SAMPLE)
         self.assertEqual(sum(g.n for g in block_graphs(SAMPLE)), len(whole.ops))
 
@@ -118,8 +118,8 @@ class TestSplit(unittest.TestCase):
 
 
 def chain_asm(n_bundles: int, loop: bool = False, label: str = "f") -> str:
-    """Один блок из `n_bundles` широких команд по одной операции: цепочка, где каждая
-    читает два предыдущих результата. Последняя команда с `ct` закрывает блок."""
+    """Single basic block of `n_bundles` single-op VLIW bundles: a dependency chain
+    where each op reads the two preceding results. Terminated by `ct`."""
     lines = ["\t.text", f"{label}:"]
     for i in range(n_bundles):
         a = 10 + i
@@ -135,7 +135,7 @@ def chain_asm(n_bundles: int, loop: bool = False, label: str = "f") -> str:
 
 class TestWindows(unittest.TestCase):
     def test_sample_blocks_are_too_short_for_windows(self):
-        """Во всех блоках SAMPLE меньше 12 операций: окон нет."""
+        """All blocks in SAMPLE have fewer than 12 ops, so no windows are emitted."""
         self.assertEqual(window_graphs(SAMPLE, source="f.s"), [])
 
     def test_targets_and_sizes(self):
@@ -144,10 +144,10 @@ class TestWindows(unittest.TestCase):
         for w in ws:
             self.assertIsInstance(w, WindowGraph)
             self.assertTrue(12 <= w.n <= 56, w.n)
-            self.assertLessEqual(w.n, 40)                  # больше блока окно быть не может
+            self.assertLessEqual(w.n, 40)                  # window cannot exceed block size
             self.assertEqual(w.block_index, 0)
             self.assertFalse(w.loop)
-        # сдвиг — примерно полокна: для цели 16 окна начинаются с 0, 8, 16, 24
+        # Stride is roughly half a window: target 16 starts at 0, 8, 16, 24
         self.assertEqual([w.start_bundle for w in ws if w.target == 16], [0, 8, 16, 24])
         self.assertEqual([w.n for w in ws if w.target == 16], [16, 16, 16, 16])
 
@@ -165,15 +165,15 @@ class TestWindows(unittest.TestCase):
         self.assertTrue(all(12 <= w.n <= 20 for w in small))
 
     def test_loop_flag_comes_from_the_block(self):
-        """Флаг цикла — признак блока: окно без `loop_mode` внутри блока-цикла тоже цикл."""
+        """The loop flag belongs to the enclosing basic block, even if a sub-window omits `loop_mode`."""
         ws = window_graphs(chain_asm(40, loop=True), source="w.s")
         self.assertTrue(ws)
         self.assertTrue(all(w.loop for w in ws))
-        # `loop_mode` стоит только в первой команде блока, а окна с start_bundle > 0 его не содержат
+        # `loop_mode` is only in the first bundle, so windows with start_bundle > 0 don't include it
         self.assertTrue(any(w.start_bundle > 0 for w in ws))
 
     def test_short_block_gives_one_window_per_target(self):
-        """Блок ровно из 12 операций: окно любой цели — весь блок целиком."""
+        """A 12-op block produces the entire block as the single window for each target."""
         t = chain_asm(12)
         ws = window_graphs(t, source="b.s")
         self.assertEqual([(w.target, w.start_bundle, w.n) for w in ws],
@@ -195,7 +195,7 @@ class TestWindows(unittest.TestCase):
                 self.assertTrue(all(0 <= p < i.id for p in i.preds))
 
 
-@unittest.skipUnless(ASM_DIR.exists(), "нет real_candidates_100_400/asm")
+@unittest.skipUnless(ASM_DIR.exists(), "real_candidates_100_400/asm not present")
 class TestRealCorpus(unittest.TestCase):
     def test_every_file_is_partitioned(self):
         for p in sorted(ASM_DIR.glob("*.s")):
@@ -209,11 +209,11 @@ class TestRealCorpus(unittest.TestCase):
                     self.assertEqual(g.block.loop, "loop_mode" in g.block.text)
 
     def test_counts_on_the_25_file_corpus(self):
-        """Цифры из заметки «GRASP и NEX CLI»: 238 блоков, 6047 операций, 93 блока
-        от 10 операций, 42 цикла. Привязаны к корпусу из 25 файлов."""
+        """Reference counts for the 25-file corpus: 238 basic blocks, 6047 ops,
+        93 blocks with >=10 ops, 42 loops."""
         files = sorted(ASM_DIR.glob("*.s"))
         if len(files) != 25:
-            self.skipTest(f"корпус изменился: {len(files)} файлов вместо 25")
+            self.skipTest(f"corpus changed: {len(files)} files instead of 25")
         gs = [g for p in files for g in block_graphs_of_file(p)]
         self.assertEqual(len(gs), 238)
         self.assertEqual(sum(g.n for g in gs), 6047)
@@ -222,10 +222,10 @@ class TestRealCorpus(unittest.TestCase):
         self.assertEqual(sum(1 for g in gs if g.block.loop and g.n >= 10), 14)
 
     def test_window_count_on_the_25_file_corpus(self):
-        """1421 окно на 25 файлах (цели 16/24/32/48, 12..56 операций) — число из замеров."""
+        """1421 windows across the 25-file corpus (targets 16/24/32/48, 12..56 ops)."""
         files = sorted(ASM_DIR.glob("*.s"))
         if len(files) != 25:
-            self.skipTest(f"корпус изменился: {len(files)} файлов вместо 25")
+            self.skipTest(f"corpus changed: {len(files)} files instead of 25")
         ws = [w for p in files
               for w in window_graphs(p.read_text(encoding="utf-8"), source=p.name)]
         self.assertEqual(len(ws), 1421)
@@ -242,14 +242,14 @@ class TestBlockReportTool(unittest.TestCase):
                  "--oracle", "0", "--min-ops", "2", "--json", str(Path(d) / "rows.json")],
                 capture_output=True, text=True, timeout=120, cwd=d)
             self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertIn("[1] блоков 4, операций 8", out.stdout)
-            self.assertIn("ИТОГО n >= 2", out.stdout)
+            self.assertIn("[1] blocks 4, ops 8", out.stdout)
+            self.assertIn("TOTAL n >= 2", out.stdout)
             self.assertIn("[4]", out.stdout)
             import json
             rows = json.loads((Path(d) / "rows.json").read_text(encoding="utf-8"))
             self.assertEqual([r["n"] for r in rows], [3, 2, 2, 1])
             self.assertTrue(all(r["base"] is not None for r in rows))
-            # блок из одной операции короче --min-ops: крошки не запускались
+            # Single-op block is below --min-ops: tiny scheduler did not run
             self.assertIsNone(rows[3]["tiny"])
 
 

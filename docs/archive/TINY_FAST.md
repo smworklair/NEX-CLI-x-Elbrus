@@ -1,214 +1,219 @@
-# Быстрые крошки, режим «по блокам» и набор «настоящий код»
+# Fast Tiny Schedulers, Block Mode, and the Real-Code Benchmark Set
 
-Всё описанное здесь — **новые файлы**. Существующий код не изменён, поведение
-`/tiny`, агента и тестов прежнее. Две необязательные правки существующих файлов
-(включить быстрый планировщик в продукте; добавить пять знаков в `_SYMBOL`)
-описаны в §7 и **не применены**.
+Everything described here consists of **new files**. Existing code is untouched; the
+behavior of `/tiny`, the agent, and the tests is unchanged. Two optional edits to
+existing files (enabling the fast scheduler in the product; adding five symbols to
+`_SYMBOL`) are described in §7 and **not applied**.
 
-Коротко:
+In brief:
 
-- `TinyFastScheduler` даёт **те же такты**, что `TinyScheduler`, в 24–80 раз быстрее
-  (3061 граф, расхождений 0). Граф в ~25 операций на настоящем коде — около 1 мс,
-  то есть как один проход жадного; блок в 50–100 операций — 4–14 мс.
-- Скорость взялась не из обучения, а из устройства поиска (§2). Награда и веса
-  на время работы не влияют.
-- `tools/block_report.py` и `vliw/core/blocks.py` — режим «по блокам»: `.s` режется
-  на базовые блоки, у каждого свой граф.
-- `eval_real.jsonl` — 947 графов настоящего кода lcc с **доказанным** оптимумом,
-  в формате `eval_hard.jsonl`; `tools/make_eval_real.py` его строит.
-- На настоящем коде жадный уже оптимален в 94 % графов, а идеальный планировщик
-  выигрывает у него 0,51 % тактов модели (§6). Это главный итог замеров.
+- `TinyFastScheduler` produces the **exact same cycles** as `TinyScheduler`, 24–80×
+  faster (3,061 graphs, 0 discrepancies). A ~25-op graph from real code takes ~1 ms —
+  roughly one greedy pass; a 50–100-op block takes 4–14 ms.
+- The speed came not from training, but from search mechanics (§2). Reward and weights
+  have no effect on runtime.
+- `tools/block_report.py` and `vliw/core/blocks.py` — block mode: `.s` is split into
+  basic blocks, each with its own DAG.
+- `eval_real.jsonl` — 947 graphs of real `lcc` code with a **proven** optimum, in the
+  same format as `eval_hard.jsonl`; built by `tools/make_eval_real.py`.
+- On real code, greedy is already optimal on 94% of graphs, and an ideal scheduler beats
+  it by 0.51% of model cycles (§6). That is the main takeaway of the measurements.
 
-## 1. Карта файлов
+## 1. File map
 
-| Файл | Что |
+| File | Purpose |
 |---|---|
-| `vliw/core/fastlist.py` | `ListPlan` — списочный планировщик, равный `baseline.list_schedule` побитово, но без лишней работы |
-| `vliw/tiny/fast.py` | `TinyFastScheduler`, `FastNet` (вывод сети с теми же числами) |
-| `vliw/core/blocks.py` | разрез `.s` на базовые блоки и окна внутри блоков |
-| `tools/tiny_fast_check.py` | сверка с `TinyScheduler` + времена; код выхода 1 при любом расхождении |
-| `tools/block_report.py` | отчёт по блокам: жадный → крошки → точный поиск → lcc |
-| `tools/make_eval_real.py` | строит `eval_real.jsonl` / `eval_real_open.jsonl` из `.s` |
-| `eval_real.jsonl`, `eval_real_open.jsonl` | данные (§5) |
-| `tests/test_fastlist.py`, `test_tiny_fast.py`, `test_blocks.py`, `test_make_eval_real.py` | тесты |
+| `vliw/core/fastlist.py` | `ListPlan` — list scheduler bit-identical to `baseline.list_schedule`, without redundant work |
+| `vliw/tiny/fast.py` | `TinyFastScheduler`, `FastNet` (network inference with identical numbers) |
+| `vliw/core/blocks.py` | splitting `.s` into basic blocks and windows inside blocks |
+| `tools/tiny_fast_check.py` | verification against `TinyScheduler` + timings; exit code 1 on any mismatch |
+| `tools/block_report.py` | block-level report: greedy → tiny → exact search → `lcc` |
+| `tools/make_eval_real.py` | builds `eval_real.jsonl` / `eval_real_open.jsonl` from `.s` |
+| `eval_real.jsonl`, `eval_real_open.jsonl` | datasets (§5) |
+| `tests/test_fastlist.py`, `test_tiny_fast.py`, `test_blocks.py`, `test_make_eval_real.py` | tests |
 
-## 2. Откуда скорость
+## 2. Where the speed comes from
 
-`TinyScheduler` запускает портфель из групп (`bh`, `rule`, `bt`, `prio`, `hold`,
-`defer`), считает каждую до конца и берёт лучший makespan. Быстрый вариант делает
-то же самое, но не делает лишнего:
+`TinyScheduler` runs a portfolio of groups (`bh`, `rule`, `bt`, `prio`, `hold`,
+`defer`), evaluates each to completion, and picks the best makespan. The fast variant
+does the exact same thing without unnecessary work:
 
-1. **Граница.** У графа есть нижняя граница makespan (`DagMetrics.lower_bound`).
-   Если расписание её достигло — лучше нельзя, остальные группы не нужны. Жадный
-   сам сидит на границе в 78 % блоков (73 из 93) и в 92 % уникальных графов набора
-   (883 из 958).
-2. **Порядок групп**: `bh`, `rule`, `bt`, `prio`, `hold`, `defer` — дешёвые и
-   результативные первыми. На итог при полном проходе порядок не влияет, только на
-   то, как рано упрёмся в границу.
-3. **Движок.** `ListPlan` считает то же, что `list_schedule`, но со счётчиками
-   готовности вместо перебора, таблицей каналов на модель и прыжками через пустые
-   такты. Проверен на равенство полного расписания (такт и канал каждой
-   инструкции, порядок выдачи).
-4. **Вывод сети.** `FastNet` складывает числа в том же порядке, что `TinyPriority`,
-   поэтому результат совпадает побитово; одинаковые строки признаков считаются
-   один раз (на настоящем коде уникальны 12 % строк среди всех блоков).
-5. **Приёмка.** Сначала сравнивается makespan, и только у кандидата, который
-   лучше текущего, строится и проверяется `Schedule`. Трасса решений строится
-   один раз, для победителя, и только при `with_trace=True` (по умолчанию да).
+1. **Lower bound.** A graph has a makespan lower bound (`DagMetrics.lower_bound`).
+   Once a schedule hits it, nothing can beat it and the remaining groups are skipped.
+   Greedy alone sits at the lower bound in 78% of blocks (73 of 93) and in 92% of
+   unique graphs in the set (883 of 958).
+2. **Group order:** `bh`, `rule`, `bt`, `prio`, `hold`, `defer` — cheap and effective
+   ones first. On a full pass the order does not affect the outcome, only how early we
+   hit the lower bound.
+3. **Engine.** `ListPlan` computes the same thing as `list_schedule`, but with
+   readiness counters instead of scanning, a per-model channel table, and jumping over
+   empty cycles. Verified for full schedule equality (cycle and channel of every
+   instruction, issue order).
+4. **Network inference.** `FastNet` accumulates numbers in the same order as
+   `TinyPriority`, so outputs match bit-for-bit; identical feature rows are evaluated
+   once (on real code, only 12% of rows are unique across all blocks).
+5. **Acceptance.** Makespan is compared first, and `Schedule` is built and validated
+   only for a candidate that beats the current best. The decision trace is built once,
+   for the winner, and only when `with_trace=True` (default: yes).
 
-Что даёт каждый шаг (мс на граф, один процесс, без прогрева):
+What each step saves (ms per graph, single process, no warmup):
 
 | | eval_hard | eval_real |
 |---|---:|---:|
-| `TinyScheduler` как был | 63,4 | 70,4 |
-| пункты 2–5, без остановки по границе и без трассы | 6,8 | 3,5 |
-| + остановка по границе (п. 1), без трассы | 1,9 | 0,38 |
-| + трасса победителя (по умолчанию) | 2,6 | 0,95 |
-| для масштаба: `GreedyListScheduler` проекта | 0,75 | 0,66 |
+| `TinyScheduler` as-is | 63.4 | 70.4 |
+| items 2–5, without bound stop and without trace | 6.8 | 3.5 |
+| + bound stop (item 1), without trace | 1.9 | 0.38 |
+| + winner trace (default) | 2.6 | 0.95 |
+| for scale: project's `GreedyListScheduler` | 0.75 | 0.66 |
 
-Вывод для вопроса «влияет ли награда на скорость»: нет. Награда (средний makespan
-в `es.py`) работала при обучении и определяла, **какие** веса получились. Скорость
-решают граница и движок, и они одинаковы у любых весов.
+Answer to "does the reward affect speed": no. The reward (mean makespan in `es.py`)
+acted during training and determined **which** weights were learned. Speed is governed
+by the lower bound and the engine, which are identical for any weights.
 
-## 3. Гарантии и их границы
+## 3. Guarantees and their limits
 
 `TinyFastScheduler(mode="exact")`:
 
-- makespan равен makespan `TinyScheduler` на любом графе, где нижняя граница
-  корректна. Граница ни разу не оказалась выше найденного оптимума на ~3800 графах;
-  у проекта на это есть свой тест (`TestIntervalLowerBound` в `tests/test_dag.py`);
-- расписание законно (`validate()` пуст, `complete`) и не хуже жадного;
-- `optimal=True` ставится только при makespan == границе, то есть когда оптимум
-  доказан.
+- makespan equals `TinyScheduler`'s makespan on any graph where the lower bound is
+  valid. The bound was never above a found optimum across ~3,800 graphs; the project
+  has a dedicated test for this (`TestIntervalLowerBound` in `tests/test_dag.py`);
+- the schedule is legal (`validate()` is empty, `complete`) and no worse than greedy;
+- `optimal=True` is set only when makespan == lower bound, i.e. when optimality is
+  proven.
 
-Чего **нет**: при равных makespan конкретное расписание и метка победителя
-(`tiny_winner`) могут отличаться от `TinyScheduler` — группы идут в другом порядке,
-берётся первое, достигшее лучшего. Трассы совпадают, когда совпали метки.
+What is **not** guaranteed: on tied makespans, the exact schedule and winner tag
+(`tiny_winner`) may differ from `TinyScheduler` — groups run in a different order, and
+the first to reach the best score wins. Traces match whenever the tags match.
 
-`mode="asm"` отбрасывает группы `hold` и `defer`. Это **не гарантия, а замер**:
-на настоящем коде потерь 0 (1514 графов блоков и окон + 947 графов `eval_real`), на
-`eval_hard` 6 из 300 графов хуже на 1 такт. Режим выбирает вызывающий.
+`mode="asm"` drops the `hold` and `defer` groups. This is **a measurement, not a
+guarantee**: on real code, 0 losses (1,514 block/window graphs + 947 `eval_real`
+graphs); on `eval_hard`, 6 of 300 graphs are worse by 1 cycle. The caller chooses the
+mode.
 
-Чем проверено:
+How it was verified:
 
-| Что | Как | Итог |
+| What | How | Result |
 |---|---|---|
-| Те же такты | `tools/tiny_fast_check.py`, 3061 граф (итоговый прогон) + 2000 обучающих ранее | 0 расхождений, все законны, ни один не хуже жадного |
-| `ListPlan` | фазз против `list_schedule`: сценарии и случайные графы, профили машины разной ширины, искажённые задержки и занятость, приоритеты с ничьими, держки | 452 699 комбинаций в длинном прогоне, 0 расхождений; короткий повтор на итоговом коде — 49 519, 0 |
-| `FastNet` | сравнение на `==` со всеми тремя сетями | 688 968 значений, 0 различий |
-| Тесты ловят поломки | 14 мутантов `fast.py` (в том числе выброшена группа портфеля, сдвинут сид веера) | пойманы все 14 |
-| Генератор набора | 12 мутантов `make_eval_real.py` | пойманы все 12 |
+| Same cycles | `tools/tiny_fast_check.py`, 3,061 graphs (final run) + 2,000 training graphs earlier | 0 mismatches, all legal, none worse than greedy |
+| `ListPlan` | fuzz against `list_schedule`: scenarios and random graphs, machine profiles of varying widths, perturbed latencies and occupancies, tied priorities, holds | 452,699 combinations in long run, 0 mismatches; short rerun on final code — 49,519, 0 |
+| `FastNet` | `==` comparison against all three networks | 688,968 values, 0 differences |
+| Tests catch breakages | 14 mutants of `fast.py` (including dropping a portfolio group, shifting beam seed) | all 14 caught |
+| Dataset generator | 12 mutants of `make_eval_real.py` | all 12 caught |
 
-## 4. Режим «по блокам»
+## 4. Block mode
 
-`asm_parser.build_dag` строит один граф на весь текст `.s`. Метки при этом ничего не
-значат, и граф тянется через границы блоков, а переходы планировщик не
-переставляет. Следствие измерено на 25 файлах lcc: расписание самого компилятора
-восстанавливается и проходит проверку на графе файла целиком в **4 файлах из 25**,
-а по блокам — в **71 блоке из 93** (n ≥ 10). Сравнивать с lcc и доказывать
-оптимум честно можно только по блокам. Так же работает и GRASP (ICS '26): единица
-работы — базовый блок.
+`asm_parser.build_dag` builds one DAG for the entire `.s` file. Labels mean nothing
+there, so the DAG stretches across block boundaries while the scheduler does not
+reorder branches. The consequence was measured on 25 `lcc` files: the compiler's own
+schedule reconstructs and passes validation on the whole-file DAG in **4 out of 25
+files**, versus **71 out of 93 blocks** (n ≥ 10) in block mode. Honest comparison with
+`lcc` and optimality proofs are only possible per block. GRASP (ICS '26) works the same
+way: the unit of work is a basic block.
 
-`vliw/core/blocks.py`: блок начинается с метки и заканчивается широкой командой с
-`ct` / `ibranch` / `call` / `return` / `rbranch`; новая метка закрывает предыдущий
-блок. Окна — скользящие куски из подряд идущих широких команд внутри блока (цели 16,
-24, 32, 48 операций, в окне 12–56). Значения, пришедшие снаружи блока, считаются
-готовыми к такту 0.
+`vliw/core/blocks.py`: a block starts at a label and ends at a wide instruction with
+`ct` / `ibranch` / `call` / `return` / `rbranch`; a new label closes the previous
+block. Windows are sliding slices of consecutive wide instructions inside a block
+(targets 16, 24, 32, 48 operations; 12–56 per window). Values entering from outside the
+block are assumed ready at cycle 0.
 
 ```bash
 python3 tools/block_report.py --dir real_candidates_100_400/asm --oracle 3
-python3 tools/tiny_fast_check.py --set real            # блоки и окна, быстрый против эталона
+python3 tools/tiny_fast_check.py --set real            # blocks and windows, fast vs. reference
 ```
 
-Что показал отчёт на 25 файлах (238 блоков, 6047 операций; 93 блока от 10 операций):
+What the report showed on 25 files (238 blocks, 6,047 operations; 93 blocks with ≥ 10 ops):
 
-| 93 блока n ≥ 10 | сумма тактов модели | время на блок, мс |
+| 93 blocks n ≥ 10 | sum of model cycles | time per block, ms |
 |---|---:|---:|
-| жадный | 2498 | 2,3 |
-| крошки, режим точности | 2479 | 4,0 |
-| точный поиск, 3 с на блок | 2471 (−1,1 %) | 619 |
+| greedy | 2,498 | 2.3 |
+| tiny, exact mode | 2,479 | 4.0 |
+| exact search, 3 s per block | 2,471 (−1.1%) | 619 |
 
-Оптимум доказан в 80 блоках из 93, улучшено относительно жадного 16 блоков. Граница
-достигнута жадным в 73 блоках (78 %), ещё в 5 — после поиска; в 15 блоках не
-достигнута вовсе, и 12 из них — от 64 операций. Именно там и есть что искать.
+Optimality is proven in 80 of 93 blocks, with 16 blocks improved over greedy. The lower
+bound is hit by greedy in 73 blocks (78%) and in 5 more after search; in 15 blocks it
+is never reached, and 12 of those have ≥ 64 operations. That is where room for search
+actually lives.
 
-Чего режим не делает: не учитывает соседей (какие регистры живы на выходе, что ждёт
-после перехода); не описывает циклы `loop_mode` (аппаратная конвейеризация: такты
-на итерацию — другая величина, чем длина текста; блоки-циклы помечены флагом).
-Сравнение с lcc ниже границы модели — это запас **модели** (она не знает про
-регистры, алиасинг, конфликты банков), а не обещанный выигрыш на железе.
+What block mode does not do: it ignores neighbors (which registers are live-out, what
+waits after a branch); it does not model `loop_mode` loops (hardware pipelining: cycles
+per iteration is a different quantity from straight-line length; loop blocks are
+flagged). Any gap below `lcc` in model cycles is **model** headroom (it does not know
+about registers, aliasing, or bank conflicts), not a promised hardware speedup.
 
-## 5. Набор «настоящий код»
+## 5. The real-code dataset
 
-`eval_hard` и `eval_wide` синтетические. `eval_real.jsonl` — те же 25 файлов lcc,
-разрезанные на блоки (n ≥ 10) и окна, с повторами слитыми (`meta.seen` — сколько раз
-граф встретился). Формат строки как в `eval_hard.jsonl`; дополнительно
-`meta.proven_by` (`bound` — крошки достигли нижней границы; `oracle` — точный
-поиск за 30 с), `meta.lb`, `meta.file`, `meta.key`, `meta.loop`.
+`eval_hard` and `eval_wide` are synthetic. `eval_real.jsonl` comes from the same 25
+`lcc` files, cut into blocks (n ≥ 10) and windows with duplicates merged (`meta.seen` =
+how many times the graph appeared). Line format matches `eval_hard.jsonl`; additionally
+`meta.proven_by` (`bound` — tiny hit the lower bound; `oracle` — exact search within
+30 s), `meta.lb`, `meta.file`, `meta.key`, `meta.loop`.
 
-| | графов |
+| | graphs |
 |---|---:|
-| уникальных графов после слияния повторов (из 1514 блоков и окон) | 1180 |
-| формат проекта записать не умеет (см. ограничения ниже) | 222 |
-| оптимум доказан → `eval_real.jsonl` | 947 |
-| не доказан за 30 с → `eval_real_open.jsonl` | 11 |
+| unique graphs after deduplication (from 1,514 blocks and windows) | 1,180 |
+| project format cannot serialize (see limitations below) | 222 |
+| optimum proven → `eval_real.jsonl` | 947 |
+| not proven within 30 s → `eval_real_open.jsonl` | 11 |
 
-С правкой Б из §7 (проверено на копии) набор полный: 1163 доказанных и 17
-недоказанных графов, то есть все 1180. Вывод тот же: жадный оптимален в 94,1 %
-(1094 из 1163) и проигрывает 85 тактов из 16 646 (0,51 %); крошки оптимальны в
-1139 из 1163. Графы с FMA/MOVA/CONV/INCR (216) для планировщика не сложнее
-остальных: жадный оптимален в 204 из них.
+With edit B from §7 (verified on a copy), the set is complete: 1,163 proven and 17
+unproven graphs — all 1,180. The conclusion is the same: greedy is optimal on 94.1%
+(1,094 of 1,163) and loses 85 cycles out of 16,646 (0.51%); tiny is optimal on 1,139
+of 1,163. Graphs with FMA/MOVA/CONV/INCR (216) are no harder for the scheduler than the
+rest: greedy is optimal on 204 of them.
 
-`eval_real_open.jsonl` — **без** `meta.makespan`: там лежит лучшее найденное
-(`meta.best_known`) и `proven: false`. Принять его за оптимум нельзя, а
-`vliw/tiny/eval.py` на таком файле честно упадёт, а не соврёт.
+`eval_real_open.jsonl` has **no** `meta.makespan`: it stores the best known
+(`meta.best_known`) and `proven: false`. It cannot be mistaken for an optimum, and
+`vliw/tiny/eval.py` will honestly fail on such a file rather than lie.
 
 ```bash
-python3 vliw/tiny/eval.py --eval eval_real.jsonl                  # крошки как есть
-python3 vliw/tiny/eval.py --eval eval_real.jsonl --ignore-weights # без обученных весов
-python3 tools/validate_jsonl.py eval_real.jsonl                   # валидатор проекта
-python3 tools/make_eval_real.py --oracle 30 --jobs 2              # пересобрать (≈4 мин)
+python3 vliw/tiny/eval.py --eval eval_real.jsonl                  # tiny as-is
+python3 vliw/tiny/eval.py --eval eval_real.jsonl --ignore-weights # without trained weights
+python3 tools/validate_jsonl.py eval_real.jsonl                   # project validator
+python3 tools/make_eval_real.py --oracle 30 --jobs 2              # rebuild (≈4 min)
 ```
 
-Ограничения, которые нужно знать:
+Limitations to keep in mind:
 
-- **Оптимум — в тактах модели** `e2k-v6-measured`, не в тактах железа. Блоки-циклы
-  (`meta.loop = true`) считаются по длине линейного куска.
-- **222 графа не записаны.** `vliw.core.dag._SYMBOL` не знает классов `FMA`, `MOVA`,
-  `CONV`, `INCR` (и `MOVAQ`, который в этих файлах не встретился), и
-  `build_dag(parse_graph_entries(...))` падает на них с `KeyError`. Это графы с
-  плавающей точкой и адресной арифметикой — как раз интересная часть кода. Код
-  проекта генератор не меняет и такие графы пропускает, считая их. Исправление —
-  пять строк в `_SYMBOL` (обратно совместимо: раньше на этих классах была ошибка),
-  см. §7; после него `make_eval_real.py` пересобирает набор уже с ними.
-- **Утечка при обучении.** Окна одного блока перекрываются, а похожий код повторяется
-  по файлам. Делить на обучение и проверку нужно по `meta.file`, не по строкам.
+- **Optimum is in `e2k-v6-measured` model cycles**, not hardware cycles. Loop blocks
+  (`meta.loop = true`) are scored by straight-line length.
+- **222 graphs were not written.** `vliw.core.dag._SYMBOL` does not know the `FMA`,
+  `MOVA`, `CONV`, `INCR` classes (or `MOVAQ`, which did not appear in these files), so
+  `build_dag(parse_graph_entries(...))` crashes on them with `KeyError`. These are
+  floating-point and address-arithmetic graphs — the interesting part of the code. The
+  generator does not modify project code and skips those graphs while counting them.
+  The fix is five lines in `_SYMBOL` (backward-compatible: those classes previously
+  raised an error), see §7; afterward `make_eval_real.py` rebuilds the set including
+  them.
+- **Training leakage.** Windows of the same block overlap, and similar code repeats
+  across files. Train/eval splits must be grouped by `meta.file`, not by line.
 
-## 6. Что показали замеры
+## 6. What the measurements showed
 
-На 947 графах `eval_real.jsonl`, собственным `vliw/tiny/eval.py` проекта:
+On the 947 graphs of `eval_real.jsonl`, using the project's own `vliw/tiny/eval.py`:
 
-| | оптимальных | лишних тактов всего | мс на граф |
+| | optimal | total extra cycles | ms per graph |
 |---|---:|---:|---:|
-| жадный | 890 / 947 | 67 | 0,7 |
-| крошки без обученных сетей (`--ignore-weights`; с отключёнными всеми тремя то же) | 919 / 947 | 32 | 10 |
-| крошки с весами (как в проекте) | 927 / 947 | 20 | 70 |
-| `TinyFastScheduler`, режим точности | 927 / 947 | 20 | 0,95 |
+| greedy | 890 / 947 | 67 | 0.7 |
+| tiny without trained networks (`--ignore-weights`; same with all three disabled) | 919 / 947 | 32 | 10 |
+| tiny with weights (as in project) | 927 / 947 | 20 | 70 |
+| `TinyFastScheduler`, exact mode | 927 / 947 | 20 | 0.95 |
 
-- Всего тактов у оптимума 13 131; жадный проигрывает 67 (**0,51 %**), крошки — 20
-  (0,15 %). Столько можно выиграть **переупорядочиванием внутри блока при
-  фиксированном графе** на этом корпусе по этой модели.
-- Из 67 тактов ~35 закрывает поиск без обученных сетей (веер по высоте), ещё 12 —
-  сети, 20 остаётся. На синтетике вклад сетей заметно больше; на настоящем коде он
-  невелик, потому что почти все графы жадный уже решает.
-- В статье GRASP преобразования графа (IDG) дают 1,08× сами по себе, RL-порядок
-  операций — 1,02× сам по себе, вместе 1,22×. Порядок внутри блока — не там, где
-  основной запас; здесь он измерен в 0,5 %.
+- Total optimal cycles: 13,131; greedy loses 67 (**0.51%**), tiny loses 20 (0.15%).
+  That is the total headroom available from **intra-block reordering on a fixed DAG**
+  on this corpus under this model.
+- Of those 67 cycles, ~35 are closed by search without trained networks (height-based
+  beam), another 12 by the networks, and 20 remain. On synthetic data the networks'
+  contribution is noticeably larger; on real code it is small because greedy already
+  solves almost every graph.
+- In the GRASP paper, graph transformations (IDG) yield 1.08× on their own, RL
+  operation ordering yields 1.02× on its own, and together 1.22×. Intra-block ordering
+  is not where the main headroom lives; here it measures at 0.5%.
 
-## 7. Необязательные правки существующих файлов (не применены)
+## 7. Optional edits to existing files (not applied)
 
-**А. Включить быстрый планировщик в продукте.** Две точки, где продукт создаёт
-`TinyScheduler()`, и тест, который сверяет факты агента с прямым прогоном:
+**A. Enable the fast scheduler in the product.** Two call sites where the product
+instantiates `TinyScheduler()`, plus a test that cross-checks agent facts against a
+direct run:
 
 ```diff
 --- a/vliw/cli.py                      # cmd_tiny
@@ -230,36 +235,38 @@ python3 tools/make_eval_real.py --oracle 30 --jobs 2              # пересо
 +        res = TinyFastScheduler().schedule(s.dag_obj, s.model())
 ```
 
-Тест правится потому, что он проверяет метку победителя (`tiny_winner`) в фактах, а
-при равных тактах метка у быстрого может быть другой (§3). Интерфейс тот же:
-`schedule(dag, model)` → `SchedulingResult`; ключи `search_stats` (`tiny_winner`,
-`baseline_makespan`, …) сохранены, добавлены `lower_bound`, `proved_by_bound`,
-`bound_hit_at`, `groups_run`, `groups_skipped`. Откат — вернуть эти строки.
-Переменная `VLIW_NO_NUMPY=1` отключает numpy (тот же результат чистым Python, на
-настоящем коде почти с той же скоростью).
+The test changes because it checks the winner tag (`tiny_winner`) in facts, and on tied
+cycles the fast scheduler's tag may differ (§3). The interface is identical:
+`schedule(dag, model)` → `SchedulingResult`; `search_stats` keys (`tiny_winner`,
+`baseline_makespan`, …) are preserved, with `lower_bound`, `proved_by_bound`,
+`bound_hit_at`, `groups_run`, `groups_skipped` added. Rollback is reverting those lines.
+Setting `VLIW_NO_NUMPY=1` disables numpy (same result in pure Python, nearly the same
+speed on real code).
 
-**Б. Пять знаков в `vliw/core/dag.py::_SYMBOL`** (`FMA`, `MOVA`, `MOVAQ`, `INCR`,
-`CONV`) и тест `tests/test_symbols.py`: каждый класс операций модели записывается и
-читается обратно. На чистом репозитории этот тест падает (15 классов×профилей без
-знака), с правкой проходит. Знак нужен только для текста графа; на планирование не
-влияет. После неё `make_eval_real.py` записывает и графы с FMA/MOVA/CONV/INCR.
+**B. Five symbols in `vliw/core/dag.py::_SYMBOL`** (`FMA`, `MOVA`, `MOVAQ`, `INCR`,
+`CONV`) and test `tests/test_symbols.py`: every model operation class round-trips
+through text serialization. On a clean repo this test fails (15 class×profile pairs
+without a symbol); with the edit it passes. The symbol is only used for graph text and
+does not affect scheduling. With it, `make_eval_real.py` also serializes graphs with
+FMA/MOVA/CONV/INCR.
 
-Предложение для `CHANGELOG.md` (не внесено):
+Suggested entry for `CHANGELOG.md` (not committed):
 
 ```
-### Скорость планирования
-- `TinyFastScheduler` (vliw/tiny/fast.py): тот же makespan, что у `TinyScheduler`,
-  в 24–80 раз быстрее; останавливается на нижней границе. Сверка: 3061 граф, 0 расхождений.
-- Режим «по блокам» (vliw/core/blocks.py, tools/block_report.py).
-- Набор eval_real.jsonl: 947 графов настоящего кода lcc с доказанным оптимумом.
+### Scheduling speed
+- `TinyFastScheduler` (vliw/tiny/fast.py): same makespan as `TinyScheduler`,
+  24–80× faster; stops at the lower bound. Verified: 3,061 graphs, 0 mismatches.
+- Block mode (vliw/core/blocks.py, tools/block_report.py).
+- Dataset eval_real.jsonl: 947 graphs of real lcc code with proven optima.
 ```
 
-## 8. Границы
+## 8. Boundaries
 
-- Все такты — такты модели машины. Они не равны тактам Эльбруса.
-- Режим по блокам не видит контекста соседних блоков и не моделирует `loop_mode`.
-- `asm` — замер, а не гарантия (§3).
-- Набор покрывает 81 % уникальных графов (958 из 1180), пока `_SYMBOL` не знает пяти классов (§5).
-- Для новой крошки проверяйте не только `eval_hard`, но и `eval_real.jsonl`:
-  там ей есть что доказать только на 57 графах из 947 (там жадный не оптимален)
-  и на 11 из `eval_real_open.jsonl`.
+- All cycles are machine-model cycles. They do not equal Elbrus hardware cycles.
+- Block mode does not see neighboring block context and does not model `loop_mode`.
+- `asm` mode is a measurement, not a guarantee (§3).
+- The dataset covers 81% of unique graphs (958 of 1,180) until `_SYMBOL` knows the five
+  missing classes (§5).
+- For any new tiny scheduler, check not only `eval_hard`, but also `eval_real.jsonl`:
+  it only has anything left to prove on 57 of 947 graphs (where greedy is not optimal)
+  and on the 11 graphs in `eval_real_open.jsonl`.

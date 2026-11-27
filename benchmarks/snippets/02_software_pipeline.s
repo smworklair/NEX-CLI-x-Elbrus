@@ -1,33 +1,33 @@
-// Фрагмент 2. Программный конвейер: умножения новых волн вместе со сложениями старых.
+// Snippet 2. Software pipeline: new-wave multiplications overlapped with old-wave additions.
 {
-  // Первая волна умножений
+  // First wave of multiplications
   muls,0 %r10, %r11, %r20
   muls,1 %r12, %r13, %r21
   muls,2 %r14, %r15, %r22
   muls,3 %r16, %r17, %r23
 }
 {
-  // Вторая волна умножений (пока первая еще в конвейере)
+  // Second wave of multiplications (while the first is still in flight)
   muls,0 %r18, %r19, %r24
   muls,1 %r30, %r31, %r25
   muls,2 %r32, %r33, %r26
   muls,3 %r34, %r35, %r27
 }
 {
-  // Третья волна умножений + сложение результатов первой волны
+  // Third wave of multiplications + addition of first-wave results
   muls,0 %r50, %r51, %r28
   muls,1 %r52, %r53, %r29
   adds,2 %r20, %r21, %r40
   adds,3 %r22, %r23, %r41
 }
 {
-  // Сложение результатов второй волны + редукция первой волны
+  // Addition of second-wave results + first-wave reduction
   adds,0 %r24, %r25, %r42
   adds,1 %r26, %r27, %r43
   adds,2 %r40, %r41, %r44
 }
 {
-  // Сложение третьей волны + финальные редукции
+  // Addition of third wave + final reductions
   adds,0 %r28, %r29, %r45
   adds,1 %r42, %r43, %r46
 }

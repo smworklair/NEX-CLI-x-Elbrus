@@ -1,13 +1,13 @@
-"""vliw.tiny — крошка-1: приоритет для list_schedule вместо Qwen.
+"""vliw.tiny — Tiny-1: learned priority for list_schedule instead of Qwen.
 
-Зачем: Qwen2.5-3B генерирует расписание текстом (секунды, GPU, 17% законных
-на трудных без CAB). Крошке текст не нужен: она дает только вектор
-приоритетов, а бухгалтерию (зависимости, порты, латентности) ведет
-детерминированный list_schedule — законность по построению, галлюцинаций
-ноль как класс.
+Why: Qwen2.5-3B generates schedules as text (seconds, GPU, 17% valid
+on hard cases without CAB). Tiny needs no text: it only outputs a priority
+vector, while deterministic list_schedule handles all bookkeeping
+(dependencies, ports, latencies) — valid by construction, zero
+hallucinations by design.
 
-Инференс — чистый stdlib, без numpy/torch: прямой проход MLP на графе
-n<=386 это микросекунды на CPU.
+Inference uses pure stdlib, no numpy/torch: an MLP forward pass on a graph
+with n<=386 takes microseconds on CPU.
 """
 
 from __future__ import annotations

@@ -1,73 +1,67 @@
 # Windows
 
-> Ответвление от этапа 2 · [← CLI](CLI.md) · [Маршрут](README.md)
+> Branch from stage 2 · [← CLI](CLI.md) · [Roadmap](README.md)
 
-Инструмент работает на Windows целиком, включая полноэкранное рабочее место.
-Здесь только отличия от [`CLI.md`](CLI.md).
+The tool works fully on Windows, including the fullscreen workspace.
+This page lists only the differences from [`CLI.md`](CLI.md).
 
 ## Python
 
-Нужен Python 3.10+. Проверка:
+Python 3.10+ is required. Verify with:
 
 ```powershell
 py --version
 ```
 
-Если команды нет — установите с [python.org](https://www.python.org/downloads/) (галка **Add python.exe to PATH**)
-или через `winget`:
+If unavailable, install from [python.org](https://www.python.org/downloads/) (check **Add python.exe to PATH**) or via `winget`:
 
 ```powershell
 winget install Python.Python.3.12
 ```
 
-На Windows команда обычно называется `python` или `py`; `python3`, как правило, не существует.
-В остальной документации вместо `python3` подставляйте `python`.
+On Windows the executable is usually `python` or `py`; `python3` typically does not exist. Substitute `python` wherever the rest of the docs say `python3`.
 
-## Установка
+## Installation
 
 ```powershell
-git clone <ссылка-на-репозиторий>
+git clone <repository-url>
 cd NEX-CLI-x-Elbrus
 py -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[tui]"
 ```
 
-Если PowerShell блокирует активацию (`running scripts is disabled`), разрешите её только для текущего окна:
+If PowerShell blocks script activation (`running scripts is disabled`), allow it for the current session only:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
-В `cmd.exe` активация другая: `.venv\Scripts\activate.bat`.
+In `cmd.exe`, activation uses `.venv\Scripts\activate.bat`.
 
-## Запуск
+## Running
 
 ```powershell
 python -m vliw run slotclash
-python -m vliw                 # экран выбора режимов
-python -m vliw --mode code     # сразу КОД
-python -m vliw --plain         # построчный режим
+python -m vliw                 # mode selector
+python -m vliw --mode code     # straight into CODE
+python -m vliw --plain         # line-by-line mode
 ```
 
-После `pip install -e .` доступна короткая форма `vliw`.
+After `pip install -e .`, the short `vliw` command is available.
 
-Если `textual` не установлен, `python -m vliw` открывает экран-помощник: он объясняет причину,
-показывает команды и после согласия ставит `textual`/`rich`.
+If `textual` is not installed, `python -m vliw` opens the setup assistant screen: it explains why, shows the commands, and installs `textual`/`rich` once you confirm.
 
-## Две особенности
+## Two Quirks
 
-**Кириллица.** Инструмент сам переключает консоль на UTF-8 и VT-режим. Если видите квадраты —
-обновите репозиторий.
+**Unicode / UTF-8.** The tool automatically switches the Windows console to UTF-8 and VT mode. If you see boxes or garbled text, update the repository.
 
-**История команд.** Модуля `readline` в стандартном Python для Windows нет. Это касается только
-построчного режима (`--plain`, пайпы, скрипты): стрелка вверх там не листает историю.
-В полноэкранном рабочем месте свой ввод, и это не мешает.
+**Command history.** Standard Python on Windows does not bundle `readline`. This only affects plain mode (`--plain`, pipes, scripts), where the up arrow does not cycle history. The fullscreen TUI handles its own input, so it is unaffected.
 
-## Агент
+## Agent
 
-Без ключа агент отвечает офлайн по посчитанным числам — это норма, а не поломка.
-Ключ вставляется в диалоге или командой:
+Without an API key, the agent answers offline from computed numbers — this is expected, not a bug.
+Paste a key in chat or configure via command:
 
 ```text
 /ai deepseek key=sk-...
@@ -76,19 +70,17 @@ python -m vliw --plain         # построчный режим
 /ai local-server url=http://localhost:11434/v1 model=qwen2.5:3b
 ```
 
-Ключ живёт только в памяти сессии. Поддерживаются 17 провайдеров; полный список — в
-[`AGENT_PROMPTS.md`](AGENT_PROMPTS.md) и [`.env.example`](../.env.example).
-Для скриптов без терминала используйте переменные окружения: `NEX_PROVIDER`, `NEX_API_KEY`,
-`NEX_MODEL`, `NEX_BASE_URL`.
+Keys live in session memory only. 17 providers are supported; full list in [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md) and [`.env.example`](../.env.example).
+For non-interactive scripts, use environment variables: `NEX_PROVIDER`, `NEX_API_KEY`, `NEX_MODEL`, `NEX_BASE_URL`.
 
-## Если что-то не так
+## Troubleshooting
 
-| симптом | решение |
+| symptom | fix |
 |---|---|
-| `No module named vliw` | запускать из папки проекта или `pip install -e .` |
-| активация `.venv` запрещена | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
-| квадраты вместо текста | обновить репозиторий |
-| нет истории в `--plain` | это ограничение Windows, не ошибка |
-| `verify` не находит ассемблер | задать `E2K_AS` или добавить `lcc` в `PATH` |
+| `No module named vliw` | run from the project root or `pip install -e .` |
+| `.venv` activation blocked | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
+| boxes instead of text | update the repository |
+| no history in `--plain` | Windows limitation, not a bug |
+| `verify` cannot find assembler | set `E2K_AS` or add `lcc` to `PATH` |
 
-Общие проблемы — в [`CLI.md`](CLI.md#частые-проблемы).
+General issues: [`CLI.md`](CLI.md#common-issues).

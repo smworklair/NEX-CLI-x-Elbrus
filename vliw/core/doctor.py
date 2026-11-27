@@ -1,17 +1,7 @@
-"""Диагностика расписания: где именно теряются такты и почему.
+"""Deterministic schedule diagnostics: where cycles are lost and why.
 
-Это «агент» прототипа в честном смысле слова: он сам проходит по готовому
-расписанию набором правил-детекторов, находит проблемы, считает ЦЕНУ каждой в
-тактах и объясняет причину. Никакой языковой модели и никакой сети — только
-детерминированный анализ. Поэтому вывод воспроизводим: на одном и том же
-расписании всегда одни и те же находки, их можно проверить руками по решётке.
-
-Модуль ничего не печатает — возвращает данные (`Diagnosis`), а рисует их
-`vliw.ui`. Это позволяет показывать одни и те же находки и в отчёте команды
-`/doctor`, и в боковой панели.
-
-Главный вопрос, на который отвечают правила: «этот такт потерян — из-за
-занятого порта, из-за неготовых операндов или из-за неудачного выбора?»
+Runs rule-based detectors over a schedule to pinpoint cycle losses vs hardware
+lower bounds. Pure data (`Diagnosis`); rendering lives in `vliw.ui`.
 """
 
 from __future__ import annotations
@@ -22,29 +12,22 @@ from .dag import DAG, DagMetrics, compute_metrics
 from .model import MachineModel
 from .schedule import Schedule
 
-# Порог, начиная с которого находка считается серьёзной (доля от makespan).
+# Severity threshold as a fraction of makespan.
 HIGH_SHARE = 0.15
 MED_SHARE = 0.05
 
 
 @dataclass
 class Finding:
-    """Одна находка: либо ошибка планировщика, либо предел машины.
+    """Single diagnostic finding: either a recoverable scheduler loss or a hardware limit."""
 
-    Различать эти два случая — самое важное в диагностике. Задержка операции
-    сама по себе ещё не ошибка: если порт занят более срочной работой, ждать
-    правильно. Ошибка — когда монопольный порт занят МЕНЕЕ срочной операцией,
-    а более срочная из-за этого стоит. Признак: сравнение остаточного
-    критического пути (height) у задержанной операции и у той, что заняла порт.
-    """
-
-    code: str            # машинный код правила: monopoly-block, idle-stall, …
+    code: str            # rule code: monopoly-block, idle-stall, ...
     title: str
-    cycles_lost: int     # наблюдаемая цена в тактах
+    cycles_lost: int     # observed cost in cycles
     where: str
     why: str
     fix: str
-    kind: str = "loss"   # loss — можно отыграть; limit — предел машины
+    kind: str = "loss"   # loss = recoverable; limit = hardware lower bound
     severity: str = "low"
     instrs: tuple[int, ...] = ()
 
@@ -62,9 +45,9 @@ class Finding:
 class PortStat:
     index: int
     label: str
-    busy: int            # тактов занят
-    issued: int          # сколько операций выдано
-    sole_ops: tuple[str, ...] = ()   # операции, для которых порт единственный
+    busy: int            # busy cycles
+    issued: int          # operations issued
+    sole_ops: tuple[str, ...] = ()   # ops for which this port is exclusive
 
     def load(self, span: int) -> float:
         return (self.busy / span) if span else 0.0
@@ -72,7 +55,7 @@ class PortStat:
 
 @dataclass
 class Diagnosis:
-    """Результат разбора расписания — чистые данные для отрисовки."""
+    """Structured schedule diagnosis for UI rendering."""
 
     findings: list[Finding] = field(default_factory=list)
     makespan: int = 0
@@ -84,7 +67,7 @@ class Diagnosis:
 
     @property
     def total_lost(self) -> int:
-        """Разрыв до теоретического предела — сколько тактов в принципе лишние."""
+        """Gap above theoretical lower bound (maximum recoverable cycles)."""
         return max(0, self.makespan - self.lower_bound)
 
     @property
@@ -108,7 +91,7 @@ def _severity(cost: int, makespan: int) -> str:
 
 
 def _ready_times(dag: DAG, sched: Schedule) -> list[int]:
-    """С какого такта операнды каждой инструкции готовы (по этому расписанию)."""
+    """Earliest cycle each instruction's operands are ready under this schedule."""
     rt = [0] * len(dag)
     for ins in dag:
         for p in ins.preds:
@@ -118,7 +101,7 @@ def _ready_times(dag: DAG, sched: Schedule) -> list[int]:
 
 def diagnose(dag: DAG, model: MachineModel, sched: Schedule,
              metrics: DagMetrics | None = None) -> Diagnosis:
-    """Разобрать расписание и вернуть отсортированный список проблем."""
+    """Analyze a schedule and return sorted diagnostic findings."""
     met = metrics or compute_metrics(dag, model)
     d = Diagnosis(
         makespan=sched.makespan,
@@ -137,14 +120,14 @@ def diagnose(dag: DAG, model: MachineModel, sched: Schedule,
 
     for f in findings:
         f.severity = _severity(f.cycles_lost, d.makespan) if f.recoverable else "low"
-    # Сначала то, что можно отыграть, потом факты о пределах машины.
+    # Actionable losses first, then hardware-limit facts.
     findings.sort(key=lambda f: (f.kind != "loss", -f.cycles_lost))
     d.findings = findings
     return d
 
 
 # --------------------------------------------------------------------------
-# Статистика по портам
+# Per-port utilization stats
 # --------------------------------------------------------------------------
 
 
@@ -166,31 +149,20 @@ def _port_stats(dag: DAG, model: MachineModel, sched: Schedule) -> list[PortStat
 
 
 def _idle_cycles(dag: DAG, sched: Schedule) -> int:
-    """Такты внутри участка, в которых не выдано ни одной операции."""
+    """Cycles inside the block with zero operations issued."""
     issued = {p.cycle for p in sched.placements.values()}
     last = max(issued, default=0)
     return sum(1 for t in range(last + 1) if t not in issued)
 
 
 # --------------------------------------------------------------------------
-# Правило 1: инструкция готова, но выдана позже — кто ей помешал
+# Rule 1: instruction ready earlier than issued — identify blocker
 # --------------------------------------------------------------------------
 
 
 def _rule_delayed_instructions(dag: DAG, model: MachineModel, sched: Schedule,
                                met: DagMetrics) -> list[Finding]:
-    """Ищет операции, простоявшие «в очереди», и виновника задержки.
-
-    Ядро диагностики. Если инструкция была готова в такте rt, а выдана в
-    ac > rt, значит её что-то держало. Смотрим, кто в это время занимал порты,
-    на которых она вообще исполнима.
-
-    Ключевое различение: ждать — не обязательно плохо. Если порт занимала
-    БОЛЕЕ срочная операция (её остаточный критический путь длиннее), то
-    планировщик поступил верно, и это предел машины, а не ошибка. Ошибка —
-    когда монопольный порт отдали МЕНЕЕ срочной операции: тогда такты
-    действительно потеряны зря и их можно отыграть перестановкой.
-    """
+    """Detect queued ready operations and distinguish priority inversions from hardware limits."""
     rt = _ready_times(dag, sched)
     busy = sched.busy_map()
     height = met.height
@@ -221,47 +193,47 @@ def _rule_delayed_instructions(dag: DAG, model: MachineModel, sched: Schedule,
         pname = (model.port_label(ports[0]) if monopoly
                  else ",".join(model.port_label(p) for p in ports))
 
-        # Виновник менее срочен, чем тот, кого он задержал → это просчёт.
+        # Blocker is less urgent than the delayed op -> scheduling mistake.
         wasted = height[worst] < height[i]
 
         if monopoly and wasted:
             out.append(Finding(
                 code="monopoly-block",
-                title=f"монопольный порт {pname} занят менее срочной {wname}",
+                title=f"exclusive port {pname} occupied by less-urgent {wname}",
                 cycles_lost=delay,
-                where=f"{ins.name} готова в т.{rt[i]}, выдана только в т.{ac}",
-                why=(f"порт {pname} — единственный исполнитель {ins.op}; его "
-                     f"{held} т. занимала {wname} ({wop}, остаток пути "
-                     f"{height[worst]}), пока ждала {ins.name} (остаток "
-                     f"{height[i]}) — более срочная"),
-                fix=(f"выдать {ins.name} раньше {wname}: {wname} никто не ждёт, "
-                     f"её можно посчитать позже, в тени длинной операции"),
+                where=f"{ins.name} ready at cyc {rt[i]}, issued at cyc {ac}",
+                why=(f"port {pname} is the sole unit for {ins.op}; "
+                     f"{wname} ({wop}, remaining height "
+                     f"{height[worst]}) held it for {held} cyc while {ins.name} (height "
+                     f"{height[i]}) waited"),
+                fix=(f"issue {ins.name} before {wname}: nothing depends on {wname}, "
+                     f"so it can execute later in the shadow of the long op"),
                 kind="loss",
                 instrs=(i, worst),
             ))
         elif monopoly:
             out.append(Finding(
                 code="monopoly-queue",
-                title=f"очередь на монопольный порт {pname}",
+                title=f"queue on exclusive port {pname}",
                 cycles_lost=delay,
-                where=f"{ins.name} ждёт с т.{rt[i]} до т.{ac}",
-                why=(f"{wname} ({wop}) на том же единственном порту {pname} была "
-                     f"не менее срочной (остаток {height[worst]} против "
-                     f"{height[i]}) — ждать здесь правильно"),
-                fix=("это предел машины: две операции физически не помещаются "
-                     "на один порт одновременно"),
+                where=f"{ins.name} waits from cyc {rt[i]} to cyc {ac}",
+                why=(f"{wname} ({wop}) on the same exclusive port {pname} was "
+                     f"at least as urgent (height {height[worst]} vs "
+                     f"{height[i]}) — waiting is optimal here"),
+                fix=("hardware lower bound: two operations cannot share "
+                     "the same port simultaneously"),
                 kind="limit",
                 instrs=(i, worst),
             ))
         elif wasted:
             out.append(Finding(
                 code="port-contention",
-                title=f"{ins.name} ({ins.op}) ждала занятые порты",
+                title=f"{ins.name} ({ins.op}) waited on busy ports",
                 cycles_lost=delay,
-                where=f"готова в т.{rt[i]}, выдана в т.{ac}",
-                why=(f"порты {pname} были заняты, дольше всех — {wname}, "
-                     f"менее срочная"),
-                fix="развести операции по портам или по тактам",
+                where=f"ready at cyc {rt[i]}, issued at cyc {ac}",
+                why=(f"ports {pname} were busy, longest by less-urgent {wname}"
+                     f""),
+                fix="spread operations across ports or cycles",
                 kind="loss",
                 instrs=(i, worst),
             ))
@@ -269,18 +241,13 @@ def _rule_delayed_instructions(dag: DAG, model: MachineModel, sched: Schedule,
 
 
 # --------------------------------------------------------------------------
-# Правило 2: сплошные простои
+# Rule 2: contiguous idle stalls
 # --------------------------------------------------------------------------
 
 
 def _rule_idle_stretches(dag: DAG, model: MachineModel,
                          sched: Schedule) -> list[Finding]:
-    """Отрезки тактов без единой выдачи, с разбором причины.
-
-    Простой считается ПОТЕРЕЙ только если в эти такты что-то реально можно
-    было выдать: нашлась готовая операция и свободный подходящий порт. Иначе
-    это физика участка (нечего считать или всё занято), а не просчёт.
-    """
+    """Find zero-issue cycle spans and classify whether work could have issued."""
     issued_at: dict[int, list[int]] = {}
     for p in sched.placements.values():
         issued_at.setdefault(p.cycle, []).append(p.instr)
@@ -289,7 +256,7 @@ def _rule_idle_stretches(dag: DAG, model: MachineModel,
     rt = _ready_times(dag, sched)
 
     def could_issue(t: int) -> bool:
-        """Была ли в такте t готовая операция и свободный для неё порт."""
+        """Check if any ready op had a free capable port in cycle t."""
         for ins in dag:
             if rt[ins.id] > t or sched.cycle_of(ins.id) <= t:
                 continue
@@ -316,27 +283,27 @@ def _rule_idle_stretches(dag: DAG, model: MachineModel,
             for c in range(start, t) for p in model.ports
             if (c, p.index) in busy
         }
-        # Можно ли было хоть что-то выдать в эти такты?
+        # Could anything have been issued during these cycles?
         wasted = any(could_issue(c) for c in range(start, t))
 
         if wasted:
-            why = "были готовые операции и свободные порты, но выдачи не было"
-            fix = "заполнить простой независимой работой — такты теряются зря"
+            why = "ready operations and free ports existed, but nothing was issued"
+            fix = "fill the stall with independent work — cycles are wasted"
         elif holders:
             names = ", ".join(sorted(dag[i].name for i in holders)[:3])
-            why = (f"все подходящие порты заняты длинными операциями ({names}), "
-                   f"а готовой работы для свободных портов нет")
-            fix = ("предел участка: занять машину нечем, пока считаются длинные "
-                   "операции")
+            why = (f"all capable ports busy with long ops ({names}), "
+                   f"and no ready work for the remaining free ports")
+            fix = ("block limit: no independent work available while long ops "
+                   "are in flight")
         else:
-            why = "ни одна операция не готова: ждём результатов предыдущих"
-            fix = ("длина цепочки зависимостей — простой неизбежен при любом "
-                   "порядке выдачи")
+            why = "no operation is ready: waiting on producer latencies"
+            fix = ("dependency chain length — stall is unavoidable under any "
+                   "issue order")
         out.append(Finding(
             code="idle-stall",
-            title=f"простой {span} т. подряд (т.{start}–{t - 1})",
+            title=f"idle stall of {span} cyc (cyc {start}-{t - 1})",
             cycles_lost=span,
-            where=f"такты {start}–{t - 1}",
+            where=f"cycles {start}-{t - 1}",
             why=why,
             fix=fix,
             kind="loss" if wasted else "limit",
@@ -345,7 +312,7 @@ def _rule_idle_stretches(dag: DAG, model: MachineModel,
 
 
 # --------------------------------------------------------------------------
-# Правило 3: узкое место по портам
+# Rule 3: port bottleneck
 # --------------------------------------------------------------------------
 
 
@@ -362,20 +329,20 @@ def _rule_port_bottleneck(dag: DAG, model: MachineModel, sched: Schedule,
         ops = "/".join(st.sole_ops)
         out.append(Finding(
             code="port-saturated",
-            title=f"порт {st.label} загружен на {load:.0%} — узкое место",
-            cycles_lost=0,   # это не потеря, а факт: предел машины
-            where=f"порт {st.label} ({ops})",
-            why=(f"{st.issued} операций {ops} обязаны пройти через единственный "
-                 f"порт {st.label}, он занят {st.busy} из {span} тактов"),
-            fix=("это предел машины, а не ошибка планировщика: ускорить можно "
-                 "только уменьшив число таких операций в участке"),
+            title=f"port {st.label} at {load:.0%} utilization — bottleneck",
+            cycles_lost=0,   # hardware limit fact, not a scheduling loss
+            where=f"port {st.label} ({ops})",
+            why=(f"{st.issued} {ops} operations must pass through exclusive "
+                 f"port {st.label}, busy {st.busy} of {span} cycles"),
+            fix=("hardware lower bound, not a scheduler bug: speed up only "
+                 "by reducing the count of these operations in the block"),
             kind="limit",
         ))
     return out
 
 
 # --------------------------------------------------------------------------
-# Правило 4: разрыв до теоретического предела
+# Rule 4: gap to theoretical lower bound
 # --------------------------------------------------------------------------
 
 
@@ -386,11 +353,11 @@ def _rule_gap_to_bound(dag: DAG, model: MachineModel, sched: Schedule,
         return []
     return [Finding(
         code="above-lower-bound",
-        title=f"расписание на {gap} т. длиннее теоретического предела",
+        title=f"schedule is {gap} cyc longer than theoretical lower bound",
         cycles_lost=gap,
-        where=f"{sched.makespan} т. против нижней границы {met.lower_bound} т.",
-        why=(f"предел задаёт {met.binding} — критический путь "
-             f"{met.critical_path_bound} т., ресурсы {met.resource_bound} т."),
-        fix=("часть разрыва отыгрывается порядком выдачи — сравните с точным "
-             "поиском командой /compare"),
+        where=f"{sched.makespan} cyc vs lower bound {met.lower_bound} cyc",
+        why=(f"bound set by {met.binding} — critical path "
+             f"{met.critical_path_bound} cyc, resources {met.resource_bound} cyc"),
+        fix=("part of the gap may be recoverable via issue ordering — compare with "
+             "exact search using /compare"),
     )]

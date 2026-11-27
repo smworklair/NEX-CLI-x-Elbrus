@@ -1,7 +1,7 @@
 {
   "name": "classic",
-  "description": "Прежняя палитра проекта на базовых 8 цветах — запасной вариант для терминалов без поддержки 256 цветов.",
-  "_comment_colors": "Здесь используются базовые цвета 0..7, которые понимает любой терминал: 1 красный, 2 зелёный, 3 жёлтый, 4 синий, 5 пурпурный, 6 голубой, 7 белый.",
+  "description": "Legacy project palette using basic 8 colors — fallback for terminals without 256-color support.",
+  "_comment_colors": "Uses basic colors 0..7 supported by any terminal: 1 red, 2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan, 7 white.",
   "roles": {
     "text": {
       "color": 7

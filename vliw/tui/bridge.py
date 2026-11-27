@@ -1,12 +1,12 @@
-"""Мост к ядру: выполнить команду и забрать её вывод как текст.
+"""Bridge to the core: execute a command and capture its text output.
 
-Команды `vliw.cli` печатают в stdout готовые ANSI-строки — их отчёты (таблицы,
-рамки, расписания) уже отлажены и переиспользуются здесь как есть. Задача
-моста ровно одна: перехватить этот поток и отдать его виджету.
+`vliw.cli` commands print pre-formatted ANSI strings to stdout — their reports
+(tables, frames, schedules) are already debugged and reused here as is. This
+bridge has one job: intercept that stream and hand it to a widget.
 
-Всё, что интерфейс рисует СВОИМИ виджетами (сетка расписания, память
-интерпретатора, лента диалога), через мост не ходит — там данные берутся из
-`vliw.core` напрямую. Мост нужен для команд, у которых вывод — отчёт.
+Anything the UI renders with its own widgets (schedule grid, interpreter
+memory, dialog tape) bypasses this bridge and reads directly from `vliw.core`.
+The bridge is only for commands whose output is a text report.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from ..ui import render
 
 
 class Capture(io.TextIOBase):
-    """stdout-приёмник: копит вывод команды целиком."""
+    """stdout sink that accumulates a command's entire output."""
 
     def __init__(self) -> None:
         self._parts: list[str] = []
@@ -39,10 +39,11 @@ class Capture(io.TextIOBase):
 
 
 def run_command(execute, line: str, width: int) -> tuple[str, str]:
-    """Выполнить строку ядром. Вернуть (вывод, ошибка).
+    """Run a command line through the core and return `(output, error)`.
 
-    Ширина отчётов (`render.W`) выставляется под ту панель, куда вывод поедет:
-    иначе таблицы и рамки сверстаются под старую ширину терминала и поедут.
+    Report width (`render.W`) is temporarily matched to the destination pane so
+    tables and frames lay out cleanly instead of wrapping to a stale terminal
+    width.
     """
     cap = Capture()
     old_w = render.W
@@ -52,10 +53,10 @@ def run_command(execute, line: str, width: int) -> tuple[str, str]:
         with contextlib.redirect_stdout(cap):
             execute(line)
     except KeyboardInterrupt:
-        err = "прервано"
+        err = "interrupted"
     except SystemExit as e:
         err = str(e)
-    except Exception as e:  # ошибка команды не должна ронять интерфейс
+    except Exception as e:  # a command error must never crash the UI
         err = f"{type(e).__name__}: {e}"
     finally:
         render.W = old_w
@@ -63,17 +64,17 @@ def run_command(execute, line: str, width: int) -> tuple[str, str]:
 
 
 class EventPump:
-    """Сток событий планировщика: из рабочего потока — в главный.
+    """Scheduler event sink: marshals events from a worker thread to the UI.
 
-    Зачем отдельная штука, а не просто `call_from_thread` на каждое событие.
-    llama.cpp отдаёт вывод ПОСИМВОЛЬНО (`proc.stdout.read(1)`), то есть на
-    один прогон приходится несколько тысяч событий `Token`. Переход между
-    потоками на каждый символ интерфейс не переживёт — он захлебнётся
-    раньше, чем модель допишет расписание.
+    Why a dedicated pump instead of `call_from_thread` per event:
+    llama.cpp streams output one character at a time (`proc.stdout.read(1)`),
+    producing thousands of `Token` events per run. Crossing threads per
+    character would flood the UI loop before the model finishes writing the
+    schedule.
 
-    Поэтому текст копится до перевода строки и уезжает в интерфейс целыми
-    строками, а всё остальное (размещения, починка, вердикт) идёт сразу:
-    таких событий единицы, и каждое из них меняет картинку.
+    Text is therefore buffered until a newline and delivered line by line,
+    while structural events (placements, repair, verdict) go straight through
+    since there are only a handful and each updates the display.
     """
 
     def __init__(self, app, on_text, on_event) -> None:
@@ -91,7 +92,7 @@ class EventPump:
                 self._flush()
             return
         if isinstance(ev, (Done, Failed)):
-            self._flush()            # хвост без перевода строки тоже показать
+            self._flush()            # also show any trailing partial line
         self._app.call_from_thread(self._on_event, ev)
 
     def _flush(self) -> None:

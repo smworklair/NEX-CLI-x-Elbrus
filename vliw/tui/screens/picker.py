@@ -1,13 +1,12 @@
-"""Список экранов — не главное меню, а развилка, на которую уходят.
+"""Screen picker — a branch point you switch to from your workspace.
 
-Инструмент открывается КОДОМ и в него же возвращается. Этот экран стал
-тем, чем и должен был быть: списком мест, куда можно уйти из работы. Пока
-он был первым, что видит человек, все четыре экрана были равны — а раз
-равны, каждый обязан быть самодостаточным приложением, и в каждом сидели
-редактор, расписание, разбор, git и консоль разом. Отсюда и теснота.
+The tool opens into CODE and returns to it. This screen lists the other places
+you can jump to from work. While it used to be the landing screen, making all
+four screens co-equal forced every screen to act as a standalone app (packing
+editor, schedule, inspect, git, and console together) and made layouts cramped.
 
-Открывается по `/clear` (или ^O). Цифры работают как клавиши только здесь:
-во всех остальных местах они принадлежат тексту.
+Opened via `/clear` (or ^O). Digits act as shortcuts only here; everywhere else
+they belong to text input.
 """
 
 from __future__ import annotations
@@ -21,49 +20,48 @@ from textual.widgets import Static
 
 from .. import palette
 
-#: Порядок — по тому, чем на самом деле пользуются. КОД первым не из
-#: вежливости: это единственный экран, куда человек приносит СВОЁ — вывод
-#: lcc, который надо разобрать. Остальные три смотрят на то, что он принёс.
+#: Ordered by actual usage. CODE comes first because it is the one screen where
+#: users bring their own input (lcc assembly); the other three inspect it.
 MODES = [
     {
         "id": "code",
         "key": "1",
-        "title": "КОД",
-        "subtitle": "рабочее место",
-        "about": "редактор .s, расписание, разбор, замечания и ядро — "
-                 "вкладками одного дока",
-        "examples": "F5 — прогнать   ·   F6 — переписать по оракулу   ·   /example",
+        "title": "CODE",
+        "subtitle": "workspace",
+        "about": ".s editor, schedule, inspect, issues, and core — "
+                 "all as tabs in one dock",
+        "examples": "F5 — run   ·   F6 — rewrite via oracle   ·   /example",
     },
     {
         "id": "lab",
         "key": "2",
-        "title": "РАЗБОР",
-        "subtitle": "весь граф целиком",
-        "about": "участок без исходника: матрица машины, диагноз, сценарии",
+        "title": "LAB",
+        "subtitle": "full graph view",
+        "about": "block without source: machine matrix, diagnosis, scenarios",
         "examples": "/run slotclash   ·   /doctor   ·   /load examples/probe.s",
     },
     {
         "id": "mind",
         "key": "3",
-        "title": "АГЕНТ",
-        "subtitle": "диалог",
-        "about": "вопрос обычным языком, ответ по уже посчитанным числам",
-        "examples": "почему этот участок медленный?   ·   что менять?",
+        "title": "AGENT",
+        "subtitle": "dialog",
+        "about": "ask in plain language, answered from computed numbers",
+        "examples": "why is this block slow?   ·   what should I change?",
     },
     {
         "id": "work",
         "key": "4",
-        "title": "ЯДРО",
-        "subtitle": "интерпретатор целиком",
-        "about": "лента, коммиты и снимки машины; короткая консоль есть "
-                 "вкладкой в КОДЕ",
+        "title": "CORE",
+        "subtitle": "full interpreter",
+        "about": "tape, commits, and machine snapshots; compact console is "
+                 "also a tab in CODE",
         "examples": "sum 8   ·   a=load 0   ·   t=a*2   ·   go",
     },
 ]
 
 
 class ModeCard(Static):
-    """Карточка режима: клик открывает, наведение — выбирает."""
+    """Mode card: click opens, hover selects."""
 
     class Chosen(Message):
         def __init__(self, index: int) -> None:
@@ -98,8 +96,8 @@ class ModeCard(Static):
         title_color = palette.role_hex("title") if self.selected else dim
 
         head = Text()
-        # Клавиша — плашкой: на этом экране цифра действительно клавиша,
-        # и это единственное место во всём инструменте, где она ею работает.
+        # Render the shortcut digit as a badge: this is the only screen where
+        # digits act as direct hotkeys.
         if self.selected:
             head.append(f" {m['key']} ",
                         style=f"{palette.SURFACES['canvas']} on {accent} bold")
@@ -136,42 +134,32 @@ class ModeCard(Static):
 
 
 class PickerScreen(Screen):
-    """Знак NEX и карточки экранов, на которые уходят из работы."""
+    """NEX mark and cards for the screens you can switch to from work."""
 
     BINDINGS = [
-        ("up", "move(-1)", "выше"),
-        ("down", "move(1)", "ниже"),
-        # Четвёртой цифры раньше не было вовсе: карточек стало четыре, а
-        # биндингов осталось три, и ЯДРО с клавиатуры не открывалось.
-        ("1", "pick(0)", "код"),
-        ("2", "pick(1)", "разбор"),
-        ("3", "pick(2)", "агент"),
-        ("4", "pick(3)", "ядро"),
-        ("enter", "open", "открыть"),
-        # Esc возвращает В РАБОТУ, а не выходит из инструмента. Пока этот
-        # экран был стартовым, «назад» отсюда действительно значило «выйти»;
-        # теперь сюда приходят из КОДА, и Esc обязан возвращать туда же —
-        # иначе передумавший закрывает весь инструмент.
-        ("escape", "home", "назад в код"),
-        ("q", "quit_app", "выход"),
+        ("up", "move(-1)", "up"),
+        ("down", "move(1)", "down"),
+        ("1", "pick(0)", "code"),
+        ("2", "pick(1)", "lab"),
+        ("3", "pick(2)", "agent"),
+        ("4", "pick(3)", "core"),
+        ("enter", "open", "open"),
+        # Esc returns to CODE rather than quitting the app, so changing your
+        # mind does not close the entire tool.
+        ("escape", "home", "back to code"),
+        ("q", "quit_app", "quit"),
     ]
 
-    # Пороги высоты. Экран складывается из фиксированных кусков: знак
-    # (8 строк), подпись с отступом (3), четыре карточки по 6 плюс отступ
-    # (28), подсказка (2) — 41 строка. Ниже нижняя карточка уезжала за край,
-    # и человек не видел, что режимов четыре.
+    # Height breakpoints. Full layout needs 41 rows: logo (8), tagline+margin
+    # (3), four 6-row cards plus spacing (28), hint (2). Shrink progressively
+    # from cheapest to heaviest so cards never clip off-screen:
     #
-    # ПОРЯДОК ЖЕРТВ — от самой дешёвой. Первая версия этой правки прятала
-    # знак сразу, на высоте 40: чтобы освободить ДВЕ строки, убиралось
-    # ВОСЕМЬ, и внизу оставалась дыра в восемь строк пустоты. Ужиматься надо
-    # ровно настолько, насколько не хватает:
+    #   snug   (< 41)  remove spacing between cards          -4
+    #   short  (< 36)  shrink cards from 6 to 5 rows         -4
+    #   tiny   (< 32)  hide the NEX logo                     -8
+    #   micro  (< 24)  hide tagline, shrink cards to 3 rows
     #
-    #   snug   (< 41)  убрать отступы между карточками      -4
-    #   short  (< 36)  карточки 6 → 5 строк                 -4
-    #   tiny   (< 32)  спрятать знак NEX                    -8
-    #   micro  (< 24)  спрятать подпись, карточки в 3 строки
-    #
-    # Карточки не прячутся никогда: без них экран теряет смысл.
+    # Cards are never hidden: without them the screen has no purpose.
     SNUG = 41
     SHORT = 36
     TINY = 32
@@ -224,13 +212,13 @@ class PickerScreen(Screen):
         tag.append("   ·   ", style=palette.role_hex("faint"))
         tag.append(VERSION_LABEL, style=palette.role_hex("warning"))
         tag.append("\n")
-        tag.append("рабочее место — КОД; остальное открывается отсюда",
+        tag.append("workspace is CODE; other views open from here",
                    style=palette.role_hex("dim"))
         self.query_one("#picker-tagline", Static).update(tag)
 
         hint = Text()
-        for key, label in (("↑↓ / 1-4", "выбрать"), ("Enter", "открыть"),
-                           ("Esc", "назад в код"), ("q", "выход")):
+        for key, label in (("↑↓ / 1-4", "select"), ("Enter", "open"),
+                           ("Esc", "back to code"), ("q", "quit")):
             hint.append(key, style=palette.role_hex("accent_soft"))
             hint.append(f" {label}    ", style=palette.role_hex("faint"))
         self.query_one("#picker-hint", Static).update(hint)
@@ -240,7 +228,7 @@ class PickerScreen(Screen):
         for card in self.query(ModeCard):
             card.set_selected(card.index == self.selected)
 
-    # --- действия ---------------------------------------------------------
+    # --- actions ----------------------------------------------------------
 
     def action_move(self, delta: int) -> None:
         self.selected = (self.selected + delta) % len(MODES)

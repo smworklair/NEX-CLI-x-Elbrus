@@ -1,10 +1,10 @@
-"""Экран-помощник: причина сбоя, план действий и согласие пользователя.
+"""Setup/welcome assistant screen: failure reasons, action plans, and user consent.
 
-Проверяем не «красивый текст», а контракт помощника:
-  · запрос обычными словами превращается в действие;
-  · до выполнения показываются точные команды;
-  · без согласия ничего не запускается;
-  · при согласии ассистент сам ставит недостающее и открывает NEX CLI.
+Verifies the assistant's core contract:
+  - natural-language requests map cleanly to actions or help topics;
+  - exact shell commands are displayed before execution;
+  - nothing runs without explicit user consent;
+  - upon consent, missing packages are installed and NEX CLI launches.
 """
 
 from __future__ import annotations
@@ -39,44 +39,44 @@ class TestReasons(unittest.TestCase):
         with mock.patch.object(setup_screen, "_has", return_value=False):
             text = " ".join(setup_screen.reasons())
         self.assertIn("textual", text)
-        self.assertIn("полноэкранного интерфейса", text)
+        self.assertIn("full-screen interface", text)
 
     def test_installed_but_not_a_terminal(self):
         with mock.patch.object(setup_screen, "_has", return_value=True), \
                 mock.patch("sys.stdin.isatty", return_value=False), \
                 mock.patch("sys.stdout.isatty", return_value=True):
             text = " ".join(setup_screen.reasons())
-        self.assertIn("не подключён к терминалу", text)
-        self.assertNotIn("не установлен пакет", text)
+        self.assertIn("not attached to a terminal", text)
+        self.assertNotIn("is not installed", text)
 
 
 class TestIntent(unittest.TestCase):
     def test_launch_requests(self):
-        for текст in ("запусти", "можешь запустить", "открой NEX CLI",
-                      "как запустить", "launch"):
-            with self.subTest(текст=текст):
-                self.assertEqual(setup_screen._намерение(текст), "запуск")
+        for text in ("запусти", "можешь запустить", "открой NEX CLI",
+                     "как запустить", "launch"):
+            with self.subTest(text=text):
+                self.assertEqual(setup_screen._намерение(text), "запуск")
 
     def test_install_requests(self):
-        for текст in ("установи", "поставь textual", "как установить"):
-            with self.subTest(текст=текст):
-                self.assertEqual(setup_screen._намерение(текст), "установка")
+        for text in ("установи", "поставь textual", "как установить"):
+            with self.subTest(text=text):
+                self.assertEqual(setup_screen._намерение(text), "установка")
 
     def test_repair_requests(self):
-        for текст in ("не работает", "не запускается интерфейс", "чёрный экран"):
-            with self.subTest(текст=текст):
-                self.assertEqual(setup_screen._намерение(текст), "починка")
+        for text in ("не работает", "не запускается интерфейс", "чёрный экран"):
+            with self.subTest(text=text):
+                self.assertEqual(setup_screen._намерение(text), "починка")
 
     def test_other_actions(self):
-        ожидание = {
+        expected = {
             "обнови textual": "обновление",
             "удали программу": "удаление",
             "проверь окружение": "проверка",
             "как создать venv": "venv",
         }
-        for текст, вид in ожидание.items():
-            with self.subTest(текст=текст):
-                self.assertEqual(setup_screen._намерение(текст), вид)
+        for text, kind in expected.items():
+            with self.subTest(text=text):
+                self.assertEqual(setup_screen._намерение(text), kind)
 
     def test_informational_question_is_not_an_action(self):
         self.assertIsNone(setup_screen._намерение("что такое textual"))
@@ -84,20 +84,20 @@ class TestIntent(unittest.TestCase):
 
 
 class TestQuestionWinsOverAction(unittest.TestCase):
-    """Вопрос объясняется, даже если внутри есть корень команды."""
+    """Informational questions get explained even if they contain an action verb stem."""
 
     def test_question_words_are_recognised(self):
-        for текст in ("зачем нужны доп установки", "почему не работает",
-                      "что такое textual", "как работает NNL",
-                      "обязательно ли ставить rich", "нужно ли что-то еще"):
-            with self.subTest(текст=текст):
-                self.assertTrue(setup_screen._это_вопрос(текст))
+        for text in ("зачем нужны доп установки", "почему не работает",
+                     "что такое textual", "как работает NNL",
+                     "обязательно ли ставить rich", "нужно ли что-то еще"):
+            with self.subTest(text=text):
+                self.assertTrue(setup_screen._это_вопрос(text))
 
     def test_commands_are_not_questions(self):
-        for текст in ("запусти", "поставь textual", "не работает",
-                      "проверь окружение", "обнови rich"):
-            with self.subTest(текст=текст):
-                self.assertFalse(setup_screen._это_вопрос(текст))
+        for text in ("запусти", "поставь textual", "не работает",
+                     "проверь окружение", "обнови rich"):
+            with self.subTest(text=text):
+                self.assertFalse(setup_screen._это_вопрос(text))
 
     def test_install_question_is_about_packages(self):
         self.assertTrue(setup_screen._спросили_зачем_установки(
@@ -106,12 +106,12 @@ class TestQuestionWinsOverAction(unittest.TestCase):
             "установи textual"))
 
     def test_install_question_shows_explanation_not_plan(self):
-        with mock.patch.object(setup_screen, "_показать_план") as план, \
+        with mock.patch.object(setup_screen, "_показать_план") as plan, \
                 mock.patch.object(setup_screen, "_объяснить_установки",
-                                  return_value=None) as объяснение:
+                                  return_value=None) as explain:
             setup_screen._обработать_запрос("зачем нужны доп установки")
-        объяснение.assert_called_once()
-        план.assert_not_called()
+        explain.assert_called_once()
+        plan.assert_not_called()
 
     def test_nnl_question_gets_nnl_answer(self):
         self.assertEqual(setup_screen.help_nnl.спросить("как работает NNL"),
@@ -124,117 +124,117 @@ class TestPlans(unittest.TestCase):
         with mock.patch.object(setup_screen, "_has", return_value=False), \
                 mock.patch.object(setup_screen, "_tty", return_value=True), \
                 mock.patch.object(setup_screen, "_store_stub", return_value=False):
-            план = setup_screen._план_запуска()
-        виды = [ш["вид"] for ш in план["шаги"]]
-        self.assertEqual(виды, ["установка", "запуск"])
-        self.assertEqual(план["шаги"][1]["команда"],
+            plan = setup_screen._план_запуска()
+        kinds = [step["вид"] for step in plan["шаги"]]
+        self.assertEqual(kinds, ["установка", "запуск"])
+        self.assertEqual(plan["шаги"][1]["команда"],
                          [sys.executable, "-m", "vliw"])
-        self.assertEqual(план["кнопка"], "Установить и открыть")
+        self.assertEqual(plan["кнопка"], "Install and open")
 
     def test_launch_plan_with_ready_environment_only_opens(self):
         with mock.patch.object(setup_screen, "_has", return_value=True), \
                 mock.patch.object(setup_screen, "_tty", return_value=True):
-            план = setup_screen._план_запуска()
-        self.assertEqual([ш["вид"] for ш in план["шаги"]], ["запуск"])
+            plan = setup_screen._план_запуска()
+        self.assertEqual([step["вид"] for step in plan["шаги"]], ["запуск"])
 
     def test_check_plan_does_not_change_anything(self):
-        план = setup_screen._план_проверки()
-        self.assertTrue(план["можно_выполнить"])
-        self.assertEqual([ш["вид"] for ш in план["шаги"]], ["проверка"])
+        plan = setup_screen._план_проверки()
+        self.assertTrue(plan["можно_выполнить"])
+        self.assertEqual([step["вид"] for step in plan["шаги"]], ["проверка"])
 
     def test_deletion_is_never_executed_automatically(self):
-        план = setup_screen._план_удаления()
-        self.assertFalse(план["можно_выполнить"])
+        plan = setup_screen._план_удаления()
+        self.assertFalse(plan["можно_выполнить"])
 
 
 class TestCommandText(unittest.TestCase):
     def test_windows_quotes_pip_version_specifier(self):
         with mock.patch.object(setup_screen.os, "name", "nt"):
-            текст = setup_screen._команда_текст(
+            text = setup_screen._команда_текст(
                 ["python", "-m", "pip", "install", "textual>=8.2"])
-        self.assertIn('"textual>=8.2"', текст)
-        self.assertNotIn("textual>=8.2 ", текст)
+        self.assertIn('"textual>=8.2"', text)
+        self.assertNotIn("textual>=8.2 ", text)
 
     def test_windows_quotes_paths_with_spaces(self):
         with mock.patch.object(setup_screen.os, "name", "nt"):
-            текст = setup_screen._команда_текст(
+            text = setup_screen._команда_текст(
                 ["C:\\Program Files\\Python\\python.exe", "-m", "vliw"])
-        self.assertIn('"C:\\Program Files\\Python\\python.exe"', текст)
+        self.assertIn('"C:\\Program Files\\Python\\python.exe"', text)
 
     def test_posix_quotes_pipe_and_space(self):
         with mock.patch.object(setup_screen.os, "name", "posix"):
-            текст = setup_screen._команда_текст(["echo", "a b", "x|y"])
-        self.assertIn("'a b'", текст)
-        self.assertIn("'x|y'", текст)
+            text = setup_screen._команда_текст(["echo", "a b", "x|y"])
+        self.assertIn("'a b'", text)
+        self.assertIn("'x|y'", text)
 
 
 class TestConsent(unittest.TestCase):
     def test_plan_shows_commands_and_runs_after_consent(self):
-        план = {
-            "название": "тест",
+        plan = {
+            "название": "test",
             "тема": "запуск",
-            "резюме": ["Проверка согласия"],
-            "шаги": [{"текст": "поставить", "команда": ["x"], "вид": "установка"}],
+            "резюме": ["Consent check"],
+            "шаги": [{"текст": "install", "команда": ["x"], "вид": "установка"}],
             "можно_выполнить": True,
-            "кнопка": "Выполнить",
+            "кнопка": "Execute",
         }
         out = io.StringIO()
         with mock.patch.object(setup_screen, "_меню", return_value=0), \
                 mock.patch.object(setup_screen, "_выполнить_план", return_value=None) as run, \
                 contextlib.redirect_stdout(out):
-            setup_screen._показать_план(план)
-        текст = out.getvalue()
-        self.assertIn("План", текст)
-        self.assertIn("поставить", текст)
-        run.assert_called_once_with(план)
+            setup_screen._показать_план(plan)
+        text = out.getvalue()
+        self.assertIn("Plan:", text)
+        self.assertIn("install", text)
+        run.assert_called_once_with(plan)
 
     def test_cancel_does_not_run_anything(self):
-        план = {
-            "название": "тест",
+        plan = {
+            "название": "test",
             "тема": "запуск",
             "резюме": [],
-            "шаги": [{"текст": "поставить", "команда": ["x"], "вид": "установка"}],
+            "шаги": [{"текст": "install", "команда": ["x"], "вид": "установка"}],
             "можно_выполнить": True,
-            "кнопка": "Выполнить",
+            "кнопка": "Execute",
         }
 
-        def последний(пункты, **_):
-            return len(пункты) - 1
+        def pick_last(items, **_):
+            return len(items) - 1
 
-        with mock.patch.object(setup_screen, "_меню", side_effect=последний), \
+        with mock.patch.object(setup_screen, "_меню", side_effect=pick_last), \
                 mock.patch.object(setup_screen, "_выполнить_план") as run, \
                 contextlib.redirect_stdout(io.StringIO()):
-            setup_screen._показать_план(план)
+            setup_screen._показать_план(plan)
         run.assert_not_called()
 
     def test_execution_runs_install_then_launch(self):
-        план = {
+        plan = {
             "тема": "запуск",
             "шаги": [
-                {"текст": "поставить", "команда": ["pip"], "вид": "установка"},
-                {"текст": "открыть", "команда": ["vliw"], "вид": "запуск"},
+                {"текст": "install", "команда": ["pip"], "вид": "установка"},
+                {"текст": "open", "команда": ["vliw"], "вид": "запуск"},
             ],
         }
         with mock.patch.object(setup_screen, "_has", return_value=True), \
                 mock.patch.object(setup_screen, "_выполнить", return_value=0) as run, \
                 mock.patch.object(setup_screen, "_пауза"):
-            код = setup_screen._выполнить_план(план)
-        self.assertEqual(код, 0)
+            code = setup_screen._выполнить_план(plan)
+        self.assertEqual(code, 0)
         self.assertEqual([c.args[0] for c in run.call_args_list], [["pip"], ["vliw"]])
 
     def test_failed_install_stops_plan(self):
-        план = {
+        plan = {
             "тема": "запуск",
             "шаги": [
-                {"текст": "поставить", "команда": ["pip"], "вид": "установка"},
-                {"текст": "открыть", "команда": ["vliw"], "вид": "запуск"},
+                {"текст": "install", "команда": ["pip"], "вид": "установка"},
+                {"текст": "open", "команда": ["vliw"], "вид": "запуск"},
             ],
         }
         with mock.patch.object(setup_screen, "_has", return_value=True), \
                 mock.patch.object(setup_screen, "_выполнить", return_value=1) as run, \
                 mock.patch.object(setup_screen, "_пауза"):
-            код = setup_screen._выполнить_план(план)
-        self.assertIsNone(код)
+            code = setup_screen._выполнить_план(plan)
+        self.assertIsNone(code)
         self.assertEqual(len(run.call_args_list), 1)
 
 
@@ -243,10 +243,10 @@ class TestMenu(unittest.TestCase):
         with mock.patch.object(setup_screen, "_tty", return_value=True), \
                 mock.patch.object(setup_screen, "_vt_доступен", return_value=True), \
                 mock.patch.object(setup_screen, "_клавиша", return_value="?"), \
-                mock.patch("builtins.input", return_value="как установить"), \
+                mock.patch("builtins.input", return_value="how to install"), \
                 contextlib.redirect_stdout(io.StringIO()):
-            выбор = setup_screen._меню([("пункт", "")], приём_текста=True)
-        self.assertEqual(выбор, "?как установить")
+            choice = setup_screen._меню([("item", "")], приём_текста=True)
+        self.assertEqual(choice, "?how to install")
 
     def test_question_mark_alone_asks_again(self):
         with mock.patch.object(setup_screen, "_задать_вопрос",
@@ -259,32 +259,32 @@ class TestMenu(unittest.TestCase):
                 mock.patch.object(setup_screen, "_vt_доступен", return_value=True), \
                 mock.patch.object(setup_screen, "_клавиша", side_effect=["вниз", "ввод"]), \
                 contextlib.redirect_stdout(io.StringIO()):
-            выбор = setup_screen._меню([("первый", ""), ("второй", "")])
-        self.assertEqual(выбор, 1)
+            choice = setup_screen._меню([("first", ""), ("second", "")])
+        self.assertEqual(choice, 1)
 
     def test_typed_letter_starts_a_question(self):
         with mock.patch.object(setup_screen, "_tty", return_value=True), \
                 mock.patch.object(setup_screen, "_vt_доступен", return_value=True), \
-                mock.patch.object(setup_screen, "_клавиша", return_value="з"), \
-                mock.patch("builtins.input", return_value="апусти"), \
+                mock.patch.object(setup_screen, "_клавиша", return_value="l"), \
+                mock.patch("builtins.input", return_value="aunch"), \
                 contextlib.redirect_stdout(io.StringIO()):
-            выбор = setup_screen._меню([("пункт", "")], приём_текста=True)
-        self.assertEqual(выбор, "запусти")
+            choice = setup_screen._меню([("item", "")], приём_текста=True)
+        self.assertEqual(choice, "launch")
 
     def test_numbered_fallback(self):
         with mock.patch("builtins.input", return_value="2"), \
                 contextlib.redirect_stdout(io.StringIO()):
-            выбор = setup_screen._меню_вводом(
-                [("первый", ""), ("второй", "")], "", "", False)
-        self.assertEqual(выбор, 1)
+            choice = setup_screen._меню_вводом(
+                [("first", ""), ("second", "")], "", "", False)
+        self.assertEqual(choice, 1)
 
 
 class TestRequestRouting(unittest.TestCase):
     def test_launch_request_opens_a_plan_not_a_reference(self):
         with mock.patch.object(setup_screen, "_показать_план", return_value=None) as plan:
             setup_screen._обработать_запрос("можешь запустить")
-        план = plan.call_args.args[0]
-        self.assertEqual(план["тема"], "запуск")
+        shown = plan.call_args.args[0]
+        self.assertEqual(shown["тема"], "запуск")
 
     def test_informational_question_gets_short_answer_and_action(self):
         with mock.patch("vliw.help_nnl.спросить", return_value=("textual", 0.9)), \
@@ -295,7 +295,7 @@ class TestRequestRouting(unittest.TestCase):
     def test_unknown_question_stays_short(self):
         with mock.patch("vliw.help_nnl.спросить", return_value=None), \
                 mock.patch.object(setup_screen, "_не_понял") as fallback:
-            setup_screen._обработать_запрос("сколько будет два плюс два")
+            setup_screen._обработать_запрос("what is two plus two")
         fallback.assert_called_once_with()
 
 
@@ -308,7 +308,7 @@ class TestScreen(unittest.TestCase):
         self.assertIn("-m pip install", text)
         self.assertIn("textual>=8.2", text)
         self.assertIn("rich>=13", text)
-        self.assertIn(sys.executable, text, "команда должна годиться для копипаста")
+        self.assertIn(sys.executable, text, "command must be copy-pasteable")
 
     def test_mentions_commands_that_work_without_deps(self):
         with mock.patch.object(setup_screen, "_has", return_value=False):
@@ -322,18 +322,18 @@ class TestScreen(unittest.TestCase):
                 mock.patch("sys.stdout.isatty", return_value=False):
             text = _plain(setup_screen.lines())
         self.assertNotIn("pip install", text)
-        self.assertIn("настоящего окна терминала", text)
+        self.assertIn("real terminal", text)
 
     def test_explain_returns_error_code(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             code = setup_screen.explain()
         self.assertEqual(code, 1)
-        self.assertIn("полноэкранный интерфейс не запустился", buf.getvalue())
+        self.assertIn("full-screen interface did not start", buf.getvalue())
 
 
 class TestMainShowsSetupInsteadOfPlainMenu(unittest.TestCase):
-    """Без `--plain` построчное меню больше не показывается автоматически."""
+    """Without `--plain`, the legacy line-by-line menu does not open automatically."""
 
     def _run(self, argv):
         from vliw.cli import main
@@ -348,7 +348,7 @@ class TestMainShowsSetupInsteadOfPlainMenu(unittest.TestCase):
     def test_no_args_shows_setup_screen(self):
         code, text = self._run([])
         self.assertEqual(code, 1)
-        self.assertIn("полноэкранный интерфейс не запустился", text)
+        self.assertIn("full-screen interface did not start", text)
         self.assertIn("pip install", text)
         self.assertNotIn("1 / 2 / 3", text)
 
@@ -366,25 +366,25 @@ class TestMainShowsSetupInsteadOfPlainMenu(unittest.TestCase):
 
 
 class TestWelcome(unittest.TestCase):
-    """Интерактивный экран: меню, вопросы, действие и выход."""
+    """Interactive welcome screen: menu, questions, action dispatch, and exit."""
 
     def _run(self, menu, inputs=(), extra_patches=()):
         from vliw.ui.render import Style
 
-        очередь = iter(menu)
+        queue = iter(menu)
 
-        def показать_и_выбрать(пункты, *, заголовок="", подсказка="", приём_текста=False):
+        def show_and_pick(items, *, заголовок="", подсказка="", приём_текста=False):
             if заголовок:
                 print("  " + заголовок)
-            for метка, _ in пункты:
-                print("  " + метка)
-            return next(очередь)
+            for label, _ in items:
+                print("  " + label)
+            return next(queue)
 
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(Style, "enabled", False))
             stack.enter_context(mock.patch.object(setup_screen, "_меню",
-                                                  side_effect=показать_и_выбрать))
+                                                  side_effect=show_and_pick))
             stack.enter_context(mock.patch("builtins.input", side_effect=inputs))
             for target, value in extra_patches:
                 stack.enter_context(mock.patch.object(setup_screen, target, value))
@@ -393,17 +393,16 @@ class TestWelcome(unittest.TestCase):
         return code, out.getvalue()
 
     def test_main_menu_is_about_actions_not_reference(self):
-        # Окружение теста детерминированное: пакеты считаем установленными,
-        # иначе подпись первого пункта зависит от того, что стоит на машине.
-        код, text = self._run(
+        # Deterministic test env: pretend packages are installed so item 0 is "Launch NEX CLI".
+        code, text = self._run(
             [4],
             extra_patches=(("missing", mock.Mock(return_value=[])),),
         )
-        self.assertEqual(код, 1)
-        self.assertIn("Чем помочь?", text)
-        self.assertIn("Запустить NEX CLI", text)
-        self.assertIn("Проверить окружение", text)
-        self.assertIn("До встречи", text)
+        self.assertEqual(code, 1)
+        self.assertIn("How can I help?", text)
+        self.assertIn("Launch NEX CLI", text)
+        self.assertIn("Check environment", text)
+        self.assertIn("Goodbye", text)
 
     def test_launch_item_goes_through_a_plan(self):
         code, text = self._run(
@@ -413,11 +412,10 @@ class TestWelcome(unittest.TestCase):
         self.assertEqual(code, 0)
 
     def test_free_text_question_gets_routed_to_assistant(self):
-        # «как установить» — вопрос: объяснение через NNL-блок, а не запуск.
         with mock.patch.object(setup_screen, "_показать_кратко",
                                return_value=None) as short:
-            код, text = self._run([3, 4], inputs=("как установить",))
-        self.assertEqual(код, 1)
+            code, text = self._run([3, 4], inputs=("как установить",))
+        self.assertEqual(code, 1)
         short.assert_called_once_with("установка")
 
     def test_about_item_uses_short_answer(self):
@@ -429,43 +427,42 @@ class TestWelcome(unittest.TestCase):
 
 
 class TestBootDesign(unittest.TestCase):
-    """Шапка экрана запуска: крупные буквы «NEX CLI NNL» и фиолетовая тема."""
+    """Boot screen header: block-letter 'NEX CLI NNL' banner and purple theme."""
 
     def test_big_title_fits_and_uses_block_letters(self):
         from vliw.ui.logo import render_title
         from vliw.ui.render import Style
 
         with mock.patch.object(Style, "enabled", False):
-            строки = render_title()
-        self.assertTrue(строки)
-        self.assertIn("▄", строки[0], "верхняя строка — шляпки кирпичиков")
-        for строка in строки[1:]:
-            self.assertIn("█", строка, "буквы набраны блоками")
-            self.assertLessEqual(len(строка.strip()), 60,
-                                 "заголовок должен влезать в 60 колонок")
+            lines = render_title()
+        self.assertTrue(lines)
+        self.assertIn("▄", lines[0], "top row uses half-block caps")
+        for line in lines[1:]:
+            self.assertIn("█", line, "letters are rendered with full blocks")
+            self.assertLessEqual(len(line.strip()), 60,
+                                 "banner must fit within 60 columns")
 
     def test_header_keeps_big_title_and_name_line(self):
         import re
 
         head = [re.sub(r"\033\[[0-9;]*m", "", s)
                 for s in setup_screen._шапка_кратко()]
-        блоки = [s for s in head if "█" in s]
-        self.assertTrue(блоки, "крупные буквы должны быть в шапке")
-        # Шапка компактная: логотип и строка названия, без лишних строк —
-        # экран должен целиком влезать в окно в 30 строк.
-        self.assertLessEqual(len(head), 10, "шапка не должна разрастаться")
-        текст = "\n".join(head)
-        self.assertIn("NEX CLI", текст)
-        self.assertIn("NNL-помощник", текст)
+        blocks = [s for s in head if "█" in s]
+        self.assertTrue(blocks, "block letters must appear in the header")
+        # Compact header: logo + title line so the screen fits in 30 terminal rows.
+        self.assertLessEqual(len(head), 10, "header must stay compact")
+        text = "\n".join(head)
+        self.assertIn("NEX CLI", text)
+        self.assertIn("NNL Assistant", text)
 
     def test_boot_theme_exists_and_is_purple(self):
         from vliw.ui import theme as t
 
-        т = t.load_theme("nnl-purple")
-        self.assertEqual(т.name, "nnl-purple")
-        self.assertEqual(т.role("banner").color, 135)
-        self.assertEqual(т.role("banner_alt").color, 183)
-        self.assertEqual(т.role("border").color, 61)
+        th = t.load_theme("nnl-purple")
+        self.assertEqual(th.name, "nnl-purple")
+        self.assertEqual(th.role("banner").color, 135)
+        self.assertEqual(th.role("banner_alt").color, 183)
+        self.assertEqual(th.role("border").color, 61)
 
 
 class TestExplainDispatch(unittest.TestCase):
@@ -474,8 +471,8 @@ class TestExplainDispatch(unittest.TestCase):
 
         with mock.patch.object(setup_screen, "_tty", return_value=True), \
                 mock.patch.object(setup_screen, "welcome", return_value=7) as welcome:
-            self.assertEqual(setup_screen.explain("причина"), 7)
-        welcome.assert_called_once_with("причина")
+            self.assertEqual(setup_screen.explain("reason"), 7)
+        welcome.assert_called_once_with("reason")
 
 
 if __name__ == "__main__":

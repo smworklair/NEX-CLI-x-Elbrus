@@ -1,30 +1,24 @@
-"""Постоянный llama-server: веса грузятся один раз за сессию, а не на команду.
+"""Persistent llama-server: load weights once per session instead of per command.
 
-ЗАЧЕМ. Прежний путь (`LlamaCppBackend`) поднимал `llama-completion` заново на
-каждый запрос: 2.1 ГБ весов читались с диска, прогревался контекст, и только
-потом шла генерация. Измерено на `slotclash`, адаптер `lora-eos`:
+WHY. The previous path (`LlamaCppBackend`) spawned `llama-completion` on every
+request, re-reading 2.1 GB of weights and warming up context each time.
+Measured on `slotclash` with adapter `lora-eos`:
 
-    подпроцесс на команду   32 с,   первый токен через ~20 с
-    постоянный сервер       14 с,   первый токен через 2.6 с (холодный)
-                            14 с,   первый токен через 0.11 с (тёплый кэш)
+    subprocess per command  32 s,   first token ~20 s
+    persistent server       14 s,   first token 2.6 s (cold)
+                            14 s,   first token 0.11 s (warm cache)
 
-Ответ при этом совпадает до строки — это тот же llama.cpp и те же веса, просто
-процесс не умирает между запросами.
+Output matches line-for-line — same llama.cpp and weights, persistent process.
 
-ПОЧЕМУ UNIX-СОКЕТ, А НЕ ПОРТ. `llama-server` слушает сокет, если адрес
-кончается на `.sock`. Это снимает целый класс проблем разом: не надо искать
-свободный порт, нельзя случайно открыть модель наружу, и два экземпляра
-инструмента не дерутся за 8080. Права на сокет — обычные права файла в личном
-каталоге.
+WHY A UNIX SOCKET INSTEAD OF A TCP PORT. `llama-server` listens on a UNIX
+socket when the address ends in `.sock`: no port hunting, no accidental
+network exposure, and multiple instances never fight over port 8080.
 
-ПОЧЕМУ ОДИН СЕРВЕР НА ВСЕ АДАПТЕРЫ. Флаг `--lora-init-without-apply` грузит
-все адаптеры сразу, но ни один не применяет; какой из них жив в данный
-момент, решает `POST /lora-adapters` со шкалами. Поэтому смена адаптера — это один
-HTTP-запрос, а не перезапуск с чтением 2.1 ГБ заново.
+WHY ONE SERVER FOR ALL ADAPTERS. `--lora-init-without-apply` loads all LoRAs
+upfront at scale 0; `POST /lora-adapters` toggles the active adapter in one
+HTTP call without reloading 2.1 GB.
 
-ЧЕГО ЗДЕСЬ НЕТ. Зависимостей: HTTP через `http.client`, сокет через `socket`,
-и то и другое — стандартная библиотека. Проект по-прежнему ставится без `pip
-install`, см. шапку `vliw/agent/llm.py` — там ровно тот же принцип.
+ZERO EXTERNAL DEPS. Uses stdlib `http.client` and `socket` only.
 """
 
 from __future__ import annotations
@@ -42,26 +36,26 @@ import threading
 import time
 from pathlib import Path
 
-# Сколько ждём, пока сервер поднимется и ответит /health. Холодный старт с
-# диска на медленной машине занимает секунды; берём с запасом, но не вечность —
-# иначе зависший сервер выглядит как «инструмент задумался».
+# Startup wait for /health. Cold disk loads take seconds on slower
+# machines; leave margin without hanging forever — otherwise a
+# stuck server looks like the tool froze.
 STARTUP_TIMEOUT_S = 180
 
-# Через сколько простоя сервер засыпает и отдаёт память. Инструмент держит
-# 3.5 ГБ, пока модель загружена, а на машине с 8 ГБ это заметно. Значение
-# намеренно больше, чем пауза между двумя командами подряд.
+# Idle timeout before stopping the server to free memory. The tool
+# holds ~3.5 GB while loaded, noticeable on 8 GB hosts. Kept longer
+# than a typical pause between consecutive commands.
 IDLE_SLEEP_S = 600
 
 
 class ServerError(RuntimeError):
-    """Сервер не поднялся или ответил не тем. Ожидаемый отказ, не поломка."""
+    """Server failed to start or returned an unexpected response (expected error)."""
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
-    """`http.client` поверх UNIX-сокета.
+    """`http.client` over a UNIX domain socket.
 
-    Стандартная библиотека умеет HTTP и умеет AF_UNIX, но вместе их не
-    соединяет. Подменяем `connect()` — это весь объём работы.
+    Stdlib supports HTTP and AF_UNIX separately; overriding `connect()`
+    bridges them.
     """
 
     def __init__(self, path: str, timeout: float | None = None):
@@ -75,20 +69,19 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         try:
             s.connect(self._path)
         except OSError:
-            # Закрыть за собой обязательно: пока сервер поднимается, сюда
-            # приходят десятки неудачных попыток /health, и каждая оставляла
-            # бы открытый дескриптор до сборки мусора.
+            # Always close: startup polling issues dozens of failed /health
+            # calls, each of which would otherwise leak a file descriptor
+            # until garbage collection.
             s.close()
             raise
         self.sock = s
 
 
 class LlamaServer:
-    """Один процесс `llama-server` на весь инструмент.
+    """Single `llama-server` process shared across the tool.
 
-    Живёт от первого запроса до выхода из инструмента. Останавливается через
-    `atexit`, а не по завершении команды: смысл всей затеи в том, чтобы веса
-    пережили команду.
+    Lives from first request until process exit (stopped via `atexit`)
+    so loaded weights persist across commands.
     """
 
     def __init__(self, binary: Path, base_gguf: Path,
@@ -96,7 +89,7 @@ class LlamaServer:
                  env: dict[str, str]):
         self.binary = binary
         self.base_gguf = base_gguf
-        self.adapters = adapters          # [(имя, путь к -f16.gguf), ...]
+        self.adapters = adapters          # [(name, path to -f16.gguf), ...]
         self.threads = threads
         self.ctx = ctx
         self.env = env
@@ -107,30 +100,30 @@ class LlamaServer:
         self._ids: dict[str, int] = {}
         self._active: str | None = None
         self._lock = threading.Lock()
-        # Второй замок — на РЕЖИМ, а не на запуск. Процесс один, а режима
-        # два: планировщик (с адаптером) и разговор (голая база). Какой из
-        # них активен — это состояние сервера, и переключить его посреди
-        # чужой генерации значит испортить чужой ответ. Поэтому режим
-        # держится на всё время генерации и отпускается вместе с ней.
+        # Second lock guards MODE, not startup. One process serves two
+        # modes: scheduler (with adapter) and chat (bare base). Switching
+        # mode mid-generation would corrupt an in-flight response, so
+        # the mode lock is held for the entire generation and released
+        # when it finishes.
         self._use_lock = threading.Lock()
 
-    # --- жизненный цикл ---------------------------------------------------
+    # --- lifecycle ---------------------------------------------------------
 
     @property
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
     def ensure(self) -> None:
-        """Поднять, если ещё не поднят. Повторный вызов — бесплатный."""
+        """Start if not already running. Repeated calls are no-ops."""
         with self._lock:
             if self.running:
                 return
             self._start()
 
     def _start(self) -> None:
-        # Каталог под сокет — короткий и свой. У AF_UNIX предел длины пути
-        # около 108 байт, и путь внутри проекта (или в /home с длинным именем)
-        # в него может не влезть.
+        # Short dedicated socket directory: AF_UNIX path length limit is
+        # ~108 bytes, which a deep project or /home path can exceed.
+        #
         self._dir = tempfile.mkdtemp(prefix="nex-")
         self._sock = os.path.join(self._dir, "l.sock")
         self._log = Path(self._dir) / "server.log"
@@ -148,8 +141,8 @@ class LlamaServer:
         for _name, path in self.adapters:
             cmd += ["--lora", str(path)]
 
-        # stderr в файл, а не в трубу: llama-server пишет туда много, и
-        # непрочитанная труба однажды заполнится и подвесит сервер намертво.
+        # Redirect stderr to a file, not a pipe: llama-server is verbose
+        # and an unread pipe would fill up and deadlock the server.
         with open(self._log, "wb") as log:
             self._proc = subprocess.Popen(cmd, stdout=log, stderr=log,
                                           env=self.env)
@@ -161,25 +154,25 @@ class LlamaServer:
         deadline = time.monotonic() + STARTUP_TIMEOUT_S
         while time.monotonic() < deadline:
             if not self.running:
-                # Лог читаем ДО остановки: она сносит каталог вместе с ним.
+                # Read log BEFORE stopping: stop() removes the temp directory.
                 tail = self._tail_log()
                 self.stop()
-                raise ServerError("llama-server завершился при старте:\n  " + tail)
+                raise ServerError("llama-server exited during startup:\n  " + tail)
             try:
                 status, body = self._request("GET", "/health")
                 if status == 200 and '"ok"' in body:
                     return
             except OSError:
-                pass                      # сокета ещё нет — это нормально
+                pass                      # socket not created yet — expected
             time.sleep(0.25)
         tail = self._tail_log()
         self.stop()
         raise ServerError(
-            f"llama-server не ответил /health за {STARTUP_TIMEOUT_S} с:\n  " + tail)
+            f"llama-server did not answer /health within {STARTUP_TIMEOUT_S} s:\n  " + tail)
 
     def _tail_log(self, n: int = 6) -> str:
         if self._log is None or not self._log.exists():
-            return "лога нет"
+            return "no log"
         lines = self._log.read_text("utf-8", "replace").strip().split("\n")
         return "\n  ".join(lines[-n:])
 
@@ -191,18 +184,18 @@ class LlamaServer:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-        # Каталог целиком, а не только сокет: в нём лежит ещё и лог сервера,
-        # и без уборки каждый запуск инструмента оставлял бы в /tmp по пустому
-        # каталогу навсегда. Найдено по факту — 25 штук за один день возни.
+        # Remove the entire temp directory (socket + server log) so
+        # repeated runs do not leave empty directories behind in /tmp.
+        #
         if self._dir:
             shutil.rmtree(self._dir, ignore_errors=True)
         self._dir = self._sock = self._log = None
 
-    # --- запросы ----------------------------------------------------------
+    # --- requests ----------------------------------------------------------
 
     def _connect(self, timeout: float) -> _UnixHTTPConnection:
         if self._sock is None:
-            raise ServerError("сервер не запущен")
+            raise ServerError("server is not running")
         return _UnixHTTPConnection(self._sock, timeout=timeout)
 
     def _request(self, method: str, url: str, body=None,
@@ -220,48 +213,46 @@ class LlamaServer:
     def _load_adapter_ids(self) -> None:
         status, body = self._request("GET", "/lora-adapters")
         if status != 200:
-            raise ServerError(f"/lora-adapters ответил {status}: {body[:200]}")
+            raise ServerError(f"/lora-adapters returned {status}: {body[:200]}")
         by_path = {Path(row["path"]).name: row["id"] for row in json.loads(body)}
         self._ids = {name: by_path[path.name]
                      for name, path in self.adapters if path.name in by_path}
 
     def select(self, name: str) -> None:
-        """Сделать активным один адаптер, остальные погасить.
+        """Activate one adapter and disable all others.
 
-        Шкала 0.0 — не «выключен наполовину», а «не применяется». Гасим все
-        остальные явно: если оставить два включёнными, их правки сложатся, и
-        получится модель, которую никто не обучал и не замерял.
+        Scale 0.0 disables an adapter completely. Explicit disabling avoids
+        stacking two adapters into an untested hybrid.
         """
         if name == self._active:
             return
         if name not in self._ids:
-            raise ServerError(f"адаптер {name!r} серверу не передавался")
+            raise ServerError(f"adapter {name!r} was not loaded into the server")
         scales = [{"id": i, "scale": 1.0 if n == name else 0.0}
                   for n, i in self._ids.items()]
         status, body = self._request("POST", "/lora-adapters", scales)
         if status != 200:
-            raise ServerError(f"смена адаптера не удалась ({status}): {body[:200]}")
+            raise ServerError(f"failed to switch adapter ({status}): {body[:200]}")
         self._active = name
 
     def select_base(self) -> None:
-        """Погасить все адаптеры: остаётся голая база (сейчас Phi-4-mini).
+        """Disable all adapters, leaving the bare base model (currently Phi-4-mini).
 
-        Обученный адаптер учит модель ровно одному — писать строки расписания.
-        Для разговора он не нужен и вреден: спросишь «почему медленно» —
-        получишь `0: такт=0 канал=1`. Разговор идёт на базе, планирование —
-        на крошках из `vliw/tiny/`, процесс при этом один и тот же.
+        Trained adapters only know schedule lines and hurt chat quality.
+        Chat runs on the bare base while scheduling uses `vliw/tiny/`, sharing
+        the same server process.
         """
         if not self._ids:
             return
         scales = [{"id": i, "scale": 0.0} for i in self._ids.values()]
         status, body = self._request("POST", "/lora-adapters", scales)
         if status != 200:
-            raise ServerError(f"не удалось погасить адаптеры ({status}): {body[:200]}")
+            raise ServerError(f"failed to disable adapters ({status}): {body[:200]}")
         self._active = None
 
     @contextlib.contextmanager
     def using(self, adapter: str | None):
-        """Занять модель под один режим. `None` — разговор на голой базе."""
+        """Acquire the model for one mode. `None` means chat on bare base."""
         with self._use_lock:
             if adapter is None:
                 self.select_base()
@@ -271,13 +262,10 @@ class LlamaServer:
 
     def chat(self, messages: list[dict], temperature: float = 0.3,
              max_tokens: int = 700, timeout: float = 900.0):
-        """Разговор с базовой моделью. Поток кусков текста.
+        """Chat with the base model, streaming text chunks.
 
-        `/v1/chat/completions`, а не `/completion`: шаблон диалога у базы свой
-        (у Gemma 4 — gemma-шаблон с особыми EOS), и собирать его руками значило
-        бы завести вторую копию формата — ту самую ошибку, из-за которой
-        случился EOS-баг. Сервер знает шаблон из самого GGUF и применяет его
-        сам.
+        Uses `/v1/chat/completions` rather than `/completion` so the server
+        applies the exact chat template embedded in the GGUF.
         """
         with self.using(None):
             conn = self._connect(timeout)
@@ -291,7 +279,7 @@ class LlamaServer:
                 resp = conn.getresponse()
                 if resp.status != 200:
                     raise ServerError(
-                        f"/v1/chat/completions ответил {resp.status}: "
+                        f"/v1/chat/completions returned {resp.status}: "
                         + resp.read().decode("utf-8", "replace")[:200])
                 for raw in resp:
                     line = raw.decode("utf-8", "replace").strip()
@@ -312,13 +300,11 @@ class LlamaServer:
                 conn.close()
 
     def _chat_kwargs(self) -> dict:
-        """Доп. поля тела /v1/chat/completions под семейство базы.
+        """Extra request body fields for /v1/chat/completions by base model family.
 
-        Gemma 4 — hybrid-thinking: по умолчанию уходит думать и съедает весь
-        бюджет токенов мыслью вслух, а в `content` приезжает пустота
-        (замерено: 300 токенов в никуда, finish=length). Нам рассуждения
-        не нужны — числа уже посчитаны ядром, модель только формулирует.
-        Qwen-базе этот флаг не шлём: её шаблон такого параметра не знает.
+        Gemma 4 defaults to hybrid-thinking and can burn the entire token
+        budget on reasoning, leaving `content` empty. Numbers are already
+        computed by the core, so thinking is disabled. Omitted for Qwen.
         """
         if "gemma" in self.base_gguf.name.lower():
             return {"chat_template_kwargs": {"enable_thinking": False}}
@@ -327,17 +313,13 @@ class LlamaServer:
     def complete(self, prompt: str, n_predict: int, adapter: str | None = None,
                  timeout: float = 900.0, temperature: float = 0.0,
                  seed: int | None = None, grammar: str | None = None):
-        """Поток кусков ответа. Только продолжение — эха промпта здесь нет.
+        """Stream completion chunks (continuation only, no prompt echo).
 
-        `temperature`/`seed` — сэмплинг для best-of-N (см. `bench.py`).
-        Умолчания — та же детерминированная генерация, что на всех замерах:
-        тело запроса отличается от прежнего только при явной температуре.
+        `temperature`/`seed` enable sampling for best-of-N (`bench.py`).
+        Defaults match deterministic greedy decoding.
 
-        Отмена: закрыть генератор. Соединение закрывается в `finally`, сервер
-        видит обрыв клиента и снимает свою задачу — процесс при этом остаётся
-        жить и готов к следующему запросу. Это и есть выигрыш по сравнению с
-        подпроцессом, где отмена означала убийство процесса и повторное
-        чтение 2.1 ГБ весов на следующий запрос.
+        Cancellation: close the generator. Closing the connection in `finally`
+        cancels the in-flight server task while keeping the process alive.
         """
         with self.using(adapter) if adapter else contextlib.nullcontext():
             yield from self._complete(prompt, n_predict, timeout,
@@ -352,23 +334,23 @@ class LlamaServer:
             body: dict = {
                 "prompt": prompt,
                 "n_predict": n_predict,
-                "temperature": temperature,   # 0 — детерминированно, как на замерах
+                "temperature": temperature,   # 0 — deterministic, matching benchmarks
                 "stream": True,
-                "cache_prompt": True,   # общий префикс промпта не считается заново
+                "cache_prompt": True,   # reuse shared prompt prefix cache
             }
             if seed is not None:
                 body["seed"] = int(seed)
             if grammar:
-                # Структурная гарантия вместо надежды: сервер не даст модели
-                # выйти за грамматику, поэтому нелегальный канал и поломанный
-                # формат становятся невозможны, а не маловероятны.
+                # Structural guarantee: the server enforces the grammar so
+                # illegal channels and broken syntax become impossible
+                # rather than merely unlikely.
                 body["grammar"] = grammar
             body = json.dumps(body)
             conn.request("POST", "/completion", body=body,
                          headers={"Content-Type": "application/json"})
             resp = conn.getresponse()
             if resp.status != 200:
-                raise ServerError(f"/completion ответил {resp.status}: "
+                raise ServerError(f"/completion returned {resp.status}: "
                                   + resp.read().decode("utf-8", "replace")[:200])
             for raw in resp:
                 line = raw.decode("utf-8", "replace").strip()

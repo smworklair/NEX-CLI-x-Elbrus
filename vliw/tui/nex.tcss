@@ -1,38 +1,36 @@
 /* ------------------------------------------------------------------------
-   NEX — оформление интерфейса.
+   NEX — UI styling.
 
-   Цвета сюда попадают из палитры проекта (vliw/ui/themes/*.json) через
-   переменные $nex-*: одна и та же тема красит и построчный вывод, и этот
-   экран. Здесь задаётся только вёрстка и иерархия поверхностей.
+   Colors come from the project palette (vliw/ui/themes/*.json) via $nex-*
+   variables: the same theme styles both line output and this screen. This
+   stylesheet defines only layout and surface hierarchy.
 
-   Поверхности:  canvas (полотно) < panel (панель) < raised (активное).
-   Акцент ($primary) свой у каждого режима и приходит из темы приложения.
+   Surfaces: canvas < panel < raised (active).
+   Each mode sets its own accent ($primary) via the app theme.
    ------------------------------------------------------------------------ */
 
 Screen {
-    /* Слой для подсказки при наборе: она всплывает поверх раскладки и места
-       под себя не резервирует. */
+    /* Layer for typing hints: floats above the layout without reserving space. */
     layers: base overlay;
     background: $nex-canvas;
     color: $nex-text;
 }
 
-/* --- полосы прокрутки --------------------------------------------------- */
-/* Размер 1 — по всей поверхности интерфейса. Дефолт Textual (2 клетки) без
-   этого правила торчал у редактора и контейнеров: тёмный столб посреди кода
-   и двухрядная полоса под панелью выглядели как сломанная раскладка, а не
-   как указатель положения. Цвета полос задаёт тема ($scrollbar-*): фон =
-   панель, бегунок чуть светлее — полоса не спорит с содержимым. */
+/* --- scrollbars --------------------------------------------------------- */
+/* Size 1 across the entire UI. Textual's default (2 cells) stuck out next to
+   the editor and containers, looking like a broken layout rather than a
+   position indicator. Bar colors come from the theme ($scrollbar-*): panel
+   background, slightly brighter thumb so it never competes with content. */
 TextArea, VerticalScroll, OptionList, DataTable, RichLog, ItemGrid {
     scrollbar-size-vertical: 1;
     scrollbar-size-horizontal: 1;
 }
 
-/* --- поля ввода и рамки без «тонких блоков» ---------------------------- */
-/* По умолчанию Input рисует рамку `tall` из ▊ ▔ ▎ ▁, а скроллбары Textual —
-   из ▁▂▃…; в шрифтах без этих символов каждая клетка становится «квадратиком
-   с ?». `solid` — обычные одинарные линии (┌─┐│└┘), они есть в консольных
-   шрифтах. Начертание то же, просто без редких глифов. */
+/* --- inputs and borders without thin block glyphs ----------------------- */
+/* By default Input draws a `tall` border using ▊ ▔ ▎ ▁, and Textual scrollbars
+   use ▁▂▃…; in fonts missing those glyphs every cell becomes a replacement box.
+   `solid` uses standard single-line box drawing (┌─┐│└┘) present in all console
+   fonts. Same look, without rare glyphs. */
 Input {
     border: solid $nex-line;
 }
@@ -40,10 +38,9 @@ Input:focus {
     border: solid $primary;
 }
 
-/* --- шапка режима ------------------------------------------------------ */
-/* height auto, а не 1: под основной строкой может стоять вторая — факты
-    спящих режимов. Без фактов второй строки нет (display ставит код), и
-    шапка во всех режимах остаётся однорядной. */
+/* --- mode header -------------------------------------------------------- */
+/* height auto instead of 1: a second line may show dormant mode facts.
+   Without facts the second line is hidden by code, keeping the header 1 row. */
 
 TopBar {
     dock: top;
@@ -55,8 +52,8 @@ TopBar {
 
 #topbar-line { height: 1; width: 100%; }
 
-/* Вторая строка — пилот РАЗБОРА: по одному короткому факту на каждый
-    спящий режим (ЯДРО/АГЕНТ/КОД), клик открывает тот режим. */
+/* Second line — LAB pilot: one short fact per dormant mode (CORE/AGENT/CODE);
+   clicking opens that mode. */
 
 #topbar-sleep {
     display: none;
@@ -80,13 +77,10 @@ TopBar {
     text-style: bold;
 }
 
-/* --- док ввода --------------------------------------------------------- */
-/* Строка ввода — терминальное приглашение, а не блок-карточка. ОДИН ряд
-    текста на фоне полотна, отделённый от вывода волоском сверху. Ни серой
-    подложки на всю ширину, ни пустых полос над и под строкой: четыре
-    прошлые версии строили строку как «якорь экрана» и получали брусок,
-    который спорил с рамками панелей над ним. Приглашение терминала ничем
-    не обрамлено — оно приглашение, а не панель. */
+/* --- input dock --------------------------------------------------------- */
+/* The input line is a terminal prompt, not a card widget: one row of text on
+   the canvas separated by a top hairline, with no full-width gray bar or empty
+   padding rows that compete with panel borders above it. */
 
 #dock {
     dock: bottom;
@@ -100,10 +94,9 @@ PromptBar {
     width: 100%;
 }
 
-/* 2 ряда: строка текста и волосок сверху. Фокус показывает сама строка:
-    волосок густеет в цвет режима, текст в поле чуть светлеет. Подложки нет
-    вовсе — полоса цвета $nex-raised под вводом читалась отдельным
-    виджетом, «налепленным» на экран. */
+/* 2 rows: text line and top hairline. Focus is shown by the line itself:
+   the hairline intensifies to the mode accent and text brightens slightly.
+   No background fill — a $nex-raised bar looked pasted onto the screen. */
 #prompt-field {
     height: 2;
     width: 100%;
@@ -118,8 +111,8 @@ PromptBar {
     border-top: solid $primary 55%;
 }
 
-/* Дети — по одной строке. Марка — шеврон «>» в одну клетку с пробелом:
-    плашка «nex» на общем поле была лишней табличкой. */
+/* Single-row children. Prompt mark is a 1-cell ">" chevron plus space;
+   a full "nex" badge on the shared bar was visual noise. */
 
 #prompt-mark {
     width: 2;
@@ -155,7 +148,7 @@ HintBar {
     background: $nex-shadow;
 }
 
-/* --- палитра команд ---------------------------------------------------- */
+/* --- command palette ---------------------------------------------------- */
 
 Palette {
     max-height: 12;
@@ -174,24 +167,19 @@ Palette > .option-list--option-highlighted {
     text-style: bold;
 }
 
-/* --- панели ------------------------------------------------------------ */
+/* --- panels ------------------------------------------------------------- */
 
 /*
-   ОКНО — одна строка шапки и содержимое под ней. Ни рамок, ни скруглений.
+   WINDOW — a single-line header and content beneath it. No boxes or rounded
+   borders.
 
-   Раньше панель была боксом в округлой рамке с именем капсом в бордюре, и
-   на экране таких боксов шесть-семь. Стоило это двух строк высоты на каждый
-   (верх и низ) и двух колонок ширины, то есть на семи панелях — четырнадцати
-   строк экрана под одни бордюры. Но дороже места было другое: КОД к тому
-   моменту переехал на плоские окна с однострочной шапкой, и переход из него
-   в АГЕНТ читался как переход в другую программу. Двойной клик по вкладке
-   теперь водит между ними постоянно — разнобой стало видно на каждом жесте.
+   Previously each panel was a rounded-border box with an all-caps border title,
+   spending 14 rows of height on borders alone across 6-7 panels and clashing
+   with CODE's flat windows whenever double-clicking a tab.
 
-   Шапка — не `border_title`, а виджет `.panel-head` первой строкой (см.
-   PanelHead в widgets.py): у надписи, врезанной в рамку, нет подложки, а
-   окна КОДа подписаны полосой на своём фоне. Границ у окна нет вовсе —
-   соседние окна разделяет волосок контейнера-колонки, а окна друг под
-   другом уже разделены полосой шапки.
+   The header is a `.panel-head` widget on the first row (see PanelHead in
+   widgets.py). Adjacent columns are separated by a container hairline, and
+   stacked windows are already separated by their header strips.
 */
 Panel {
     border: none;
@@ -200,18 +188,18 @@ Panel {
     height: 1fr;
 }
 
-/* Содержимое отступает на клетку от края окна — ровно как во вкладках дока
-   КОДа. Шапка сюда не попадает: у неё свой padding, а класс в CSS Textual
-   сильнее типа. */
+/* Content indents one cell from the window edge, matching CODE dock tabs.
+   The header is excluded because it has its own padding and class specificity
+   beats type specificity in Textual CSS. */
 Panel > * { padding-left: 1; }
 
-/* Волосок между колонками — там, где два окна встречаются. Обводить окно со
-   всех сторон незачем: у края экрана граница не нужна, а окна друг под
-   другом уже разделены полосой шапки. */
+/* Hairline between columns where two windows meet. No need to box all four
+   sides: screen edges need no border and stacked windows are separated by
+   their header bars. */
 #mind-right, #lab-right, #core-right { border-left: solid $nex-line; }
 
-/* Шапка окна — полоса в одну строку. Фон рисуется и под padding, поэтому
-   подложка идёт во всю ширину окна, а текст отступает на клетку. */
+/* Window header — single-row bar. Background fills under padding, so the bar
+   spans the full width while text stays inset by one cell. */
 .panel-head {
     height: 1;
     width: 100%;
@@ -220,41 +208,34 @@ Panel > * { padding-left: 1; }
     padding: 0 1;
 }
 
-/* Активное окно помечается ШАПКОЙ, а не цветной рамкой: рамки больше нет,
-   а знать, где фокус, надо по-прежнему. */
+/* Active window is indicated by its header rather than a colored border:
+   borders are gone, but focus must remain clear. */
 Panel:focus-within > .panel-head { background: $nex-raised; }
 
-/* --- инструменты панели -------------------------------------------------- */
-/* Полоса инструментов живёт ПЕРВЫМ ребёнком панели и видна ВСЕГДА, а не
-    только в развороте: «прогнать», «переписать по оракулу», фильтры и
-    навигация — основные действия панели, прятать их за двойной клик
-    значило бы прятать саму функциональность. Разворот добавляет колонки
-    и место, а не открывает базовые кнопки. */
+/* --- panel toolbar ------------------------------------------------------ */
+/* The toolbar is always the first child of a panel and always visible, not
+   only when maximized: run, oracle rewrite, filters, and navigation are core
+   actions. Maximizing adds space and columns rather than hiding basic buttons. */
 
 PanelToolbar {
     display: block;
-    /* auto, а не 1: лишние чипы уходят второй строкой (см. PanelToolbar),
-       а фиксированная единица их обрезала бы вместе с переносом. */
+    /* auto instead of 1: extra chips wrap onto a second row (see PanelToolbar);
+   a fixed 1 would clip wrapped chips. */
     height: auto;
     width: 100%;
-    /* Контентные треки вместо 1fr: иначе колонки тянутся на всю ширину
-       и чипы разъезжаются с дырами (видно в широкой панели GIT). */
+    /* Content-sized tracks instead of 1fr so columns do not stretch full-width
+   and leave wide gaps between chips (visible in the wide GIT panel). */
     grid-columns: auto;
 }
 
-/* Марджин чипа — ВНЕ трека не живёт: грид считает его внутрь колонки,
-   и каждый чип ужимался ровно на клетку («решётка >» читалась как
-   «решётка»). Зазор между чипами при этом никуда не девается: у чипа
-   паддинг 0 1 с обеих сторон, соседние дают две пустые клетки. Правило
-   только для тулбара — у вкладок дока (DockTabs, обычный Horizontal)
-   марджин как был, так и нужен. */
+/* Chip margin lives inside grid tracks, which previously clipped chips by one
+   cell. Spacing is preserved via 0 1 padding on each chip (two blank cells
+   between neighbors). Scoped to toolbar only; DockTabs keeps its margins. */
 PanelToolbar Tool { margin-right: 0; }
 
-/* Тесный экран (80 колонок): дубли-чипы прячутся, тулбар остаётся одной
-   строкой. Без этого перенос добавлял правой колонке строки, которых нет
-   в бюджете высоты, — МАШИНА уезжала за нижний край молча (ловит
-   TestNothingFallsBelowTheFold). Клавиатурные пути те же: чипы — только
-   мышиная affordance, действия доступны как были. */
+/* Narrow screen (80 cols): duplicate chips hide so the toolbar stays 1 row.
+   Otherwise wrapping added unbudgeted rows to the right column and pushed
+   MACHINE below the fold. Keyboard shortcuts remain unchanged. */
 ModeScreen.tight .tb-spare { display: none; }
 
 Tool {
@@ -278,18 +259,11 @@ Tool.tool-on {
     text-style: bold;
 }
 
-/* Развёрнутая панель занимает всё место между шапкой и доком ввода — чем
-   бы ни была её обычная высота. Textual вешает класс `-maximized` на
-   развёрнутый виджет, но собственная высота панели никуда не девается: у
-   половины панелей она задана числом по id (#p-console: 10, #p-detail: 9,
-   #p-seen: 12), и по специфичности id побеждает класс. Получалась узкая
-   полоска посреди пустого экрана вместо разворота.
-   1fr, а не 100%: со 100% панель накрывала док ввода с полосой подсказок —
-   в «полного экрана» пропадала нижняя панель, и выход из разворота
-   превращался в угадайку. 1fr честно занимает остаток: шапка, строка
-   ввода и подсказки видны всегда.
-   `!important` здесь по делу: развёрнутое состояние обязано перебивать
-   любую обычную раскладку. */
+/* A maximized panel fills all space between the header and input dock
+   regardless of its normal height. Because many panels set explicit heights by
+   id (#p-console: 10, #p-detail: 9, #p-seen: 12), `!important` overrides id
+   specificity. `1fr` (not `100%`) keeps the header, input line, and hints
+   visible at all times. */
 Panel.-maximized {
     height: 1fr !important;
     max-height: 100% !important;
@@ -297,18 +271,16 @@ Panel.-maximized {
     width: 100% !important;
 }
 
-/* Развёрнутая панель с чатом уступает ему треть ширины. Панель остаётся
-   слева: читают её, а спрашивают о прочитанном. */
-/* 1fr, а не проценты: чат пристыкован справа, и панель должна занять ровно
-   остаток. С процентами она вставала бы по центру, оставляя пустые поля с
-   обеих сторон. */
+/* Maximized panel with chat yields one-third width to chat, staying on the
+   left so you read the panel while asking about it. */
+/* 1fr instead of percentages: chat docks on the right and the panel fills the
+   exact remainder without leaving margins. */
 Panel.-maximized.with-chat {
     width: 1fr !important;
 }
 
-/* Без layer: слой висит ПОВЕРХ раскладки и места под себя не резервирует —
-   панель оставалась во всю ширину, а чат её перекрывал. Обычный dock
-   отбирает свою долю честно. */
+/* No layer: a layer floats over the layout and overlaps the panel. Regular
+   docking reserves its share of width cleanly. */
 PanelChat {
     width: 34%;
     height: 100%;
@@ -320,8 +292,8 @@ PanelChat {
 
 PanelChat.right { dock: right; }
 
-/* У панелей со своей строкой ввода чат встаёт слева: справа уже занято их
-   собственным вводом, и два поля рядом путают, куда печатать. */
+/* For panels with their own input line, chat docks on the left so two input
+   fields do not sit side by side on the right. */
 PanelChat.left { dock: left; }
 
 #pchat-log {
@@ -343,7 +315,7 @@ Console {
     padding: 0;
 }
 
-/* --- ЯДРО: верстак интерпретатора -------------------------------------- */
+/* --- CORE: interpreter workbench ---------------------------------------- */
 
 #core-body {
     height: 1fr;
@@ -382,9 +354,9 @@ Console {
 #p-mem   { height: 7; }
 #p-prog  { height: 2fr; min-height: 8; }
 
-/* Лист ЛЕНТЫ — главный вид: история строк человека с итогом каждой.
-    Строки кликабельны (связка с ПРОГРАММОЙ), отчёт slash-команды живёт
-    в консоли ПОД листом и показывается, пока отчёт свежий. */
+/* TAPE list is the primary view: history of user lines with each result.
+   Rows are clickable (linked to PROGRAM); slash-command reports live in the
+   console below the list while fresh. */
 #tape-sheet {
     height: 1fr;
     width: 100%;
@@ -427,10 +399,10 @@ Console {
 
 .chip-kernel { color: $nex-accent-soft; }
 
-/* --- РАЗБОР: расписание, которое можно потрогать ------------------------ */
-/* Расписание — главный блок экрана, и высоты остальных панелей держатся
-    нарочно малыми: УЧАСТОК — полоса чипов, «почему здесь» и вывод команд —
-    узкие окна. Всё освободившееся забирает решётка (#p-grid, 1fr). */
+/* --- LAB: interactive schedule ------------------------------------------ */
+/* Schedule is the main block on screen, so surrounding panels stay compact:
+   BLOCK is a chip strip, WHY HERE and output are narrow panes, and the grid
+   (#p-grid, 1fr) takes all remaining height. */
 
 #lab-body { height: 1fr; width: 100%; }
 #lab-left { width: 1fr; height: 100%; }
@@ -445,7 +417,7 @@ Console {
 #view-chips { height: auto; width: auto; }
 #scenario-chips { height: auto; width: 100%; grid-gutter: 0; }
 
-/* Строка над решёткой: слева переключатель вида, справа живой счёт. */
+/* Row above the grid: view switcher on the left, live counters on the right. */
 #grid-head { height: 1; width: 100%; }
 #grid-hud {
     width: 1fr;
@@ -454,9 +426,8 @@ Console {
     color: $nex-dim;
 }
 
-/* Разворот решётки: слева решётка, справа инспектор. Рамка и отступ —
-    чтобы колонка читалась отдельной панелью со своими секциями
-    (КУРСОР / НАХОДКА / КАНАЛЫ / КЛАВИШИ), а не пустотой рядом. */
+/* Maximized grid: grid on the left, inspector on the right. Border and padding
+   frame the column as a distinct pane (CURSOR / FINDING / CHANNELS / KEYS). */
 #grid-main { height: 1fr; width: 100%; }
 
 #grid-side {
@@ -480,13 +451,9 @@ Panel.-maximized #grid-side { display: block; }
 
 .chip-scen {
     width: 1fr;
-    /* Марджин ВНЕ трека не живёт: грид считает его внутрь колонки. При
-       min_column_width 13 чипу оставалось 12 клеток, а `divpressure` —
-       это 11 букв плюс паддинг по единице, то есть ровно 13. Одной клетки
-       не хватало, и имя резалось до `divpressur` — без многоточия, так
-       что читалось как настоящее. Зазор между чипами никуда не делся:
-       у каждого паддинг 0 1, соседние дают две пустые клетки.
-       Тот же случай, что у PanelToolbar выше. */
+    /* Margin lives inside grid tracks: at min_column_width 13 a chip had 12 cells,
+   clipping `divpressure` (11 chars + 2 padding = 13) to `divpressur`. Adjacent
+   0 1 padding already gives a 2-cell gap. Same fix as PanelToolbar above. */
     margin-right: 0;
     background: transparent;
     color: $nex-dim;
@@ -494,28 +461,19 @@ Panel.-maximized #grid-side { display: block; }
 
 #p-grid { height: 1fr; min-height: 8; }
 
-/* GIT повыше, чем было (7): полоска в две строки вывода читалась как
-    обрезок, а не как панель. Внутри — командная строка-чип, высота
-    включает и её три строки. */
+/* GIT taller than before (7): a 2-line strip looked truncated. Height also
+   accommodates the embedded command line. */
 #p-console { height: 12; }
 
-/* Командная строка внутри GIT — чип с круглой рамкой в цвет ПАНЕЛИ:
-    контура нет (шов со стенкой не читается), середина остаётся
-    приподнятой подложкой со скруглёнными краями. В фокусе проявляется
-    приглушённый акцентный контур и подсветка фона. Тот же PromptBar:
-    палитра по «/», история, «считаю…». */
+/* Command line inside GIT — panel-colored chip that reveals a muted accent
+   border and highlight on focus. Uses the same PromptBar: `/` palette,
+   history, and busy indicator. */
 #p-console #prompt { height: auto; width: 100%; }
 
-/* Строка ввода ВНУТРИ панели — часть панели, а не карточка на ней.
-   Была коробка: своя подложка плюс `border: round`, и всё это внутри
-   панели, у которой рамка уже есть. Две вложенные рамки читаются как
-   «интерфейс из отдельных кусков», особенно когда внешняя подсвечена
-   фокусом. Теперь поле лежит на той же поверхности и отделено сверху
-   волоском; фокус меняет ТОН волоска и подложку на едва заметную, а не
-   обводит вторую рамку. */
-/* В панели GIT та же терминальная строка, что в доке: один ряд, волосок
-    сверху, фокус — густеющий волосок. Раньше здесь стоял отдельный
-    «плоский чип» — панель читалась как интерфейс из разных кусков. */
+/* Input line inside a panel belongs to the panel rather than floating as a
+   nested box. A top hairline separates it cleanly and brightens on focus. */
+/* Same terminal prompt line in GIT as in the dock: single row, top hairline,
+   accented hairline on focus. */
 #p-console #prompt-field {
     height: 2;
     margin: 0;
@@ -533,15 +491,14 @@ Panel.-maximized #grid-side { display: block; }
 
 #p-console #prompt-side { padding: 0 1; }
 
-/* Подсказка в пустом поле чуть живее «faint»: это приглашение к набору,
-    а не вывод, который можно пролистать не читая. */
+/* Placeholder slightly brighter than faint: it invites typing rather than
+   looking like skippable output. */
 #p-console #prompt-input > .input--placeholder {
     color: $nex-dim;
 }
 
-/* Палитра по «/» — внутри панели места впятеро меньше, чем было у дока:
-    без потолка она вытесняла само поле ввода за нижний край панели.
-    Список прокручивается, полный каталог — в развёрнутом GIT. */
+/* `/` palette inside the panel has far less height than the dock: cap its
+   height so it scrolls instead of pushing the input line off-screen. */
 #p-console Palette {
     max-height: 5;
     scrollbar-size-vertical: 1;
@@ -554,11 +511,9 @@ Panel.-maximized #grid-side { display: block; }
     scrollbar-size-horizontal: 1;
 }
 
-/* Мостик под решёткой к развёрнутому ДИАГНОЗУ. `display: none` — не
-   украшение, а обязательство: в обычном виде он отбирал у расписания целую
-   строку (было видно до т.21, стало до т.20), то есть платил главным окном
-   инструмента за подсказку, которая нужна только развёрнутой решётке.
-   Показывается из кода ровно на время разворота. */
+/* Bridge under the grid to maximized DIAGNOSIS. Hidden by default so it does
+   not steal a row from the schedule in normal view; shown by code only when
+   the grid is maximized. */
 #grid-link {
     display: none;
     height: 1;
@@ -567,14 +522,13 @@ Panel.-maximized #grid-side { display: block; }
 
 #grid-link.on { display: block; }
 
-/* --- ДИАГНОЗ: полный список находок при развороте ---------------------- */
+/* --- DIAGNOSIS: full findings list when maximized ----------------------- */
 
 #diag-filter {
     height: auto;
     width: 100%;
-    /* Без зазора список находок стартовал вплотную под фильтром — та же
-       рамка сверху и снизу читалась одной слипшейся полосой. У соседнего
-       #machine-filter-row тот же приём уже стоит. */
+    /* Keep a gap between the filter bar and findings list so their borders do not
+   merge into one bar (matches #machine-filter-row). */
     margin-bottom: 1;
 }
 
@@ -593,9 +547,8 @@ Panel.-maximized #grid-side { display: block; }
     background: $nex-raised;
 }
 
-/* Находка про клетку под курсором. Не заливка на всю ширину — она читалась
-   как отдельный блок и спорила с рамкой панели, — а полоса слева: тот же
-   приём, что у цитаты в тексте. */
+/* Finding for the cell under the cursor: left accent bar (like a blockquote)
+   instead of a full-width fill that competes with the panel border. */
 .finding-row.here {
     border-left: thick $primary;
     padding-left: 1;
@@ -621,22 +574,15 @@ Panel.-maximized #grid-side { display: block; }
     background: $nex-raised;
 }
 
-/* ДИАГНОЗ свёрнут до строки-сводки: подробности дублируют решётку
-    (простой виден строкой, находка под курсором — в инспекторе разворота),
-    панель держит только «сколько проблем и какая хуже». Полный список —
-    по 2xклику или клавише d из решётки. */
-/* Правая колонка обязана помещаться ЦЕЛИКОМ: ЧИСЛА и «ПОЧЕМУ ЗДЕСЬ» —
-    по содержимому, но с потолком; длинный разбор и ответ ИИ прокручиваются
-    внутри панели, а не распирают её и не уносят МАШИНУ за нижний край.
-    ДИАГНОЗ забирает остаток. Разворот снимает потолки: -maximized идёт
-    с !important. */
-/* Правая колонка РАЗБОРА делит высоту, а не занимает сколько выросло.
-   Раньше `#p-detail` был `auto` без потолка: разбор длинный — и панели под
-   ним уезжали за нижний край вместе с матрицей портов. Теперь остаток
-   забирает он (внутри у него свой VerticalScroll, так что содержимое не
-   теряется), а нижние панели держат свои размеры. */
+/* DIAGNOSIS collapses to a summary line in normal view (details duplicate the
+   grid); double-click or press `d` from the grid for the full list. */
+/* Right column must fit completely: NUMBERS and WHY HERE size to content with
+   caps; long explanations and AI answers scroll inside rather than pushing
+   MACHINE below the fold. DIAGNOSIS takes the remainder; maximize lifts caps. */
+/* LAB right column shares height instead of growing unbounded. `#p-detail`
+   takes 1fr with its own VerticalScroll so lower panels keep their sizes. */
 #p-numbers  { height: auto; max-height: 12; }
-/* НЕЙРОСЕТИ: прокручиваются внутри, потолок растёт только на высоком терминале (класс roomy) */
+/* NEURAL NETS: scrolls internally; cap grows only on tall terminals (.roomy). */
 #p-ai       { height: auto; min-height: 4; max-height: 7; }
 #ai-scroll  { height: auto; max-height: 100%; scrollbar-size-vertical: 1; }
 ModeScreen.roomy #p-ai { max-height: 17; }
@@ -644,7 +590,7 @@ ModeScreen.roomy #p-ai { max-height: 17; }
 #p-diag     { height: auto; min-height: 4; max-height: 8; }
 #p-machine  { height: auto; min-height: 6; max-height: 9; }
 
-/* Невысокий терминал: ужимаем нижние панели, разбор ужимается сам как 1fr. */
+/* Short terminal: tighten lower panels; detail shrinks naturally as 1fr. */
 ModeScreen.low #p-numbers { max-height: 8; }
 ModeScreen.low #p-ai      { min-height: 3; max-height: 5; }
 ModeScreen.low #p-diag    { min-height: 3; max-height: 5; }
@@ -656,10 +602,8 @@ ModeScreen.very-low #p-ai      { min-height: 3; max-height: 4; }
 ModeScreen.very-low #p-diag    { min-height: 3; max-height: 4; }
 ModeScreen.very-low #p-machine { min-height: 3; max-height: 4; }
 
-/* Содержимое панели МАШИНА — сводка профиля. У неё нет своей прокрутки, и
-   на очень низком терминале она вылезала из панели, которую сама же и
-   переросла. Потолок по месту в панели: строки, которые не влезли, читаются
-   через `/model`, о чём в панели и написано. */
+/* MACHINE summary has no internal scroll; cap height to fit the pane on short
+   terminals (overflowing lines are accessible via `/model`). */
 #machine { height: auto; max-height: 100%; overflow-y: hidden; }
 ModeScreen.very-low #p-detail  { min-height: 3; }
 
@@ -669,10 +613,10 @@ ModeScreen.very-low #p-detail  { min-height: 3; }
     scrollbar-size-vertical: 1;
 }
 
-/* Развёрнутый разбор забирает всю высоту панели, а не 12 строк. */
+/* Maximized detail view uses the full panel height instead of 12 rows. */
 #p-detail.-maximized #detail-scroll { height: 1fr; max-height: 100%; }
 
-/* --- АГЕНТ: диалог, у которого видно основание -------------------------- */
+/* --- AGENT: dialog with visible grounding ------------------------------- */
 
 #mind-body { height: 1fr; width: 100%; }
 #mind-left { width: 1fr; height: 100%; }
@@ -680,9 +624,8 @@ ModeScreen.very-low #p-detail  { min-height: 3; }
 
 #p-chat { height: 1fr; }
 
-/* Развёрнутый ДИАЛОГ: слева история вопросов (шириной как журнал запусков),
-   справа лента. Колонку включает код при развороте — тот же приём со слоями,
-   что и у остальных панелей: рисование зависит от режима, а не от размера. */
+/* Maximized DIALOG: question history on the left, transcript on the right.
+   Toggled by code on maximize so rendering depends on mode, not size. */
 #chat-body { width: 100%; height: 100%; }
 
 #chat-hist-col {
@@ -743,27 +686,26 @@ ModeScreen.very-low #p-detail  { min-height: 3; }
     margin-bottom: 1;
 }
 
-/* Правая колонка АГЕНТА: ШТАБ главный (1fr — забирает свободное место),
-   ТРАССА — остатки, ПОДКЛЮЧЕНИЕ и ЧТО ВИДИТ — компактные мини-блоки.
-   Сумма минимумов обязана влезать в 24 строки (см. TestNothingFallsBelowTheFold),
-   поэтому мини-статусы короткие: лишнее — только в развороте. */
+/* AGENT right column: HQ is primary (1fr), TRACE takes leftovers, CONNECTION
+   and AGENT CONTEXT are compact blocks. Minimum heights must fit in 24 rows;
+   extra detail appears only when maximized. */
 #p-hq    { height: 1fr; min-height: 8; }
 #p-model  { height: auto; max-height: 12; }
 #p-seen   { height: 7; }
 #p-trace  { height: 1fr; min-height: 5; }
 
-/* Сводка агента длиннее панели на низком терминале — обрезать, а не
-   выпирать за край (тот же приём, что у #machine в РАЗБОРЕ). */
+/* Clip agent summary if taller than the pane on short terminals (same as
+   #machine in LAB). */
 #seen { height: auto; max-height: 100%; overflow-y: hidden; }
 
-/* ПОДКЛЮЧЕНИЕ мини: провайдеры + строка ключа с кнопкой. */
+/* Compact CONNECTION: providers plus API key row with button. */
 #model-mini { height: auto; }
 #model-provs-mini { height: auto; }
 #model-mini-row { height: 3; margin-top: 1; }
 #model-key-mini { width: 1fr; height: 3; }
 #model-go { width: auto; height: 3; margin-left: 1; }
 
-/* ПОДКЛЮЧЕНИЕ в развороте: секции, списки с потолком. */
+/* Maximized CONNECTION: sections and height-capped lists. */
 #model-wide { height: 1fr; }
 #model-wide Input { height: 3; margin-bottom: 1; }
 #model-provs, #model-presets { height: auto; }
@@ -777,7 +719,7 @@ ModeScreen.very-low #p-detail  { min-height: 3; }
 #model-folder, #model-manual, #model-url { height: 3; }
 #p-model.-maximized #model-list { max-height: 100%; height: 1fr; }
 
-/* ШТАБ: задача всегда видна, детали — только в развороте. */
+/* HQ: task is always visible; details appear only when maximized. */
 #hq-mini { height: auto; }
 #hq-task { height: 3; margin-top: 1; }
 #hq-wide { height: 1fr; }
@@ -792,7 +734,7 @@ ModeScreen.very-low #p-detail  { min-height: 3; }
 #hq-list { height: auto; max-height: 24; scrollbar-size-vertical: 1; }
 #p-hq.-maximized #hq-list { max-height: 100%; height: 1fr; }
 
-/* --- узкое окно --------------------------------------------------------- */
+/* --- narrow window ------------------------------------------------------ */
 
 ModeScreen.narrow #core-right,
 ModeScreen.narrow #lab-right { width: 40; }
@@ -811,45 +753,38 @@ ModeScreen.tight #p-questions { display: none; }
 
 ModeScreen.tight #p-console { height: 8; }
 
-/* --- АГЕНТ на низком терминале (после правил ширины: при равной
-   специфичности побеждает то, что ниже) --------------------------------- */
+/* --- AGENT on short terminals (placed after width rules so equal specificity
+   resolves in favor of height constraints) ------------------------------- */
 
-/* Низкий: штаб жмётся к содержимому (без fr-запаса), сначала худеет
-   ЧТО ВИДИТ, потом ТРАССА. */
+/* Short: HQ shrinks to content (no fr reserve); AGENT CONTEXT tightens first,
+   then TRACE. */
 ModeScreen.low #p-hq    { height: auto; }
 ModeScreen.low #p-seen  { height: 5; }
 ModeScreen.low #p-trace { min-height: 3; }
 
-/* Очень низкий: ЧТО ВИДИТ и кнопки API прячутся целиком — те же факты
-   отдаёт TAB у развёрнутого ШТАБА, ключ вводится в поле ниже, а панели
-   вернутся на терминале повыше. */
+/* Very short: hide AGENT CONTEXT and API buttons; the same facts remain via
+   TAB in maximized HQ, and the key input stays below. */
 ModeScreen.very-low #p-seen         { display: none; }
 ModeScreen.very-low #p-trace        { min-height: 3; }
 ModeScreen.very-low #p-hq           { min-height: 7; }
 ModeScreen.very-low #model-provs-mini { display: none; }
 
-/* --- КОД: редактор, нижний док, строка состояния ----------------------- */
+/* --- CODE: editor, bottom dock, status bar ------------------------------ */
 /*
-   Один экран и пристыкованные окна — по образцу IDE.
+   Single workspace with docked panes, IDE-style:
 
-       шапка режима                                  1
-       полоса файлов                                 1
-       РЕДАКТОР                                      всё остальное
-       ───────── волосок ─────────
-       вкладки: расписание │ разбор │ замечания │ вывод
-       содержимое вкладки                            ~треть
-       строка состояния                              1
-       подсказки клавиш                              1
+       mode header                                   1
+       file tab strip                                1
+       EDITOR                                        remainder
+       ───────── hairline ─────────
+       tabs: schedule | inspect | issues | output
+       tab content                                   ~one third
+       status bar                                    1
+       key hints                                     1
 
-   Снизу ОДНО окно, а не два. Пока их было два — расписание отдельной
-   панелью и выдвижной ящик под ней, — редактор оказывался самой маленькой
-   областью экрана (одиннадцать строк кода из сорока двух), а строка
-   состояния висела МЕЖДУ ними, посреди экрана.
-
-   Рамок нет. Три панели в рамках стоили шесть строк на одни бордюры и
-   печатали имена капсом там, где место нужно содержимому: имя вкладки уже
-   написано в полосе вкладок. Разделителей ровно два — волосок над доком и
-   подложка строки состояния.
+   One bottom pane instead of two so the editor remains the largest region and
+   the status bar stays anchored at the very bottom. No extra box borders —
+   only the hairline above the dock and the status bar backing.
 */
 
 #code-head {
@@ -861,11 +796,8 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 
 #code-body { height: 1fr; width: 100%; }
 
-/* Каталог слева: примеры машины и настоящий код репозитория. ЗАКРЫТ по
-   умолчанию — ^B открывает. Открытым он отбирал у кода двадцать колонок
-   навсегда, чтобы показать восемь имён и полтора экрана пустоты под ними;
-   нужен он ровно дважды — в первую минуту и когда открываешь второй файл.
-   Волосок справа вместо рамки: колонка отделена, а не обведена. */
+/* Left examples/repo catalog. Closed by default (^B toggles) so it does not
+   permanently consume 20 columns. Separated by a right hairline. */
 #code-side {
     display: none;
     width: 22;
@@ -873,7 +805,7 @@ ModeScreen.very-low #model-provs-mini { display: none; }
     border-right: solid $nex-line;
 }
 
-/* Список файлов под шапкой: прокручивается он, шапка стоит. */
+/* File list beneath the header: list scrolls while header stays fixed. */
 #code-side-list {
     height: 1fr;
     width: 100%;
@@ -883,14 +815,11 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 
 .side-item { height: 1; width: 100%; }
 .side-item:hover { background: $primary 20%; }
-/* Строка под выделением в проводнике: по ней ходят стрелками, и Enter
-   откроет именно её. Без пометки клавиатурная навигация вслепую. */
+/* Highlighted row in the explorer: arrow keys move it and Enter opens it. */
 .side-item-on { background: $primary 30%; text-style: bold; }
 
-/* Колонки агента справа больше нет: она показывала тот же разговор, что
-   вкладка АГЕНТ нижнего дока (см. CodeScreen.compose). Её место занял
-   ПРОВОДНИК — тоже закрытый по умолчанию: постоянная колонка папок отбирала
-   бы ширину у планировщика, ради которого экран и открывают. */
+/* The right agent column was replaced by the AGENT dock tab; its slot now
+   hosts the file explorer (also closed by default to preserve editor width). */
 #code-explorer {
     display: none;
     width: 30;
@@ -910,20 +839,16 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 #explorer-list {
     height: 1fr;
     width: 100%;
-    /* Отступ в клетку — как у содержимого остальных окон. Без него список
-       прижимался вплотную к волоску-разделителю и выглядел приклеенным к
-       редактору. */
+    /* One-cell padding matching other panes so the list does not hug the divider. */
     padding: 0 0 0 1;
     scrollbar-size-vertical: 1;
 }
 
-/* Прятать колонки правилом нельзя: их показывает inline-стиль, а он
-   сильнее таблицы стилей. Этим занимается CodeScreen._fit_columns —
-   там же считается, сколько клеток обязано остаться редактору. */
+/* Columns are toggled via inline styles in CodeScreen._fit_columns, which
+   computes the minimum width reserved for the editor. */
 
-/* Первый экран поверх редактора: слой overlay, потому что печатать человек
-   должен сразу, а не после того, как уберёт приветствие. Ширину не берёт —
-   у слоя её нет; высоту тоже. */
+/* Welcome overlay above the editor: uses overlay layer so the user can start
+   typing immediately without dismissing it. */
 #code-hello {
     display: none;
     layer: overlay;
@@ -936,7 +861,7 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 
 #code-edit {
     height: 1fr;
-    /* 1fr, а не 100%: слева от редактора может встать колонка примеров. */
+    /* 1fr instead of 100%: the examples column may open to the left of editor. */
     width: 1fr;
     border: none;
     padding: 0 0 0 1;
@@ -947,36 +872,29 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 #code-edit:focus { border: none; background: transparent; }
 #code-edit > .text-area--cursor-line { background: $primary 10%; }
 
-/* --- нижний док -------------------------------------------------------- */
+/* --- bottom dock -------------------------------------------------------- */
 /*
-   Треть экрана — столько же, сколько у инструментального окна в любой IDE:
-   хватает читать, но рабочая область остаётся главной. Волосок сверху —
-   единственная граница; заголовка у дока нет, его имя написано на активной
-   вкладке.
+   Roughly one-third of the screen, like an IDE tool window: enough to read
+   while keeping the editor primary. Separated by a top hairline; the active
+   tab serves as its title.
 */
 
-/* min-height 10 — не «на глаз», а по решётке: волосок сверху (1), полоса
-   вкладок (1), шапка тактов (1), ШЕСТЬ каналов (6) и полоса горизонтальной
-   прокрутки (1). Шесть каналов обязаны быть видны целиком: обрезанный
-   шестой — это ,5, тот самый монопольный делитель, и без него решётка
-   перестаёт отвечать на свой вопрос. При min-height 8 на терминале 80x24
-   ,5 уезжал за нижний край молча. */
+/* min-height 10 fits the full grid: top hairline (1), tab bar (1), cycle
+   header (1), six channels (6), and horizontal scrollbar (1). All six channels
+   (including exclusive divider channel ,5) must stay visible on 80x24. */
 #code-dock {
-    /* Стартовое значение; настоящую высоту ставит экран под открытую
-       вкладку либо человек — мышью за границу. См. CodeScreen.TAB_HEIGHT. */
+    /* Initial height; actual height is set per active tab or resized by dragging
+   the border. See CodeScreen.TAB_HEIGHT. */
     height: 12;
     min-height: 5;
     width: 100%;
-    /* Канвас, а не панель: док был единственной светлой плитой на экране
-       (редактор, колонки и подвал — все тёмные) и читался инородным окном
-       поверх чужой программы. Границей остаются волосок сверху и чипы
-       вкладок — плите для этого быть светлой не нужно. */
+    /* Canvas background instead of panel so the dock blends with the editor,
+   columns, and footer rather than standing out as a lighter slab. */
     background: $nex-canvas;
 }
 
-/* Граница редактор/док — ручка, за которую тянут. Подсветка под курсором
-   говорит, что за неё можно взяться: в терминале форму курсора не сменить,
-   и это единственный способ показать, что строка живая. */
+/* Editor/dock drag handle: hover highlight signals it is draggable since
+   terminals cannot change cursor shape. */
 #dock-split {
     height: 1;
     width: 100%;
@@ -989,13 +907,13 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 #dock-sep { width: auto; height: 1; color: $nex-line; margin: 0 1; }
 #dock-note { height: 1; width: 1fr; content-align: right middle; padding: 0 1; }
 
-/* --- вкладка РАСПИСАНИЕ ------------------------------------------------ */
+/* --- SCHEDULE tab ------------------------------------------------------- */
 
 #dock-sched { height: 1fr; width: 100%; }
 #code-grid-wrap { width: 1fr; height: 100%; padding: 0 0 0 1; }
 #code-grid-orc-wrap { display: none; width: 1fr; height: 100%; }
-/* auto, а не 1: пока точного поиска нет, здесь стоит приглашение его
-   посчитать — три строки вместо пустой половины экрана. */
+/* auto instead of 1: before an exact search runs, shows a 3-line prompt to
+   compute it rather than an empty half-screen. */
 #code-grid-orc-head { height: auto; width: 100%; }
 
 #code-grid, #code-grid-orc {
@@ -1017,14 +935,9 @@ ModeScreen.very-low #model-provs-mini { display: none; }
     color: $nex-title;
 }
 
-/* Разбор решётки: загрузка портов и «что переставить». Виден ТОЛЬКО в
-   развороте дока (F11).
-
-   Раньше стоял всегда и отбирал у решётки треть ширины. На 34 колонках его
-   строки переносились («т12 → т5,» / «канал ,4»), то есть место он занимал,
-   а читаться переставал. И главное — список перестановок целиком лежит во
-   вкладке ЗАМЕЧАНИЯ: одно и то же в двух вкладках сразу это не два ответа,
-   а один лишний вопрос «это то же самое или другое?». */
+/* Grid breakdown (port utilization and suggested moves): shown ONLY when the
+   dock is maximized (F11) so it does not steal a third of the grid width or
+   duplicate the ISSUES tab. */
 #sched-side {
     display: none;
     width: 46;
@@ -1036,17 +949,15 @@ ModeScreen.very-low #model-provs-mini { display: none; }
 
 #sched-side-body { height: auto; width: 100%; }
 
-/* --- вкладка РАЗБОР ---------------------------------------------------- */
+/* --- INSPECT tab -------------------------------------------------------- */
 /*
-   Была отдельным РЕЖИМОМ и отдельной колонкой разворота редактора — два
-   места под один и тот же углублённый просмотр того, что уже на экране.
-   Теперь одна вкладка в две колонки: слева такт под курсором и его цепочка
-   зависимостей, справа каталог всех тактов буфера.
+   Consolidates the cycle-under-cursor view and dependency chain (left) with
+   the full buffer cycle catalog (right) in one two-column tab.
 */
 
 #dock-line { height: 1fr; width: 100%; }
 
-/* Числа и машина — только в развороте РАЗБОРА (см. CodeScreen.compose). */
+/* Numbers and machine summary appear only when INSPECT is maximized. */
 #line-side {
     display: none;
     width: 38;
@@ -1075,23 +986,16 @@ ModeScreen.tight #line-side { display: none; }
     scrollbar-size-vertical: 1;
 }
 
-/* --- вкладки ЗАМЕЧАНИЯ и ВЫВОД ----------------------------------------- */
+/* --- ISSUES and OUTPUT tabs --------------------------------------------- */
 
 #sched-empty { display: none; height: 1fr; width: 1fr; padding: 1 1 0 1; }
 
 #dock-lint { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
 #dock-term { height: 1fr; width: 100%; }
 
-/* Строка ввода внутри ВЫВОДА — одна строка текста, как приглашение
-   терминала. Трёхрядным полем с отступами она была, пока стояла в доке и
-   была главным элементом экрана; здесь она просто последняя строка вывода.
-
-   height: 2, а не 1. У Textual box-sizing по умолчанию border-box, то есть
-   высота считается ВМЕСТЕ с рамкой: при height:1 волосок сверху съедал
-   единственную строку содержимого, и поле ввода становилось невидимым. ^P
-   фокусировал строку, которой на экране нет, — набирать команду
-   приходилось вслепую. Тот же расчёт у #prompt-field выше по файлу: там
-   с самого начала стоит 2. */
+/* Input line inside OUTPUT — single-row terminal prompt. `height: 2` accounts
+   for the 1-row top border under Textual's default border-box sizing so the
+   input text remains visible (same calculation as #prompt-field above). */
 #dock-term #prompt-field {
     height: 2;
     margin: 0;
@@ -1100,19 +1004,17 @@ ModeScreen.tight #line-side { display: none; }
 
 #dock-term #console { height: 1fr; }
 
-/* --- вкладка ЯДРО: консоль интерпретатора ------------------------------ */
+/* --- CORE tab: interpreter console -------------------------------------- */
 /*
-   Аналог Python Console в IDE: лента ответов, строка ввода под ней и
-   панелька состояния машины справа. Целого экрана эта работа не стоит —
-   её ценность в одном: собрать граф выражениями, не умея писать ассемблер.
+   Analogous to an IDE Python Console: response tape, input line below, and
+   compact machine state on the right for building graphs with expressions.
 */
 
 #dock-core { height: 1fr; width: 100%; }
 
-/* Готовые ядра и глаголы — только в развороте (см. CodeScreen.compose). */
-/* Сеткой, а не строкой: ядер одиннадцать, и в одну строку они уезжают за
-   край — первым пропадает то, что дальше от начала алфавита, без всякой
-   причины. Сетка переносит и держит не больше трёх строк. */
+/* Built-in kernels and verbs appear only when maximized (see CodeScreen.compose). */
+/* Grid instead of a single row: eleven kernels would overflow horizontally;
+   grid wraps cleanly within three rows. */
 #core-chips {
     display: none;
     height: auto;
@@ -1121,32 +1023,25 @@ ModeScreen.tight #line-side { display: none; }
     padding: 0 1;
 }
 ModeScreen.zoom-dock #core-chips { display: block; }
-/* Панель состояния машины в развороте шире: там она показывает имена,
-   память и накопленный граф целиком, а не первые строки. */
+/* Machine state pane widens when maximized to show full names, memory, and
+   accumulated graph. */
 ModeScreen.zoom-dock #core-state-col { width: 44; }
 
-/* Вкладка АГЕНТ: лента переписки и строка вопроса под ней. Та же переписка,
-   что в колонке справа (`session.dialog`), но во всю ширину дока.
-
-   Всё, чего в свёрнутом виде нет, спрятано ЗДЕСЬ, а не в коде: развёрнутый
-   блок добавляет колонку фактов и трассы, готовые вопросы и свои кнопки.
-   Полный экран — это больше инструментов, а не тот же блок покрупнее. */
+/* AGENT tab: shared `session.dialog` tape and question line across the full
+   dock width. Maximizing reveals the facts/trace sidebar, suggested questions,
+   and action buttons. */
 #dock-agent { height: 1fr; width: 100%; }
 #agent-main { height: 1fr; width: 1fr; }
 #agent-log-box { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
 #agent-log { width: 100%; height: auto; padding: 0 1; }
-/* Строка вопроса пристыкована к низу блока: между лентой и ней в развороте
-   встают готовые вопросы, и без dock она уезжала за край — поле ввода
-   пропадало ровно в том виде, где спрашивают чаще всего. */
+/* Dock the question input at the bottom so suggested questions inserted when
+   maximized cannot push it off-screen. */
 #agent-prompt { height: 1; width: 100%; dock: bottom; }
 #agent-mark { width: 3; height: 1; color: $accent; }
 #agent-input { width: 1fr; height: 1; border: none; background: transparent; }
 
 #agent-tools { display: none; height: 1; width: 100%; padding: 0 1; }
-/* Готовые вопросы видны ВСЕГДА: в свёрнутой вкладке они занимали место
-   ничем (четыре строки из тринадцати), а вопрос «о чём его вообще
-   спрашивать» стоит первым у всякого, кто открыл агента. В развороте их
-   больше — там и места больше. */
+/* Suggested questions are always visible; maximizing reveals more of them. */
 #agent-asks { height: auto; max-height: 2; width: 100%; padding: 0 1; }
 ModeScreen.zoom-dock #agent-asks { max-height: 4; }
 #agent-side {
@@ -1161,7 +1056,7 @@ ModeScreen.zoom-dock #agent-asks { max-height: 4; }
 
 ModeScreen.zoom-dock #agent-tools { display: block; }
 ModeScreen.zoom-dock #agent-side { display: block; width: 46; }
-/* В узком окне колонка фактов уступает ленте: ответ важнее справки. */
+/* On narrow windows the facts column yields to the transcript. */
 ModeScreen.narrow #agent-side { width: 30; }
 ModeScreen.tight #agent-side { display: none; }
 #core-log-box { width: 1fr; height: 100%; }
@@ -1174,8 +1069,7 @@ ModeScreen.tight #agent-side { display: none; }
     scrollbar-size-vertical: 1;
 }
 
-/* Строка ввода — одна строка с шевроном, как приглашение терминала.
-   height: 2 — это строка плюс волосок над ней (box-sizing: border-box). */
+/* Single-row prompt with chevron; height: 2 includes the top hairline. */
 #core-prompt {
     height: 2;
     width: 100%;
@@ -1206,11 +1100,11 @@ ModeScreen.tight #agent-side { display: none; }
 
 #core-state { height: auto; width: 100%; }
 
-/* Замечание — не абзац текста, а ссылка: клик ведёт курсор на строку. */
+/* Each issue is a clickable link that jumps the editor cursor to that line. */
 .lint-item { height: auto; width: 100%; }
 .lint-item:hover { background: $primary 20%; }
 
-/* --- подвал: ОДНА строка состояния, в самом низу ----------------------- */
+/* --- footer: single status bar at the very bottom ----------------------- */
 
 #code-foot { dock: bottom; height: auto; width: 100%; }
 
@@ -1229,9 +1123,8 @@ ModeScreen.tight #agent-side { display: none; }
 
 #code-status { width: 1fr; height: 1; content-align: right middle; padding: 0 2 0 0; }
 
-/* Пункты-лаунчеры в строке состояния: ошибки и вывод. Вид — как у обычного
-   текста строки состояния, кликабельность проявляется наведением, как у
-   ссылок: строка состояния в IDE не должна выглядеть кнопочной панелью. */
+/* Status-bar launchers for issues and output: styled as plain text with hover
+   feedback so the status bar does not look like a button toolbar. */
 #status-lint, #status-term {
     width: auto;
     height: 1;
@@ -1245,11 +1138,10 @@ ModeScreen.tight #agent-side { display: none; }
     text-style: bold;
 }
 
-/* --- узкое и низкое окно ------------------------------------------------ */
+/* --- narrow and short window -------------------------------------------- */
 /*
-   Панели независимы: то, чему не хватило места, убирается целиком, а не
-   ужимается до нечитаемого. Первой уходит колонка разбора у решётки —
-   решётка отвечает на главный вопрос вкладки и обязана остаться.
+   Panes drop cleanly when space runs out rather than squishing to unreadable
+   widths. The grid breakdown column drops first so the grid stays intact.
 */
 
 ModeScreen.narrow #dock-bundles { width: 38; }
@@ -1258,38 +1150,31 @@ ModeScreen.tight #sched-side { display: none; }
 ModeScreen.narrow #core-state-col { width: 26; }
 ModeScreen.tight #core-state-col { display: none; }
 
-/* Каталог слева уходит первым: он вход в работу, а не сама работа, и
-   открыть пример можно командой /example. Двадцать колонок из восьмидесяти
-   — четверть экрана под список из десяти имён. */
-/* См. выше: ширину колонок решает _fit_columns, а не класс .tight. */
+/* Left examples catalog drops first on narrow screens (still reachable via
+   /example) instead of taking 20 of 80 columns. */
+/* See above: column widths are managed by _fit_columns, not .tight. */
 
-/* Низкий терминал: доку хватает восьми строк по min-height, но процент от
-   него отбирает у кода больше, чем стоит. Ниже 34 строк док становится
-   фиксированной полосой, а всё, что осталось, достаётся редактору. */
+/* Short terminal (< 34 rows): lock the dock to a fixed height so the editor
+   gets all remaining vertical space. */
 ModeScreen.low #code-dock { height: 11; }
 ModeScreen.very-low #code-dock { height: 10; }
 
-/* Разворот дока: полэкрана вкладке, остальное коду. Редактор не прячется
-   никогда — иначе непонятно, к чему относится то, что в доке. */
-/* Разворот дока — НА ВЕСЬ экран, а не на две трети. «Полноэкранный режим»,
-   который отдаёт 65%, читается как поломка: человек жмёт дважды и видит, что
-   панель выросла, но код всё равно занимает треть. Симметрично с двойным
-   кликом по вкладке файла, который убирает всё вокруг редактора. */
+/* Expanded dock: half screen to the tab, remainder to the editor. */
+/* Maximized dock fills the entire screen symmetrically with double-clicking a
+   file tab to maximize the editor. */
 ModeScreen.zoom-dock #code-body { display: none; }
 ModeScreen.zoom-dock #dock-split { display: none; }
-/* 1fr, а не 100%: сотня процентов считается от ЭКРАНА, и развёрнутый док
-   уезжал под строку состояния — вместе с ней пропадала строка вопроса
-   агента, то есть ровно то, ради чего его разворачивают. */
+/* 1fr instead of 100%: 100% is measured against the full screen and pushed the
+   bottom of the dock (including the agent input line) under the status bar. */
 ModeScreen.zoom-dock #code-dock { height: 1fr; }
 ModeScreen.zoom-dock #code-grid-orc-wrap { display: block; }
-/* Разворот ДОБАВЛЯЕТ: в две трети экрана помещается и разбор решётки. */
+/* Maximized dock has room to show the grid breakdown alongside the grid. */
 ModeScreen.zoom-dock #sched-side { display: block; }
 
-/* --- подсказка при наборе ---------------------------------------------- */
+/* --- typing hints ------------------------------------------------------- */
 /*
-   Всплывает под курсором, поверх раскладки. Слой `overlay` обязателен:
-   обычный виджет отобрал бы место у редактора, а подсказка живёт доли
-   секунды и место занимать не должна.
+   Floats under the cursor on the `overlay` layer so transient completion hints
+   never displace the editor layout.
 */
 
 Suggest {
@@ -1307,7 +1192,7 @@ Suggest {
 .suggest-item:hover { background: $primary 25%; }
 .suggest-on { background: $primary 35%; text-style: bold; }
 
-/* --- выбор режима ------------------------------------------------------ */
+/* --- mode picker -------------------------------------------------------- */
 
 #picker-wrap {
     align: center middle;
@@ -1357,11 +1242,9 @@ Suggest {
     margin-top: 1;
 }
 
-/* Тесно по высоте — ужимаемся ровно настолько, насколько не хватает.
-   Порядок жертв от дешёвой к дорогой: отступы, высота карточек, знак NEX,
-   подпись. Карточки не прячем никогда: без них экран теряет смысл.
-   Знак убирается ПОСЛЕДНИМ, а не первым: он занимает восемь строк, и
-   прятать его ради двух — оставить внизу дыру, что и получалось. */
+/* Tight height breakpoints — shed cheapest chrome first (margins, card height,
+   NEX logo, tagline). Cards are never hidden; logo drops late so it does not
+   leave an 8-row gap to save 2 rows. */
 PickerScreen.snug #picker-tagline { margin-bottom: 1; }
 PickerScreen.snug .mode-card { margin-bottom: 0; }
 PickerScreen.snug #picker-hint { margin-top: 0; }
@@ -1373,9 +1256,8 @@ PickerScreen.tiny #picker-logo { display: none; }
 PickerScreen.micro #picker-tagline { display: none; }
 PickerScreen.micro .mode-card { height: 3; padding: 0 2; }
 
-/* --- развёрнутые панели РАЗБОРА: у каждой свой слой --------------------- */
-/* Слои живут в тех же панелях и включаются только на разворот: рисование
-   зависит от режима, а не от размера, поэтому переключает их код. */
+/* --- maximized LAB panels: each has its own layer ----------------------- */
+/* Layers live inside the same panels and toggle on maximize via code. */
 
 #numbers-why, #machine-matrix, #machine-foot, #detail-graph,
 #machine-filter-row {
@@ -1387,9 +1269,8 @@ PickerScreen.micro .mode-card { height: 3; padding: 0 2; }
 #numbers-chain { height: auto; }
 #numbers-res { height: auto; }
 
-/* auto, а не 1fr: с 1fr таблица распирала себя на весь экран, и занятость
-   портов уезжала в самый низ — между матрицей и полосами зияло полтысячи
-   пустых строк. Блоки должны идти подряд, пустота — оставаться под ними. */
+/* auto instead of 1fr so port utilization bars sit directly below the matrix
+   instead of leaving a huge empty gap. */
 #machine-matrix { height: auto; max-height: 60%; background: transparent; }
 #machine-matrix > .datatable--header {
     background: transparent;
@@ -1415,18 +1296,15 @@ PickerScreen.micro .mode-card { height: 3; padding: 0 2; }
 #detail-graph { height: 1fr; width: 100%; }
 #detail-preds, #detail-succs { width: 1fr; height: 100%; }
 
-/* Ссылка на операцию: подчёркнута наведением, как ссылка и должна быть.
-   Отдельного цвета не получает — цвет в этом интерфейсе уже занят
-   операциями и режимом, и пятый смысл он бы не выдержал. */
+/* Operation link: underlined on hover without adding a fifth color meaning. */
 .instr-link { height: 1; width: 100%; }
 .instr-link:hover { background: $nex-raised; }
 
-/* --- журнал запусков (развёрнутый ВЫВОД КОМАНД) ------------------------- */
+/* --- run journal (maximized OUTPUT) ------------------------------------- */
 
 ConsoleJournal { display: none; height: 1fr; width: 100%; }
 
-/* Левая колонка: история сессии. 32 — по строке коммита
-    «> #12 14:02 к /code run», а не «на глаз побольше». */
+/* Left column: session history. Width 32 fits `#12 14:02 c /code run`. */
 #journal-side {
     width: 32;
     height: 100%;
@@ -1437,10 +1315,8 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
 #journal-cmds-head, #journal-runs-head { height: 1; width: 100%; }
 #journal-runs-head { margin-top: 1; }
 
-/* Каталог занимает столько, сколько в нём есть (но не больше половины
-   колонки), а запуски забирают остаток. С фиксированным 1fr каталог держал
-   половину даже когда в нём после фильтра три строки, и ЗАПУСКИ висели
-   посреди пустоты. */
+/* Catalog takes only what it needs (capped at half the column) so RUNS stays
+   right beneath it instead of floating in empty space. */
 #journal-cmds { height: auto; max-height: 55%; scrollbar-size-vertical: 1; }
 #journal-list { height: 1fr; scrollbar-size-vertical: 1; }
 
@@ -1457,8 +1333,7 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     scrollbar-size-vertical: 1;
 }
 
-/* Вкладки потока: отчёты команд или живые события. Одна строка, как
-   вкладки расписания — тот же язык, что во всём интерфейсе. */
+/* Stream tabs: command reports or live events, matching schedule tab style. */
 #feed-tabs { height: 1; width: 100%; margin-bottom: 1; }
 
 #events-out {
@@ -1470,10 +1345,8 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     scrollbar-size-vertical: 1;
 }
 
-/* Строка ввода журнала — то же терминальное приглашение, что в доке:
-    один ряд, волосок сверху, без подложки и без рамки. Вторая версия этой
-    строки была «чипом с круглой рамкой» — единственным обведённым полем
-    во всём интерфейсе, и журнал выглядел формой внутри панели. */
+/* Journal input line uses the same flat terminal prompt as the dock (single
+   row, top hairline, no box border). */
 #journal-field {
     height: 2;
     width: 100%;
@@ -1492,12 +1365,9 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
 
 #journal-mark { width: 2; height: 1; content-align: left middle; }
 
-/* Правая часть строки журнала — постоянная подсказка. Раньше здесь было
-   пусто, а подсказки жили в placeholder и пропадали при первом же символе.
-   Имя `journal-hint`, а НЕ `journal-side`: последнее уже занято левой
-   колонкой каталога (шириной 32). Совпадение id рушило раскладку молча —
-   правило `width: auto` прилетало и в колонку, вывод схлопывался до двух
-   символов, и развёрнутый журнал показывал пустой экран. */
+/* Persistent hint on the right side of the journal prompt. Named `journal-hint`
+   (not `journal-side`, which is the 32-col left catalog column) to avoid id
+   collision. */
 #journal-hint {
     width: auto;
     height: 1;
@@ -1515,29 +1385,26 @@ ConsoleJournal { display: none; height: 1fr; width: 100%; }
     color: $nex-title;
 }
 
-/* Подсказка — приглашение к набору, а не пролистываемый вывод. */
+/* Hint invites typing rather than looking like scrollable output. */
 #journal-input > .input--placeholder {
     color: $nex-dim;
     text-style: none;
 }
 
-/* Запись истории — две строки, как коммит в git log: кто/когда и что
-    за состояние. height auto, а не 1: строка состояния вторая по счёту. */
+/* History entry — two rows like a git log commit: who/when and state summary. */
 .run-item { height: auto; width: 100%; }
 .run-item:hover { background: $nex-raised; }
 .run-item.on { background: $primary 18%; }
 
-/* Ряд мостика: куда отправить выбранный прогон. Общий виджет — он живёт
-    и в развёрнутом журнале (#run-actions), и в свёрнутой вкладке ОТЧЁТА
-    КОДА (#drawer-bridge): перенос не должен требовать разворота. */
+/* Bridge action row for sending the selected run to another view; shared by
+   maximized journal (#run-actions) and compact CODE report (#drawer-bridge). */
 BridgeRow {
     height: 1;
     width: 100%;
     margin-bottom: 1;
 }
 
-/* Подпись ряда: без неё кнопки — просто кнопки, и не видно, что все они
-    действуют на ВЫБРАННЫЙ в истории прогон. */
+/* Row label clarifies that buttons act on the selected history entry. */
 .bridge-label {
     width: auto;
     height: 1;
@@ -1545,7 +1412,7 @@ BridgeRow {
     color: $nex-faint;
 }
 
-/* --- развёрнутые панели ЯДРА -------------------------------------------- */
+/* --- maximized CORE panels ---------------------------------------------- */
 
 #names-wide, #mem-wide, #prog-wide { display: none; }
 
@@ -1566,14 +1433,13 @@ BridgeRow {
 .mem-cell.wrote { background: $nex-raised; }
 .mem-cell:hover { background: $nex-raised; }
 
-/* Свёрнутая ПАМЯТЬ — та же карта, что в развороте, только компактнее:
-    те же клики и маркеры записей store. */
+/* Compact MEMORY is the same map as maximized, just tighter, with the same
+   clicks and store markers. */
 #mem-mini { height: auto; width: 100%; }
 #mem-mini-foot { height: auto; width: 100%; }
 .mem-cell.mini { width: 8; }
 
-/* ПРОГРАММА — по операции на строку: клик подсвечивает строку ЛЕНТЫ,
-    которая эту операцию породила (обратная половина связки листа). */
+/* PROGRAM — one op per row: clicking highlights the TAPE line that emitted it. */
 #program { height: 1fr; width: 100%; scrollbar-size-vertical: 1; }
 
 .prog-item { height: 1; width: 100%; padding: 0 1; }
@@ -1584,9 +1450,9 @@ BridgeRow {
     text-style: bold;
 }
 
-/* --- всплывающая строка вопроса ----------------------------------------- */
-/* Снизу, а не сбоку: колонка отбирала треть ширины у того, ради чего панель
-   и разворачивают. Строка лежит поверх нижнего края и растёт вверх ответом. */
+/* --- floating question bar ---------------------------------------------- */
+/* Docked at the bottom instead of the side so it does not steal a third of the
+   width from a maximized panel; grows upward with the answer. */
 
 PanelPrompt {
     dock: bottom;
@@ -1602,10 +1468,8 @@ PanelPrompt {
 #pp-header { height: 1; width: 100%; margin-bottom: 1; }
 #pp-title { width: 1fr; height: 1; }
 
-/* Крестик — не кнопка с рамкой (это спорило бы с полями ввода вокруг), а
-   строка «x Esc», которая выделяется только под курсором: так же ведут себя
-   чипы. Ширина под подпись, а не только символ: клавишу закрытия должно
-   быть видно текстом, а не только всплывающей подсказкой по наведению. */
+/* Close control styled like a chip ("x Esc") so the shortcut stays visible as
+   text rather than only on hover. */
 #pp-close {
     width: 7;
     height: 1;
@@ -1650,7 +1514,7 @@ PanelPrompt {
 
 #pp-input > .input--placeholder { color: $nex-faint; }
 
-/* --- развёрнутые панели АГЕНТА ------------------------------------------ */
+/* --- maximized AGENT panels --------------------------------------------- */
 
 #seen-wide, #trace-wide { display: none; height: 1fr; scrollbar-size-vertical: 1; }
 

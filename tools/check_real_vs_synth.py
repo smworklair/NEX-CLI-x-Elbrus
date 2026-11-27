@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Похожа ли синтетика на настоящий вывод lcc — проверка в один запуск.
-
-Компилирует локальным кросс-lcc набор обычных C-программ на -O0/-O2/-O3,
-разбирает результат тем же парсером, что и весь проект
-(`vliw.core.asm_parser`), и кладёт рядом две картины:
-
-  * словарь операций, на котором обучалась модель (dataset.jsonl и др.);
-  * словарь операций, который реально печатает компилятор.
-
-Ничего не скачивает и не отправляет. Все временные файлы — в /tmp.
+"""Compare synthetic training op vocabulary against real lcc compiler output.
 
     python3 tools/check_real_vs_synth.py
 """
@@ -31,13 +22,13 @@ from vliw.core.asm_parser import (                          # noqa: E402
     MNEMONICS, build_dag, compiler_schedule, parse_asm)
 from vliw.core.model import get_profile                     # noqa: E402
 
-# ВАЖНО ПРО ЗАМЕР. Незнакомая операция С каналом получает класс UNKNOWN,
-# незнакомая БЕЗ канала уходит в управляющие и в граф не попадает (см.
-# asm_parser.CONTROL). Поэтому доля чужого считается по `unknown_mnemonics`,
-# а не по одному лишь классу: часть незнакомых до графа не доходит вовсе.
+# Unknown channel-tagged ops map to UNKNOWN; unchanneled ones count as control.
+#
+#
+#
 
-# Обычный код, а не подобранный под ответ: цикл с накоплением, плавающая
-# точка, ветвление, копирование памяти, хеш строки.
+# Representative C kernels: accumulation loop, FP, branch, memcpy, string hash.
+#
 PROGRAMS = {
     "loop":   "int f(int *a,int n){int s=0;for(int i=0;i<n;i++)s+=a[i]*3+1;return s;}",
     "math":   "double g(double x,double y){return (x*y + x/y)*(x - y);}",
@@ -49,14 +40,14 @@ LEVELS = ("0", "2", "3")
 
 
 def find_lcc() -> Path | None:
-    """Кросс-lcc из комплекта МЦСТ. Тот же, которым сняты examples/probes/."""
+    """MCST cross-lcc compiler (same toolchain used for examples/probes/)."""
     for p in sorted(Path.home().glob("e2k-toolchain/opt/mcst/lcc-*/bin/lcc")):
         return p
     return None
 
 
 def synthetic_mix(name: str, limit: int = 20000):
-    """Классы операций в обучающем файле. None — файла нет."""
+    """Operation classes present in a training JSONL file, or None if missing."""
     path = ROOT / name
     if not path.exists():
         return None
@@ -68,7 +59,7 @@ def synthetic_mix(name: str, limit: int = 20000):
             k = 0
             for raw in row["prompt"].split("\n")[2:]:
                 raw = raw.strip()
-                if raw == "расписание:":
+                if raw in ("schedule:", "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435:"):
                     break
                 if not raw:
                     continue
@@ -81,12 +72,12 @@ def synthetic_mix(name: str, limit: int = 20000):
 def main() -> int:
     lcc = find_lcc()
     if lcc is None:
-        print("кросс-lcc не найден в ~/e2k-toolchain — компилировать нечем",
+        print("cross-lcc not found in ~/e2k-toolchain — cannot compile",
               file=sys.stderr)
         return 1
     ver = subprocess.run([str(lcc), "--version"], capture_output=True,
                          text=True).stdout.splitlines()[0]
-    print(f"компилятор: {ver}\n")
+    print(f"compiler: {ver}\n")
 
     machine = get_profile("e2k-v6-measured")
     tmp = Path(tempfile.mkdtemp(prefix="real_vs_synth_"))
@@ -102,7 +93,7 @@ def main() -> int:
             r = subprocess.run([str(lcc), "-S", f"-O{lvl}", str(c), "-o", str(s)],
                                capture_output=True, text=True)
             if r.returncode != 0 or not s.exists():
-                print(f"  {name} -O{lvl}: компилятор отказал", file=sys.stderr)
+                print(f"  {name} -O{lvl}: compiler failed", file=sys.stderr)
                 continue
             parsed = parse_asm(s.read_text(encoding="utf-8"))
             ops = parsed.ops
@@ -115,48 +106,48 @@ def main() -> int:
             sched = compiler_schedule(parsed, build_dag(parsed, name), machine)
             rows.append((f"{name}_O{lvl}", len(ops), 100.0 * unk / n,
                          parsed.skipped_lines,
-                         "да" if sched is not None else "нет"))
+                         "yes" if sched is not None else "no"))
 
-    print("НАСТОЯЩИЙ ВЫВОД lcc")
-    print(f"  {'файл':<12}{'операций':>9}{'UNKNOWN':>10}"
-          f"{'не разобрано':>14}{'расписание lcc':>16}")
+    print("REAL lcc OUTPUT")
+    print(f"  {'file':<12}{'ops':>9}{'UNKNOWN':>10}"
+          f"{'unparsed':>14}{'lcc schedule':>16}")
     for name, n, unk, skipped, sched in rows:
         print(f"  {name:<12}{n:>9}{unk:>9.0f}%{skipped:>14}{sched:>16}")
 
     total = sum(real_ops.values()) or 1
     unk_total = sum(unknown_mn.values())
-    print("\n  классы операций у компилятора (как их видит парсер):")
+    print("\n  compiler operation classes (as parsed):")
     for op, k in real_ops.most_common():
         print(f"    {op:<10}{k:>6}{100.0 * k / total:>7.1f}%")
     known = total - real_ops.get("UNKNOWN", 0)
-    print(f"\n  опознано: {known} из {total} операций "
+    print(f"\n  recognized: {known} of {total} ops "
           f"({100.0 * known / total:.0f}%)")
 
-    print(f"\n  мнемоник в словаре проекта: {len(MNEMONICS)}"
-          f"  →  классов: {len(set(MNEMONICS.values()))}")
+    print(f"\n  mnemonics in project dictionary: {len(MNEMONICS)}"
+          f"  ->  classes: {len(set(MNEMONICS.values()))}")
     if unknown_mn:
-        print(f"  незнакомых мнемоник: {len(unknown_mn)} штук, "
-              f"{sum(unknown_mn.values())} вхождений")
+        print(f"  unknown mnemonics: {len(unknown_mn)} distinct, "
+              f"{sum(unknown_mn.values())} occurrences")
         print("    " + ", ".join(sorted(unknown_mn)[:24]))
 
-    print("\nСИНТЕТИКА, НА КОТОРОЙ УЧИЛИ")
+    print("\nSYNTHETIC TRAINING DATA")
     for name in ("dataset.jsonl", "train_merged.jsonl", "eval_wide.jsonl"):
         mix = synthetic_mix(name)
         if mix is None:
-            print(f"  {name}: нет файла")
+            print(f"  {name}: missing file")
             continue
         ops, sizes = mix
         tot = sum(ops.values()) or 1
-        print(f"  {name}: графы {min(sizes)}..{max(sizes)} операций, "
-              f"классов {len(ops)}")
+        print(f"  {name}: graphs {min(sizes)}..{max(sizes)} ops, "
+              f"{len(ops)} classes")
         print("    " + "  ".join(f"{op} {100.0 * k / tot:.0f}%"
                                  for op, k in ops.most_common()))
 
     unk_share = 100.0 * real_ops.get("UNKNOWN", 0) / total
-    print(f"\nИТОГ: {unk_share:.0f}% операций в графе — UNKNOWN: класс машине "
-          f"неизвестен,\nсчитаются с латентностью 1 и любым каналом "
-          f"(заглушка, не измерение).")
-    print(f"файлы остались в {tmp}")
+    print(f"\nSUMMARY: {unk_share:.0f}% of DAG ops are UNKNOWN: unmapped by model, "
+          f"\nscheduled with latency 1 and any channel "
+          f"(placeholder, not measured).")
+    print(f"temp files kept in {tmp}")
     return 0
 
 

@@ -1,17 +1,17 @@
-"""Визуализация: превращает данные из `vliw.core` в цветной вывод для терминала.
+"""Visualization: turns `vliw.core` data into colored terminal output.
 
-Ничего не считает про планирование — только форматирует. Голый ANSI по
-умолчанию; с установленным `rich` — панели оформляются им (graceful fallback).
+Performs no scheduling logic — formatting only. Raw ANSI by default; uses
+`rich` panels when installed (graceful fallback).
 
-  render.py         цвет, ширина, рамки, таблицы, панели (фундамент)
-  theme.py          загрузка палитры из themes/*.json
-  logo.py           марка workstation, статус-строка
-  tables.py         таблицы сценариев/результатов/матрицы/sweep/selfcheck
-  schedule_view.py  пачки-рамки, вердикт, границы, критический путь, разбор
-  context.py        контекст сессии (она же /status)
-  panes.py          три панели workstation: ядро / разбор / агент
+  render.py         colors, width, borders, tables, panels (foundation)
+  theme.py          palette loader from themes/*.json
+  logo.py           workstation banner, status line
+  tables.py         tables for scenarios/results/matrix/sweep/selfcheck
+  schedule_view.py  wide-instruction boxes, verdict, bounds, critical path, explain
+  context.py        session context (also `/status`)
+  panes.py          three workstation panes: core / lab / agent
 
-Полноэкранный интерфейс живёт в отдельном пакете `vliw.tui` (Textual).
+The full-screen TUI lives in a separate package `vliw.tui` (Textual).
 """
 
 from . import context, logo, panes, render, schedule_view, tables, theme

@@ -1,16 +1,16 @@
-! ТРИ ОШИБКИ, КОТОРЫЕ АССЕМБЛЕР НЕ ЛОВИТ
+! THREE BUGS THE ASSEMBLER DOES NOT CATCH
 ! nex: src=none orc=18 err=6
 !
-! Смотри ЧТО НЕ ТАК — там номера строк:
-!   · второе деление в такте 1, а делитель занят
-!     до такта 2;
-!   · muls,2 — такого канала у умножения нет,
-!     он живёт на ,0 ,1 ,3 ,4;
-!   · результаты читаются раньше, чем готовы
-!     (латентность деления — 11 тактов).
+! Check WHAT'S WRONG — line numbers are shown there:
+!   · second division in cycle 1, while the divider is busy
+!     until cycle 2;
+!   · muls,2 — multiplication has no such channel,
+!     it lives on ,0 ,1 ,3 ,4;
+!   · results are read before they are ready
+!     (division latency is 11 cycles).
 !
-! Последнее — самое опасное: код соберётся и будет считать
-! не то.
+! The last one is the most dangerous: the code assembles and computes
+! the wrong result.
 {
   sdivs,5 %r0, %r1, %r2
 }

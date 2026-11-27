@@ -1,12 +1,11 @@
-# Обучение Qwen на планировщик
+# Training Qwen as a Scheduler
 
-Пошаговая инструкция, как повторить LoRA-трек: своя база, другой датасет, ещё эпохи.
-Модель учится на парах «граф зависимостей → оптимальное расписание», эталон даёт точный поиск.
+Step-by-step guide to reproducing the LoRA track: custom base model, different dataset, or extra epochs.
+The model trains on "dependency graph → optimal schedule" pairs, with ground truth produced by exact search.
 
-> Это исторический трек. В проекте он заменён крошками TINY AI: они быстрее на порядки
-> и не хуже на настоящем коде. Инструкция оставлена для воспроизведения.
+> This is a historical track. In the project it has been replaced by TINY AI, which is orders of magnitude faster and no worse on real code. These instructions are kept for reproducibility.
 
-## Шаг 1. Датасет (CPU)
+## Step 1. Dataset (CPU)
 
 ```bash
 cd NEX-CLI-x-Elbrus
@@ -17,81 +16,76 @@ python3 training/generate_dataset.py \
     --out dataset.jsonl
 ```
 
-- `--count` — число примеров. Для первой проверки хватит 500–1000.
-- `--budget` — секунд на поиск оптимума одного графа. Больше графы — больше бюджет.
-- Формат JSONL: `{"prompt": "...", "completion": "...", "meta": {...}}`.
+- `--count` — number of examples. 500–1000 is enough for an initial smoke test.
+- `--budget` — seconds per graph for exact search. Larger graphs need a larger budget.
+- JSONL format: `{"prompt": "...", "completion": "...", "meta": {...}}`.
 
-Проверка до обучения:
+Verify before training:
 
 ```bash
 python3 training/validate.py dataset.jsonl
 ```
 
-Должно быть `N/N валидны, round-trip проверен`.
+Expected output: `N/N valid, round-trip verified`.
 
-## Шаг 2. Kaggle с GPU
+## Step 2. Kaggle with GPU
 
-1. Зарегистрируйтесь на kaggle.com (карта для бесплатного GPU не нужна).
+1. Sign up on kaggle.com (no credit card needed for free GPU).
 2. New Notebook → Settings → **Accelerator: GPU T4×2**.
-3. Add Data → загрузите `dataset.jsonl`.
-4. Поставьте зависимости:
+3. Add Data → upload `dataset.jsonl`.
+4. Install dependencies:
 
 ```bash
 !pip install -q -U -r requirements-kaggle.txt
 ```
 
-5. Загрузите `training/train_qlora.py` и `training/validate_kaggle.py` в ноутбук.
+5. Upload `training/train_qlora.py` and `training/validate_kaggle.py` into the notebook.
 
-## Шаг 3. QLoRA, 4 бита
+## Step 3. 4-Bit QLoRA
 
-В конец каждого примера дописывается EOS: без него модель не учится останавливаться
-и дописывает хвост.
+An EOS token is appended to every example: without it, the model never learns to stop and keeps generating trailing garbage.
 
-**Продолжить существующий адаптер:**
+**Continue an existing adapter:**
 
 ```bash
 !python train_qlora.py \
     --base Qwen/Qwen2.5-3B-Instruct \
     --adapter /kaggle/input/.../qwen-vliw-lora \
-    --data /kaggle/input/<датасет>/dataset.jsonl \
+    --data /kaggle/input/<dataset>/dataset.jsonl \
     --out /kaggle/working/qwen-vliw-lora \
     --epochs 2
 ```
 
-**Другая база с нуля** — та же команда без `--adapter`.
+**Different base model from scratch** — run the same command without `--adapter`.
 
-Для 7B на T4: `--batch-size 2`. Не берите `Qwen3-4B-Thinking-*`: режим размышления
-удлиняет ответы и ломает парсер.
+For 7B on T4: `--batch-size 2`. Do not use `Qwen3-4B-Thinking-*`: chain-of-thought reasoning lengthens outputs and breaks the parser.
 
-В логе должно быть `trainable params ... < 2%` и строка `EOS в конце каждого примера`.
+The log should show `trainable params ... < 2%` and confirm EOS at the end of every example.
 
-## Шаг 4. Проверка
+## Step 4. Evaluation
 
 ```bash
 !python validate_kaggle.py \
     --model /kaggle/working/qwen-vliw-lora \
     --limit 50 \
     --dump /kaggle/working/eval_kinds.jsonl \
-    /kaggle/input/<датасет>/eval.jsonl
+    /kaggle/input/<dataset>/eval.jsonl
 ```
 
-Две цифры:
+Two metrics:
 
-- **как есть** — модель остановилась сама, расписание законно;
-- **префикс 0..n-1** — то же после отрезания несуществующих id.
+- **as-is** — the model stopped on its own and the schedule is valid;
+- **prefix 0..n-1** — valid after trimming non-existent IDs.
 
-Хвост при законном префиксе — это проблема остановки, а не понимания задачи.
-Дыры в настоящих id и пустой ответ — повод менять базу.
+A trailing tail after a valid prefix is a stopping issue, not a scheduling comprehension failure.
+Missing real IDs or empty responses mean it's time to change the base model.
 
-## Шаг 5. Подключить адаптер
+## Step 5. Wire In the Adapter
 
-Скачайте папку адаптера с Kaggle. `vliw/learned/scheduler.py` уже умеет остальное:
-кодирует `(dag, model)`, генерирует продолжение, разбирает ответ, собирает `Schedule`
-и вызывает `.validate()`. Если ответ невалиден — откатывается на жадный.
+Download the adapter folder from Kaggle. `vliw/learned/scheduler.py` already handles the rest: it encodes `(dag, model)`, generates the completion, parses the response, builds a `Schedule`, and calls `.validate()`. If the output is invalid, it falls back to greedy.
 
-Менять код для нового адаптера не нужно.
+No code changes are needed for a new adapter.
 
-## Бесплатных ресурсов хватит
+## Free Resources Are Enough
 
-30 GPU-часов в неделю на Kaggle и 4-битный QLoRA на 3B-модели с несколькими тысячами
-коротких примеров — это посильно бесплатно. Платный GPU нужен только при явном упоре.
+Kaggle's 30 free GPU hours/week plus 4-bit QLoRA on a 3B model with a few thousand short examples is comfortably doable for free. Paid GPUs are only needed if you hit a hard ceiling.

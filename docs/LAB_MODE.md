@@ -1,66 +1,59 @@
-# Режим РАЗБОР
+# LAB Mode
 
-> Этап 5 из 13 · [← КОД](CODE_MODE.md) · [Маршрут](README.md) · [Режим ЯДРО →](CORE_MODE.md)
+> Stage 5 of 13 · [← CODE](CODE_MODE.md) · [Roadmap](README.md) · [CORE Mode →](CORE_MODE.md)
 
-Исследовательский экран: один участок целиком, решётка тактов × каналов и панели, которые объясняют
-клетку под курсором. Открывается клавишей `2`, командой `/mode lab` или `python -m vliw lab`.
-Команды `run`, `compare`, `load`, `doctor`, `bounds`, `path`, `analyze` тоже открывают этот экран.
+The schedule-analysis workspace: a single basic block, a cycles × issue-slots grid, and synchronized side panels explaining the cell under the cursor. Opens with `2`, `/mode lab`, or `python -m vliw lab`.
+The commands `run`, `compare`, `load`, `doctor`, `bounds`, `path`, and `analyze` also open this screen.
 
-![РАЗБОР: участок slotclash](img/lab-mode.svg)
+![LAB: slotclash scenario](img/lab-mode.svg)
 
-## Планировка
+## Layout
 
-- Слева: **УЧАСТОК** (сценарии), **РАСПИСАНИЕ** (решётка), **GIT** (журнал сессии).
-- Справа: **ЧИСЛА**, **ПОЧЕМУ ЗДЕСЬ**, **ДИАГНОЗ**, **МАШИНА**.
-- `Ctrl+B` сворачивает и разворачивает правую колонку.
+- Left: **BLOCK** (scenarios), **SCHEDULE** (grid), **GIT** (session log).
+- Right: **NUMBERS**, **WHY HERE**, **DIAGNOSIS**, **MACHINE**.
+- `Ctrl+B` collapses and expands the right column.
 
-## Фокус
+## Focus
 
-Буквенные клавиши работают, только когда фокус на решётке, а не в строке ввода.
-`F2` переключает фокус. Если буква напечаталась в команду, нажмите `F2` и повторите.
+Single-key hotkeys work only when focus is on the schedule grid, not in the command input line.
+`F2` toggles focus. If a keystroke lands in the command line instead, press `F2` and try again.
 
-## Клавиши решётки
+## Grid Keybindings
 
-| клавиша | действие |
+| key | action |
 |---|---|
-| `↑↓←→` | курсор по тактам и каналам |
-| `Enter` | разбор такта; на схлопнутом простое — развернуть его |
-| `[` / `]` | предыдущая / следующая операция |
-| `n` / `N` | следующая / предыдущая находка диагноза |
-| `c` | шаг по критическому пути |
-| `d` | развернуть диагноз целиком |
-| `o` | развернуть журнал |
-| `v` | переключить вид: baseline ⇄ oracle |
-| `z` | подсветить только соседей курсорной операции |
-| `x` | развернуть все простои |
-| `p` | включить / выключить критический путь |
-| `w` | широкая / узкая клетка |
-| `2×клик` | развернуть панель на весь экран |
-| `Esc` | свернуть панель; без неё — назад к выбору |
-| `Tab` | справочник по ИИ |
+| `↑↓←→` | move cursor across cycles and issue slots (channels) |
+| `Enter` | inspect cycle; on a collapsed stall stretch, expand it |
+| `[` / `]` | previous / next operation |
+| `n` / `N` | next / previous diagnostic finding |
+| `c` | step along the critical path |
+| `d` | expand full diagnosis |
+| `o` | expand session log |
+| `v` | toggle view: baseline ⇄ exact oracle |
+| `z` | highlight only DAG neighbors of the operation under cursor |
+| `x` | expand all stall stretches |
+| `p` | toggle critical-path highlighting |
+| `w` | toggle wide / narrow cell width |
+| `2×click` | expand panel to fullscreen |
+| `Esc` | collapse panel; otherwise return to mode selector |
+| `Tab` | AI reference panel |
 
-## Панели
+## Panels
 
-**УЧАСТОК.** 17 встроенных сценариев. Каждый — конкретный урок: `slotclash` (монополия делителя),
-`wide_ilp` (ресурсы важнее пути), `divstrength` (деление дешевле заменить сдвигом) и другие.
-Список текстом — `/scenarios`.
+**BLOCK.** 17 built-in scenarios, each isolating a specific VLIW scheduling phenomenon: `slotclash` (sole-issue divider contention), `wide_ilp` (functional-unit pressure outweighs critical-path length), `divstrength` (strength-reducing division to a shift), and more. Plain-text list: `/scenarios`.
 
-**РАСПИСАНИЕ.** Строки — такты, столбцы — каналы `,0`…`,5`. Звёздочка у канала — монопольный порт.
-Длинные простои схлопываются в `т.3–10 ⌄8`; `x` разворачивает все, `Enter` — один.
+**SCHEDULE.** Rows are cycles; columns are issue slots `,0`…`,5`. An asterisk marks a sole-issue functional unit (exclusive port). Long idle stretches collapse to `c.3–10 ⌄8`; `x` expands all, `Enter` expands one.
 
-**ЧИСЛА.** Жадный, точный поиск, нижняя граница, выигрыш в тактах и процентах.
-Разворот показывает, откуда взялась граница: критический путь или ресурсы.
+**NUMBERS.** Greedy list scheduler baseline, exact branch-and-bound oracle, theoretical lower bound, and recoverable cycles (absolute and percent). Expanding shows which bound dominates: critical-path length or functional-unit resources.
 
-**ПОЧЕМУ ЗДЕСЬ.** Почему в клетке под курсором стоит эта операция — или почему клетка пуста.
+**WHY HERE.** Explains why that specific operation landed in the cursor cell — or why the slot is idle (RAW latency hazard or functional-unit contention).
 
-**ДИАГНОЗ.** Находки доктора, отсортированные по цене. Развёрнутый вид (`d`) добавляет фильтр
-по серьёзности и полный текст «почему» и «что делать».
+**DIAGNOSIS.** Doctor findings ranked by cycle cost. Expanded view (`d`) adds severity filtering along with full root-cause and remediation details.
 
-**МАШИНА.** Матрица портов: какая операция на каком канале живёт и с какой латентностью.
-Развёрнутый вид фильтрует по имени операции.
+**MACHINE.** Functional-unit capability matrix: legal issue slots (`,0`..`,5`) and RAW latency per operation class. Expanded view filters by operation name.
 
-**GIT.** История прогонов этой сессии, не репозиторий. Сюда же пишут `/compare`, `/doctor`, `/asm`, `/load`.
+**GIT.** Run history for the current session (not a git repository). `/compare`, `/doctor`, `/asm`, and `/load` also log here.
 
-## Главное
+## Key Idea
 
-Все панели читают один и тот же курсор. Где курсор на решётке — там и ответ остальных панелей.
+Every panel tracks the same cursor. Wherever the cursor sits on the schedule grid, every other panel explains that exact cell.

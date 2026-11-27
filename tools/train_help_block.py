@@ -1,17 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Обучение NNL-блока «Помощь_ассистент» (установка NEX CLI).
+"""Train the NNL Help Assistant block for the NEX CLI setup screen.
 
-Блок — обычный NNL-блок архитектуры `мешок_шина`: вопрос переводится в мешок
-токенов (`vliw/help_nnl.py`), вектор — среднее строк E по корзинам crc32,
-счёты тем — `h·U + b`. Обучение — softmax-регрессия по тем же формулам, что
-исполняет блок, поэтому расхождения «обучение ≠ инференс» нет. Отдельный
-класс «не_тема» учит блок честно отказываться от посторонних вопросов.
+Trains a bag-of-hashed-tokens (`crc32`) softmax classifier matching
+`vliw/help_nnl.py` inference exactly, and writes both the NNL block files
+and pure-Python `vliw/help_weights.json` (no numpy needed at runtime).
 
-Пишет две копии одних чисел:
-  nnl_vliw/блоки_помощь/Помощь_ассистент/{паспорт.json, веса.npz}
-  vliw/help_weights.json   (чистый Python: экран установки работает без numpy)
-
-Запуск:
+Usage:
   python tools/train_help_block.py
 """
 
@@ -61,7 +55,7 @@ def загрузить() -> tuple[list[list[str]], list[int], list[str]]:
     for r in строки:
         if r["тема"] not in темы:
             темы.append(r["тема"])
-    # «не_тема» держим последней: индексы остальных тем не зависят от неё.
+    # Keep out-of-scope class last so topic indices remain stable.
     темы = [t for t in темы if t != НЕ_ТЕМА] + [НЕ_ТЕМА]
     ток = [токены(r["вопрос"]) for r in строки]
     метки = [темы.index(r["тема"]) for r in строки]
@@ -69,7 +63,7 @@ def загрузить() -> tuple[list[list[str]], list[int], list[str]]:
 
 
 def разбить(метки: list[int], темы: list[str]) -> tuple[list[int], list[int]]:
-    """Стратифицированно: пятая часть каждой темы — dev."""
+    """Stratified split: 20% of each topic goes to dev."""
     rng = np.random.RandomState(ЗЕРНО)
     по_темам: dict[int, list[int]] = {}
     for i, y in enumerate(метки):
@@ -86,7 +80,7 @@ def разбить(метки: list[int], темы: list[str]) -> tuple[list[int
 
 
 def упаковать(ток: list[list[str]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Токены → прямоугольная матрица индексов корзин + маска + длины."""
+    """Tokens -> padded bucket-index matrix, mask, and lengths."""
     длины = np.array([len(t) for t in ток], dtype=np.int64)
     ширина = int(длины.max())
     idx = np.zeros((len(ток), ширина), dtype=np.int64)
@@ -99,7 +93,7 @@ def упаковать(ток: list[list[str]]) -> tuple[np.ndarray, np.ndarray,
 
 def вектор(E: np.ndarray, idx: np.ndarray, маска: np.ndarray,
            длины: np.ndarray) -> np.ndarray:
-    """h = среднее строк E по токенам вопроса (та же формула, что в блоке)."""
+    """h = mean of E rows over question tokens (exact inference formula)."""
     return (E[idx] * маска[:, :, None]).sum(1) / длины[:, None]
 
 
@@ -168,9 +162,9 @@ def обучить(ток, метки, темы):
             if д > лучший[0]:
                 лучший = (д, E.copy(), U.copy(), b.copy())
             if эпоха % 50 == 0 or эпоха == ЭПОХ:
-                print(f"  эпоха {эпоха:3d}  потеря {потеря:.3f}  dev {д:.3f}")
+                print(f"  epoch {эпоха:3d}  loss {потеря:.3f}  dev {д:.3f}")
 
-    print(f"  обучение {time.time() - t0:.1f} с, строк {len(train)} + {len(dev)} dev")
+    print(f"  trained in {time.time() - t0:.1f} s, rows {len(train)} + {len(dev)} dev")
     return лучший[1], лучший[2], лучший[3], train, dev, лучший[0]
 
 
@@ -193,7 +187,7 @@ def сохранить(E, U, b, темы, train, dev, dev_точность, то
     паспорт = {
         "имя": "Помощь_ассистент",
         "версия": 1,
-        "роль": "объясняет, зачем нужен NEX CLI, и помогает его установить",
+        "роль": "explains what NEX CLI is for and helps install it",
         "архитектура": "мешок_шина",
         "настройки": {
             "корзины": КОРЗИНЫ,
@@ -269,31 +263,31 @@ def сохранить(E, U, b, темы, train, dev, dev_точность, то
 
 def main() -> int:
     ток, метки, темы = загрузить()
-    print(f"NNL-блок помощи: {len(ток)} вопросов, {len(темы) - 1} тем + отказ")
+    print(f"NNL help block: {len(ток)} questions, {len(темы) - 1} topics + reject")
     E, U, b, train, dev, лучший = обучить(ток, метки, темы)
     паспорт = сохранить(E, U, b, темы, train, dev, лучший, 0.0)
     print()
-    print(f"  чисел в блоке: {паспорт['веса']['чисел']}")
-    print(f"  dev-точность:  {лучший:.3f}")
-    print(f"  паспорт:       {БЛОК / 'паспорт.json'}")
-    print(f"  лёгкие веса:   {ЛЁГКИЕ}")
+    print(f"  parameters:    {паспорт['веса']['чисел']}")
+    print(f"  dev accuracy:  {лучший:.3f}")
+    print(f"  passport:      {БЛОК / 'паспорт.json'}")
+    print(f"  lite weights:  {ЛЁГКИЕ}")
 
-    # Проверяем уже готовый блок тем же путём, что и экран установки.
+    # Verify trained block through the exact setup-screen inference path.
     from vliw.help_nnl import вероятности, спросить
     ok = 0
-    print("\n  проверка вопросов:")
+    print("\n  sanity-check questions:")
     for q in ПРОВЕРКА:
         p = вероятности(q)
         top = max(p, key=p.get) if p else "-"
         ответ = спросить(q)
         if q in ПРОВЕРКА[:13]:
             ok += int(ответ is not None)
-            метка = ответ[0] if ответ else "ОТКАЗ"
+            метка = ответ[0] if ответ else "REJECT"
         else:
             ok += int(ответ is None)
-            метка = "отказ" if ответ is None else f"ОШИБКА:{ответ[0]}"
+            метка = "reject" if ответ is None else f"ERROR:{ответ[0]}"
         print(f"    {q:42s} -> {top:12s} {p.get(top, 0):.2f}  {метка}")
-    print(f"  верно: {ok}/{len(ПРОВЕРКА)}")
+    print(f"  correct: {ok}/{len(ПРОВЕРКА)}")
     return 0 if ok == len(ПРОВЕРКА) else 1
 
 

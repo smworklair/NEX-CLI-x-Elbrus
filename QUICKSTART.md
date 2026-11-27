@@ -1,74 +1,74 @@
-# Быстрый старт
+# Quick Start
 
-> Этап 1 из 13 · [Маршрут](docs/README.md) · [CLI →](docs/CLI.md)
+> Stage 1 of 13 · [Roadmap](docs/README.md) · [CLI →](docs/CLI.md)
 
-Запуск за пару минут. Нужен только **Python 3.10+**; компилятор `lcc`, QEMU и железо не требуются.
+Up and running in a couple of minutes. Only **Python 3.10+** is required; `lcc`, QEMU, and Elbrus hardware are not needed.
 
-## 1. Получить код
+## 1. Get the Code
 
 ```bash
 git clone https://github.com/smworklair/NEX-CLI-x-Elbrus
 cd NEX-CLI-x-Elbrus
-python3 --version        # на Windows: python --version или py --version
+python3 --version        # on Windows: python --version or py --version
 ```
 
-## 2. Установить
+## 2. Install
 
-Для ядра и построчного режима зависимостей нет:
+The core VLIW scheduler and plain-text mode have zero third-party dependencies:
 
 ```bash
 pip install -e .
 ```
 
-Для полноэкранного рабочего места (рекомендуется):
+For the fullscreen TUI workspace (recommended):
 
 ```bash
 pip install -e ".[tui]"  # rich + textual
 ```
 
-После установки доступна команда `vliw`; без установки работает `python -m vliw` из папки проекта.
+Once installed, the `vliw` command is available on `PATH`; without installing, `python -m vliw` runs directly from the repository root.
 
-## 3. Запустить
+## 3. Run
 
 ```bash
-python -m vliw                 # экран выбора: КОД / РАЗБОР / АГЕНТ / ЯДРО
-python -m vliw run slotclash   # один сценарий и выход
-python -m vliw compare         # жадный и точный поиск рядом
-python -m vliw all             # сводка по всем 17 сценариям
-python -m vliw --plain         # построчный режим без полноэкранных панелей
+python -m vliw                 # mode selector: CODE / LAB / AGENT / CORE
+python -m vliw run slotclash   # run one scenario and exit
+python -m vliw compare         # greedy list scheduler vs. exact branch-and-bound oracle
+python -m vliw all             # summary across all 17 scenarios
+python -m vliw --plain         # line-by-line mode without fullscreen panels
 ```
 
-Внутри рабочего места команды пишутся со слэшем: `/run slotclash`, `/compare`, `/doctor`, `/tiny`.
-Список всех команд — `/help` или `python -m vliw --help`.
+Inside the workspace, slash commands drive the session: `/run slotclash`, `/compare`, `/doctor`, `/tiny`.
+Full command reference: `/help` or `python -m vliw --help`.
 
-## 4. Свой `.s`-файл
+## 4. Your Own `.s` File
 
-Откройте режим **КОД** (`1` на экране выбора или `--mode code`), загрузите файл:
+Open **CODE** mode (`1` on the mode selector, or `--mode code`), load an assembly file:
 
 ```text
 /load examples/probe.s
 ```
 
-и нажмите `F5`. Будет разобран настоящий вывод `lcc`: расписание, замечания и сравнение с точным поиском.
-Подробно — [`docs/CODE_MODE.md`](docs/CODE_MODE.md).
+and press `F5`. This parses real `lcc` assembly into basic blocks and displays the VLIW bundle schedule, diagnostics, and comparison against the exact solver.
+Details: [`docs/CODE_MODE.md`](docs/CODE_MODE.md).
 
-## 5. Проверить
+## 5. Verify
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-Пропуски без `torch` (обученная LLM) и без `textual` (полноэкранный интерфейс) — норма, а не ошибка.
-Полный набор зависимостей: `pip install -e ".[tui,learned]"`.
+Skipped tests when `torch` (learned LLM) or `textual` (fullscreen TUI) is absent are expected, not failures.
+Full dependency set: `pip install -e ".[tui,learned]"`.
 
-## Если что-то не так
+## Troubleshooting
 
-| симптом | что делать |
+| symptom | what to do |
 |---|---|
-| `No module named vliw` | запускать из папки проекта или выполнить `pip install -e .` |
-| `python3` не найден | на Windows используйте `python` или `py` |
-| вместо интерфейса — экран-помощник | не установлен `textual`; помощник поставит его после согласия |
-| квадраты вместо кириллицы | обновите репозиторий: UTF-8 включается автоматически |
-| агент отвечает без модели | это норма: без ключа он отвечает по посчитанным числам |
+| `No module named vliw` | run from the repository root or execute `pip install -e .` |
+| `python3` not found | on Windows, use `python` or `py` |
+| setup assistant opens instead of the TUI | `textual` is not installed; confirm the prompt to install it automatically |
+| garbled non-ASCII characters | update the repository: UTF-8 output is enabled automatically |
+| agent replies without a model | expected: without an API key it answers strictly from computed schedule metrics |
 
-Остальное — [`docs/CLI.md`](docs/CLI.md) и [`docs/WINDOWS.md`](docs/WINDOWS.md).
+More details: [`docs/CLI.md`](docs/CLI.md) and [`docs/WINDOWS.md`](docs/WINDOWS.md).

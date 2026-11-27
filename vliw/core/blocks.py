@@ -1,28 +1,8 @@
-"""Режим «по блокам»: `.s` от lcc режется на базовые блоки, каждый — свой граф.
+"""Basic-block splitting for lcc `.s` output: one DAG per basic block.
 
-Зачем. `asm_parser.build_dag` строит ОДИН граф на весь текст. Метки внутри файла
-при этом ничего не значат, и граф тянется через границы блоков — а переходы
-между блоками планировщик не переставляет. Последствие измерено на 25 настоящих
-файлах lcc: расписание самого компилятора на графе файла целиком восстанавливается
-и проходит проверку в 4 файлах из 25, а по блокам — в 71 блоке из 93 (n >= 10).
-То есть сравнивать с lcc, считать запас и доказывать оптимум честно можно только
-по блокам. Так же работает и статья GRASP (ICS '26): единица работы — базовый блок.
-
-Что считается блоком. Блок начинается с метки (или с начала файла) и
-заканчивается широкой командой, в которой есть передача управления:
-`ct`, `ibranch`, `call`, `return`, `rbranch`. Новая метка закрывает предыдущий
-блок, даже если перехода не было (провал вниз). Значения, пришедшие в блок
-снаружи, разбор считает готовыми к такту 0 — это стандартное допущение
-`build_dag`: чтение регистра, которого в блоке никто не писал, зависимости не
-создаёт.
-
-Что здесь НЕ делается. Блок не оптимизируется «в контексте» соседей (какие
-регистры живы на выходе, что ждёт после перехода) — как и в остальном проекте,
-считается длина линейного куска по модели машины. Циклы `loop_mode`
-(аппаратная конвейеризация) размечены флагом `Block.loop`: для них такты на
-итерацию — другая величина, чем длина текста, и модель их не описывает.
-
-Модуль только читает текст; существующий код не меняет.
+Splits on labels and control-transfer wide instructions (`ct`, `ibranch`,
+`call`, `return`, `rbranch`). Live-in registers are treated as ready at cycle 0.
+Hardware-pipelined `loop_mode` blocks are flagged via `Block.loop`.
 """
 
 from __future__ import annotations
@@ -39,7 +19,7 @@ _COMMENT = re.compile(r"(//|!|;).*$")
 _LABEL = re.compile(r"^\s*([.\w$]+):\s*$")
 _XFER = re.compile(r"^\s*(?:ct|ibranch|call|return|rbranch)\b")
 
-#: Корзины по числу операций (как в отчёте по блокам).
+#: Size buckets by instruction count (matching block reports).
 BUCKETS: tuple[tuple[str, int], ...] = (
     ("<10", 9), ("10-49", 49), ("50-99", 99), ("100-199", 199), ("200+", 10 ** 9),
 )
@@ -54,18 +34,18 @@ def bucket_of(n_ops: int) -> str:
 
 @dataclass(frozen=True)
 class Block:
-    """Один базовый блок исходного текста."""
+    """Single basic block extracted from assembly text."""
 
-    index: int       # номер блока в файле (с нуля, только блоки с широкими командами)
-    label: str       # метка в начале блока ("" — блок начался без метки)
-    text: str        # строки блока, как в файле
-    bundles: int     # широких команд `{ ... }` в блоке
-    loop: bool       # в блоке есть `loop_mode`
+    index: int       # 0-based block index in file (only blocks containing wide instructions)
+    label: str       # leading label ("" if block started without a label)
+    text: str        # raw source lines of the block
+    bundles: int     # count of wide instructions `{ ... }` in the block
+    loop: bool       # whether the block contains `loop_mode`
 
 
 @dataclass
 class BlockGraph:
-    """Блок + его разбор + граф. Всё, что нужно планировщику и сравнению с lcc."""
+    """Block + parsed assembly + DAG for scheduling and lcc comparison."""
 
     block: Block
     parsed: "asm_parser.ParsedAsm"
@@ -80,14 +60,12 @@ class BlockGraph:
         return bucket_of(self.n)
 
     def lcc_schedule(self, model: MachineModel):
-        """Расписание, которое построил сам lcc, и причина, если его нельзя
-        показывать: `(Schedule|None, (заголовок, подробность)|None)`."""
+        """Reconstructed lcc schedule and optional rejection reason: `(Schedule|None, (title, detail)|None)`."""
         return asm_parser.compiler_schedule_checked(self.parsed, self.dag, model)
 
 
 def split_blocks(text: str) -> list[Block]:
-    """Разрезать текст `.s` на базовые блоки. Блоки без единой широкой команды
-    (одни метки и директивы) не возвращаются."""
+    """Split `.s` text into basic blocks, omitting blocks without wide instructions."""
     out: list[Block] = []
     cur: list[str] = []
     label = ""
@@ -134,8 +112,7 @@ def split_blocks(text: str) -> list[Block]:
 
 
 def block_graphs(text: str, source: str = "", min_ops: int = 1) -> list[BlockGraph]:
-    """Блоки текста вместе с графами. `min_ops`: отбросить блоки короче
-    (по числу операций после разбора; в отчётах обычно 10)."""
+    """Parse text into blocks with DAGs, filtering blocks shorter than `min_ops`."""
     stem = Path(source).stem if source else "asm"
     res: list[BlockGraph] = []
     for b in split_blocks(text):
@@ -153,18 +130,17 @@ def block_graphs_of_file(path: str | Path, min_ops: int = 1) -> list[BlockGraph]
 
 
 # --------------------------------------------------------------------------
-# Окна: куски блока из подряд идущих широких команд
+# Sliding windows of consecutive wide instructions
 # --------------------------------------------------------------------------
 
-#: Целевые размеры окон в операциях (как в замерах: короткие участки, где точный
-#: поиск доказывает оптимум за миллисекунды).
+#: Target window sizes in operations (short blocks where exact search
+#: proves optimality in milliseconds).
 WINDOW_TARGETS: tuple[int, ...] = (16, 24, 32, 48)
 
 
 @dataclass
 class WindowGraph:
-    """Окно блока + граф. Граф окна — отдельный участок: всё, что пришло из
-    предыдущих широких команд блока, считается готовым."""
+    """Block window + standalone DAG (values from earlier bundles assumed ready)."""
 
     block_index: int
     start_bundle: int
@@ -198,11 +174,8 @@ def _bundle_texts(block_text: str) -> list[str]:
 def window_graphs(text: str, source: str = "",
                   targets: tuple[int, ...] = WINDOW_TARGETS,
                   min_ops: int = 12, max_ops: int = 56) -> list[WindowGraph]:
-    """Скользящие окна по блокам: для каждого целевого размера окно набирается из
-    подряд идущих широких команд, пока не наберётся `target` операций, и сдвигается
-    примерно на половину окна. Берутся окна, в которых от `min_ops` до `max_ops`
-    операций. Окна разных целевых размеров могут совпадать по составу — это
-    допущено (как и в замерах, из которых взяты эти параметры)."""
+    """Extract sliding windows across blocks for each target size, keeping
+    windows with `min_ops`..`max_ops` operations."""
     stem = Path(source).stem if source else "asm"
     res: list[WindowGraph] = []
     for b in split_blocks(text):

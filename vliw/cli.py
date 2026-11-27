@@ -1,15 +1,15 @@
-"""Единая точка входа: команда → core → ui → печать.
+"""Single CLI entry point: command -> core -> ui -> output.
 
-  python -m vliw                 интерактив: выбор приложения, затем цикл
-  python -m vliw run slotclash   одна команда и выход
-  python -m vliw --plain         тот же цикл построчно, без полноэкранного
+  python -m vliw                 interactive: mode picker, then main loop
+  python -m vliw run slotclash   one-shot command and exit
+  python -m vliw --plain         line-by-line interactive loop (no full-screen TUI)
 
-Три панели одного workstation:
-  ядро   — интерпретатор (sum 8, своя запись)
-  разбор — /run /compare /doctor
-  агент  — вопрос обычным языком
+Three workstation panes:
+  core   — interpreter (sum 8, custom expressions)
+  lab    — /run /compare /doctor
+  agent  — natural-language Q&A
 
-Здесь только склейка. Логика планирования — в vliw.core.
+Glue layer only. All scheduling logic lives in `vliw.core`.
 """
 
 from __future__ import annotations
@@ -27,18 +27,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# readline — из стандартной библиотеки Python, но недоступен на некоторых
-# сборках Windows без сторонних пакетов. Даёт даром: историю ввода (стрелки
-# вверх/вниз, персистентную между запусками) и Tab-дополнение команд. Это
-# НАМЕРЕННО не собственный raw-terminal код (как была прежняя «живая
-# палитра» по «/», которую убрали за баги с перерисовкой) — readline
-# написан и обкатан десятилетиями, сам разбирается с терминалом и не
-# ломается на вставке текста, коротких терминалах и т.п.
+# readline is part of the Python stdlib (optional on some Windows builds).
+# Provides persistent command history and Tab completion in plain mode.
 try:
     import readline
 
     HAS_READLINE = True
-except Exception:  # pragma: no cover - платформозависимо
+except Exception:  # pragma: no cover - platform-dependent
     readline = None  # type: ignore[assignment]
     HAS_READLINE = False
 
@@ -72,7 +67,7 @@ from .ui.render import Style, op_legend, paint, panel, rule, wrap
 
 
 # --------------------------------------------------------------------------
-# Сессия: текущий сценарий/профиль/ширина + кэш результатов планирования
+# Session: active scenario/profile/width + schedule result cache
 # --------------------------------------------------------------------------
 
 
@@ -82,70 +77,30 @@ class Session:
     profile: str = DEFAULT_PROFILE
     scenario: str = "slotclash"
     event_sink: object = None
-    """Куда отдавать события планировщика вместо печати.
-
-    Ставит интерфейс на время команды. Пусто — печатаем построчно, как и
-    раньше; занято — показывать поток берётся тот, кто его поставил (у него
-    есть решётка, а у печати её нет).
-    """
+    """Optional callback receiving scheduler events instead of printing lines."""
     dag_obj: DAG | None = None
     width: int | None = None
-    delay: float | None = None  # пауза воспроизведения; None = по Enter
-    mode: str = "explore"      # совместимость: explore ≈ lab, chat ≈ mind
-    focus: str = "lab"         # work | lab | mind | code — какая панель в фокусе
+    delay: float | None = None  # playback delay; None = step on Enter
+    mode: str = "explore"       # compatibility: explore ~ lab, chat ~ mind
+    focus: str = "lab"          # work | lab | mind | code — active pane
     last_work: str = ""
     code_text: str = ""
-    """Буфер исходника (ассемблер e2k) режима КОД.
-
-    Живёт в сессии, а не в виджете: редактор его показывает, `/code run`
-    прогоняет, умная вставка из любого режима кладёт сюда многострочный
-    текст. Перезапуск инструмента буфер не переживает — как и черновик
-    в любом редакторе без сохранения.
-    """
+    """Source buffer (e2k assembly) shared across CODE mode and `/code`."""
     code_path: str = ""
-    """Последний файл, куда буфер сохраняли / откуда загрузили: Ctrl+S в
-    редакторе пишет туда без повторного вопроса."""
+    """Last file path loaded into or saved from the CODE buffer."""
     code_run_text: str = ""
-    """Текст буфера КОДА на момент последнего разбора (`/code run`, F5).
-
-    Ставит `_load_parsed`, когда разобран именно буфер. Нужен индикатору
-    спящих режимов в РАЗБОРЕ: «буфер изменён, не разобран» видно без захода
-    в КОД. У экрана КОДА есть своя метка свежести (run_text), но она живёт
-    только пока открыт экран — а эта переживает смену режимов.
-    """
+    """Snapshot of `code_text` as of the last `/code run` (F5)."""
     journal_runs: list = field(default_factory=list)
-    """Общий журнал прогонов сессии («гит сессии»).
-
-    Один список на все экраны: ЯДРО, РАЗБОР, АГЕНТ и КОД пишут сюда каждый
-    запуск, и из любого места к нему можно вернуться. У записи после
-    выполнения появляются мостик-поля: сценарий, граф, профиль — по ним
-    журнал отдаёт прогон в РАЗБОР, АГЕНТУ или ЯДРУ одной кнопкой. Ничего
-    не уезжает само: что сделать общим, решает человек.
-    """
+    """Shared session run journal across CORE, LAB, AGENT, and CODE."""
     journal_events: list = field(default_factory=list)
-    """Живой поток сессии отдельно от отчётов команд.
-
-    Строки модели и пометки планировщика во время команды. Тоже один на
-    все экраны: поток не принадлежит ни одному режиму, он принадлежит
-    прогону, а прогон виден из журнала везде.
-    """
+    """Live event stream belonging to the current run."""
     dialog: list = field(default_factory=list)
-    """Переписка с агентом — ОДНА на сессию, как и журнал прогонов.
-
-    Спрашивают агента из трёх мест: колонка справа в КОДЕ (быстрый вопрос
-    про строку под курсором), вкладка АГЕНТ его нижнего дока и
-    полноэкранный АГЕНТ. Пока история жила в виджетах, это были три РАЗНЫХ
-    переписки: спросил в колонке, ушёл на весь экран — а там пусто, и
-    ответа, ради которого уходил, уже нет. Продолжать разговор было нельзя
-    нигде, кроме места, где он начат.
-
-    Запись: `{"role": "you" | "nex", "text": str, "facts": list[str]}`.
-    """
+    """Shared agent conversation history for the session."""
 
     pending_note: str = ""
-    """Пометка для ЯДРА, ждущая показа (кладёт мостик из журнала)."""
+    """Note queued for CORE (set by journal bridge)."""
     pending_question: str = ""
-    """Вопрос, ждущий отправки в АГЕНТ (кладёт мостик из журнала)."""
+    """Question queued for AGENT (set by journal bridge)."""
     _workspace: object = None
     _agent: object = None
     compiler_sched: object = None
@@ -166,10 +121,8 @@ class Session:
         self.scenario = key
 
     def set_dag(self, dag: DAG, label: str) -> None:
-        # Кэш результатов ключуется именем участка, а буфер КОДА всегда
-        # зовётся `asm:буфер`: без сброса ВТОРОЙ F5 после правки отдавал
-        # числа ПЕРВОГО прогона — правь сколько хочешь, «оракул 8 тактов»
-        # не двигался. Новый граф под тем же именем — старому кэшу не родня.
+        # Invalidate cached schedules for this label so re-running an edited
+        # CODE buffer always recomputes fresh numbers.
         self._cache = {k: v for k, v in self._cache.items() if k[0] != label}
         self.dag_obj = dag
         self.scenario = label
@@ -180,7 +133,7 @@ class Session:
         return self._workspace
 
     def agent(self):
-        """Диалоговая сессия агента (создаётся при первом обращении)."""
+        """Conversational agent session (created lazily on first use)."""
         if self._agent is None:
             from .agent import Agent
 
@@ -188,15 +141,11 @@ class Session:
         return self._agent
 
     def peek(self):
-        """Уже посчитанный результат или None — БЕЗ запуска вычислений.
-
-        Нужен панели контекста: она рисуется постоянно и не должна сама
-        запускать точный поиск (это подвесило бы интерфейс на секунды).
-        """
+        """Return cached (base, oracle, metrics) or None without running search."""
         return self._cache.get((self.scenario, self.profile, self.width))
 
     def results(self):
-        """(base, oracle, metrics) — вычисляет core, кэширует, валидирует."""
+        """Compute, validate, and cache (base, oracle, metrics) via core."""
         key = (self.scenario, self.profile, self.width)
         if key not in self._cache:
             d, m = self.dag_obj, self.model()
@@ -209,7 +158,7 @@ class Session:
                 errs = res.schedule.validate()
                 if errs:
                     raise SystemExit(
-                        f"ВНУТРЕННЯЯ ОШИБКА: {who} выдал некорректное расписание:\n  "
+                        f"INTERNAL ERROR: {who} produced an invalid schedule:\n  "
                         + "\n  ".join(errs)
                     )
             self._cache[key] = (base, orc, compute_metrics(d, m))
@@ -220,8 +169,8 @@ def _header(session: Session) -> str:
     m = session.model()
     return (
         paint("1", session.scenario)
-        + Style.dim(f"  ·  {len(session.dag_obj)} инстр.  ·  {m.name}"
-                    f"  ·  {m.width} портов")
+        + Style.dim(f"  ·  {len(session.dag_obj)} instr.  ·  {m.name}"
+                    f"  ·  {m.width} ports")
     )
 
 
@@ -230,7 +179,7 @@ def _out(lines) -> None:
 
 
 # --------------------------------------------------------------------------
-# Команды
+# Commands
 # --------------------------------------------------------------------------
 
 
@@ -252,21 +201,17 @@ def cmd_run(session: Session, arg: str) -> None:
     hl = {i: render.CRIT_CODE for i in schedule_view.critical_set(dag, met)}
     _out(schedule_view.render_schedule(
         orc.schedule, dag, model, hl,
-        paint("success", "  расписание oracle (точный поиск), * — критический путь:")))
+        paint("success", "  oracle schedule (exact search), * — critical path:")))
     print()
     print(schedule_view.render_stats_line(base, orc))
     print()
     _out(schedule_view.render_verdict(base, orc, met))
     print()
-    print(Style.dim("  дальше:  compare   doctor   path   bounds"))
+    print(Style.dim("  next:  compare   doctor   path   bounds"))
 
 
 def cmd_compare(session: Session, arg: str) -> None:
-    """baseline и oracle бок о бок; `--model` добавляет третьим обученную.
-
-    Модель НЕ подмешивается по умолчанию: она считается полминуты, а
-    `/compare` должен оставаться мгновенным.
-    """
+    """Compare baseline and oracle side by side; `--model` adds the learned model."""
     toks = arg.split()
     want_model = any(t in ("--model", "--learned") for t in toks)
     rest = [t for t in toks if not t.startswith("--")]
@@ -278,19 +223,19 @@ def cmd_compare(session: Session, arg: str) -> None:
         i for i in range(len(dag))
         if base.schedule.placements[i].cycle != orc.schedule.placements[i].cycle
     }
-    print(rule("сравнение · " + dag.title))
+    print(rule("compare · " + dag.title))
     print("  " + _header(session))
     print("  " + op_legend())
-    print("  " + paint(render.DIVERGE_CODE, "красным") + Style.dim(" — инструкции в разных тактах"))
+    print("  " + paint(render.DIVERGE_CODE, "highlighted") + Style.dim(" — instructions in different cycles"))
     print()
     hl = {i: render.DIVERGE_CODE for i in diverged}
     _out(schedule_view.render_schedule(
         base.schedule, dag, model, hl,
-        paint("warning", "  baseline — жадная эвристика:")))
+        paint("warning", "  baseline — greedy heuristic:")))
     print()
     _out(schedule_view.render_schedule(
         orc.schedule, dag, model, hl,
-        paint("success", "  oracle — точный поиск:")))
+        paint("success", "  oracle — exact search:")))
     print()
     from .ui import learned_view
 
@@ -305,23 +250,23 @@ def cmd_compare(session: Session, arg: str) -> None:
         _out(learned_view.render_compare_line(learned_res, base, orc))
     elif not want_model:
         print()
-        print(Style.dim("  добавить обученную модель третьей: /compare --model"))
+        print(Style.dim("  include learned model as a third scheduler: /compare --model"))
 
 
 def _compare_learned(session: Session, dag, model, hl):
-    """Прогнать модель и напечатать её расписание третьим. None — не вышло."""
+    """Run the learned model and print its schedule third. Returns None on failure."""
     from .learned import runtime
 
     ready, lines = runtime.status()
     if not ready:
         print()
-        print(paint("warning", "  модель недоступна — показываю без неё"))
-        print(Style.dim("  подробности: /learned --status"))
+        print(paint("warning", "  learned model unavailable — showing comparison without it"))
+        print(Style.dim("  details: /learned --status"))
         return None
 
     adapter = runtime.resolve_adapter()
     print()
-    print(paint("lab", f"  модель ({adapter.name}) считает, ~30 с:"))
+    print(paint("lab", f"  learned model ({adapter.name}) running, ~30 s:"))
     _line: list[str] = []
 
     def _stream(chunk: str) -> None:
@@ -342,30 +287,28 @@ def _compare_learned(session: Session, dag, model, hl):
             dag, model, on_text=_stream)
         _stream("\n")
     except (RuntimeError, OSError, ImportError, TimeoutError) as e:
-        print(paint("error", f"  модель не отработала: {e}"))
+        print(paint("error", f"  model failed: {e}"))
         return None
 
     print()
     st = res.search_stats
     if st["valid"]:
-        label = "  модель — обученная" + (
-            " + починка каналов:" if st.get("repaired") else ":")
+        label = "  model — learned" + (
+            " + channel repair:" if st.get("repaired") else ":")
         _out(schedule_view.render_schedule(res.schedule, dag, model, hl,
                                            paint("lab", label)))
     else:
-        print(paint("error", "  модель выдала незаконное расписание — "
-                             "решётку не рисую:"))
+        print(paint("error", "  model produced an invalid schedule — skipping grid:"))
         for e in st["errors"][:4]:
             print("    " + Style.dim(e))
     return res
 
 
 def cmd_tiny(session: Session, arg: str) -> None:
-    """Крошки против baseline и oracle на текущем участке.
+    """Compare TINY AI against baseline and oracle on the current block.
 
-    Веса лежат в vliw/tiny/weights*.json; без них — честный фолбэк на
-    baseline (планировщик сам так умеет, см. TinyFlashScheduler). Считает
-    миллисекунды, поэтому печатается сразу, без отдельного экрана.
+    Weights live in `vliw/tiny/weights*.json`; if missing, TinyFlashScheduler
+    falls back cleanly to baseline. Runs in milliseconds.
     """
     toks = arg.split()
     if toks:
@@ -379,26 +322,26 @@ def cmd_tiny(session: Session, arg: str) -> None:
     res = tiny.schedule(dag, model)
     dt = (_time.perf_counter() - t0) * 1000.0
     errs = res.schedule.validate()
-    print(rule("крошки · " + dag.title))
+    print(rule("TINY AI · " + dag.title))
     print("  " + _header(session))
     print()
-    print(f"  baseline : {base.schedule.makespan} т.")
-    print(f"  oracle   : {orc.schedule.makespan} т."
-          + (" (доказан)" if orc.optimal else ""))
-    print(f"  tiny     : {res.schedule.makespan} т. "
-          f"({res.search_stats.get('tiny_winner', '?')}, {dt:.1f} мс)")
-    print(f"  законно  : {'да' if not errs and res.schedule.complete else errs}")
+    print(f"  baseline : {base.schedule.makespan} cyc")
+    print(f"  oracle   : {orc.schedule.makespan} cyc"
+          + (" (proven)" if orc.optimal else ""))
+    print(f"  tiny     : {res.schedule.makespan} cyc "
+          f"({res.search_stats.get('tiny_winner', '?')}, {dt:.1f} ms)")
+    print(f"  valid    : {'yes' if not errs and res.schedule.complete else errs}")
     for note in res.notes:
         print("  " + Style.dim(note))
     if res.schedule.makespan < base.schedule.makespan:
-        print("  " + paint("success", f"выигрыш у baseline: "
+        print("  " + paint("success", f"beat baseline: "
                                       f"{base.schedule.makespan} -> {res.schedule.makespan}"))
     elif res.schedule.makespan == base.schedule.makespan:
-        print("  " + Style.dim("вровень с baseline — хуже не стало"))
+        print("  " + Style.dim("tied with baseline — no regression"))
     else:
-        print("  " + paint("warning", "ХУЖЕ baseline — так быть не должно, сообщите"))
+        print("  " + paint("warning", "WORSE than baseline — please report this"))
     print()
-    print(Style.dim("  дальше:  compare   doctor   bounds"))
+    print(Style.dim("  next:  compare   doctor   bounds"))
 
 
 def cmd_play(session: Session, arg: str) -> None:
@@ -420,20 +363,20 @@ def cmd_play(session: Session, arg: str) -> None:
     hl = {i: render.CRIT_CODE for i in schedule_view.critical_set(dag, met)}
     items = schedule_view.schedule_items(sched, dag, model)
     stepping = session.delay is None and sys.stdin.isatty()
-    print(rule(f"по тактам · {who.lower()}"))
+    print(rule(f"cycle by cycle · {who.lower()}"))
     print("  " + _header(session))
     print("  " + op_legend())
     if stepping:
-        print(Style.dim("  Enter — следующий такт · q + Enter — прервать"))
+        print(Style.dim("  Enter — next cycle · q + Enter — stop"))
     print()
     issued = 0
     for item in items:
         if item[0] == "bundle":
             issued += len(item[2])
         _out(schedule_view.render_item(dag, model, sched, item, hl))
-        print(Style.dim(f"       выдано {issued}/{len(dag)} инстр., makespan {sched.makespan}"))
+        print(Style.dim(f"       issued {issued}/{len(dag)} instr., makespan {sched.makespan}"))
         if not _pause(session):
-            print(Style.dim("  … прервано"))
+            print(Style.dim("  … stopped"))
             return
     print()
     _out(schedule_view.render_verdict(base, orc, met))
@@ -445,20 +388,20 @@ def cmd_explain(session: Session, arg: str) -> None:
     if not arg.strip():
         d = schedule_view.find_divergence(base.schedule, orc.schedule, dag)
         t = d.cycle if d.cycle is not None else 0
-        print(Style.dim(f"  такт не указан — беру первое расхождение (такт {t})"))
+        print(Style.dim(f"  no cycle specified — using first divergence (cycle {t})"))
     else:
         try:
             t = int(arg.split()[0])
         except ValueError:
-            print(paint("error", "нужен номер такта: /explain <такт>"))
+            print(paint("error", "cycle number required: /explain <cycle>"))
             return False
-    print(rule(f"такт {t}"))
+    print(rule(f"cycle {t}"))
     _out(schedule_view.render_explain(t, base, orc, dag, model))
 
 
 def cmd_path(session: Session, arg: str) -> None:
     base, orc, met = session.results()
-    print(rule("критический путь · " + session.dag_obj.title))
+    print(rule("critical path · " + session.dag_obj.title))
     print("  " + _header(session))
     print()
     _out(["  " + l for l in schedule_view.render_dag_path(session.dag_obj, session.model(), met)])
@@ -466,7 +409,7 @@ def cmd_path(session: Session, arg: str) -> None:
 
 def cmd_bounds(session: Session, arg: str) -> None:
     base, orc, met = session.results()
-    print(rule("границы"))
+    print(rule("lower bounds"))
     _out(schedule_view.render_bounds(session.dag_obj, session.model(), met))
 
 
@@ -477,27 +420,24 @@ def cmd_model(session: Session, arg: str) -> None:
         match = match or {"measured": "e2k-v6-measured", "naive": "naive_homogeneous",
                           "homogeneous": "naive_homogeneous", "m": "e2k-v6-measured"}.get(arg)
         if not match:
-            print(paint("error", f"неизвестный профиль {arg!r}; доступны: {', '.join(PROFILES)}"))
+            print(paint("error", f"unknown profile {arg!r}; available: {', '.join(PROFILES)}"))
             return False
         session.profile = match
-        print(paint("success", f"профиль переключён на {match}"))
+        print(paint("success", f"switched profile to {match}"))
     model = session.model()
-    print(rule("машина · " + model.name))
+    print(rule("machine · " + model.name))
     _out(tables.render_model_view(model))
     print()
     others = [n for n in PROFILES if n != session.profile]
-    print(Style.dim(f"  Переключить: /model {others[0] if others else '<профиль>'}"))
+    print(Style.dim(f"  Switch: /model {others[0] if others else '<profile>'}"))
 
 
 def cmd_scenarios(session: Session, arg: str) -> None:
-    print(rule("сценарии"))
+    print(rule("scenarios"))
     _out(tables.render_scenarios(session.scenario))
 
 
-# Потолок для `random N`. Замерено: 6000 узлов — 24 с и 644 МБ, 8000 не
-# укладывается и в 30 с, а на 20 000 процесс убивает OOM-killer. Настоящие
-# участки после lcc — сотни операций (real_candidates_100_400/), так что
-# запас здесь на порядок больше любого реального случая.
+# Upper cap for `random N` to prevent OOM on huge synthetic graphs.
 MAX_RANDOM_N = 5000
 
 
@@ -509,29 +449,18 @@ def cmd_random(session: Session, arg: str) -> bool | None:
         try:
             n = int(parts[0])
         except ValueError:
-            print(paint("error", f"число инструкций должно быть целым, "
-                                 f"а не {parts[0]!r}"))
+            print(paint("error", f"instruction count must be an integer, not {parts[0]!r}"))
             return False
-        # Раньше здесь стояло `max(3, ...)`: -5 молча превращалось в 3, и
-        # инструмент считал не ту задачу, о которой его просили, ничего не
-        # сказав. Отказ честнее подмены.
         if n < 3:
-            print(paint("error", f"граф из {n} инструкций не бывает: "
-                                 f"нужно 3 и больше"))
+            print(paint("error", f"cannot build a graph with {n} instructions: need 3 or more"))
             return False
-        # Верхняя граница — защита от OOM, а не вкусовщина. За генерацией
-        # сразу идёт cmd_run, и планирование растёт заметно быстрее линейного:
-        # 2000 узлов — 100 МБ, 4000 — 307 МБ, 6000 — 644 МБ, дальше процесс
-        # съедал ~4 ГБ и его убивал OOM-killer с кодом 137. Бюджет точного
-        # поиска (--budget) этот путь не ограничивает.
         if n > MAX_RANDOM_N:
             print(paint("error",
-                        f"{n} инструкций — слишком крупный граф для одного "
-                        f"участка (предел {MAX_RANDOM_N})"))
-            _out(wrap("Планирование растёт быстрее линейного и на таких "
-                      "размерах упирается в память, а не во время: --budget "
-                      "здесь не спасает. Настоящие участки после lcc — сотни "
-                      "операций, см. real_candidates_100_400/.",
+                        f"{n} instructions is too large for a single block "
+                        f"(limit {MAX_RANDOM_N})"))
+            _out(wrap("Scheduling memory grows superlinearly and hits OOM at "
+                      "this size (--budget does not cap memory). Real lcc "
+                      "blocks are hundreds of ops — see real_candidates_100_400/.",
                       render.W, "  "))
             return False
     if len(parts) > 1:
@@ -540,17 +469,17 @@ def cmd_random(session: Session, arg: str) -> bool | None:
         except ValueError:
             pass
     dag = random_dag(seed, n=n, key=f"rand{seed}",
-                     title=f"Случайный граф (seed={seed}, {n} инстр.)")
+                     title=f"Random graph (seed={seed}, {n} instr.)")
     session.set_dag(dag, f"rand{seed}")
-    print(paint("success", f"сгенерирован случайный граф: {n} инструкций, seed={seed}"))
+    print(paint("success", f"generated random graph: {n} instructions, seed={seed}"))
     cmd_run(session, "")
 
 
 def cmd_all(session: Session, arg: str) -> None:
-    print(rule("сводка"))
+    print(rule("summary"))
     _out(wrap(
-        "Каждый сценарий планируется дважды: жадная эвристика (baseline) и точный "
-        "поиск (oracle). Столбец «выигрыш» — разрыв до теоретического потолка.",
+        "Each scenario is scheduled twice: greedy heuristic (baseline) and exact "
+        "search (oracle). The 'gain' column shows the gap to the theoretical ceiling.",
         render.W, "  "))
     print()
     rows = []
@@ -583,9 +512,9 @@ def cmd_sweep(session: Session, arg: str) -> None:
 
     print(rule("sweep"))
     _out(wrap(
-        f"{seeds} случайных графов x размеры {sizes} x конфигурации машины. Для "
-        f"каждой считаем, в скольких графах точный поиск обогнал эвристику "
-        f"(только где оптимальность доказана).", render.W, "  "))
+        f"{seeds} random graphs x sizes {sizes} x machine profiles. Counts how "
+        f"often exact search beats the greedy heuristic (proven optima only).",
+        render.W, "  "))
     print()
     configs = [
         get_profile(p).with_width(w) if w != get_profile(p).width else get_profile(p)
@@ -636,18 +565,18 @@ def cmd_selfcheck(session: Session, arg: str) -> None:
 
 
 def cmd_docs(session: Session, arg: str) -> None:
-    print(rule("что это"))
+    print(rule("overview"))
     body = [
-        "Три панели: ядро считает граф, разбор ищет такты, агент отвечает.",
+        "Three panes: CORE evaluates graphs, LAB schedules cycles, AGENT explains.",
         "",
-        "baseline — жадная эвристика, как в компиляторе.",
-        "oracle — точный поиск, потолок, не ИИ.",
-        "разница — такты, которые можно отыграть порядком выдачи.",
+        "baseline — greedy heuristic, like a compiler list scheduler.",
+        "oracle   — exact search, theoretical ceiling, not AI.",
+        "gap      — cycles recoverable by changing issue order.",
         "",
-        "деление только в ,5, запись в ,2 и ,5, умножение в четырёх каналах.",
+        "division runs only on ,5; store on ,2 and ,5; multiply on four channels.",
         "",
-        "сначала:  sum 8   потом  compare   потом  doctor",
-        "панели: /mode work  ·  /mode lab  ·  /mode mind",
+        "try first:  sum 8   then  compare   then  doctor",
+        "panes: /mode work  ·  /mode lab  ·  /mode mind",
     ]
     for line in body:
         print("  " + (Style.dim(line) if line else ""))
@@ -657,35 +586,26 @@ def cmd_agent(session: Session, arg: str) -> None:
     base, orc, met = session.results()
     gap = base.schedule.makespan - orc.schedule.makespan
     body = [
-        "Где здесь место обученной модели.",
+        "Where a learned scheduler plugs in.",
         "",
-        "Все планировщики реализуют один протокол Scheduler (vliw/core/api.py):",
-        "  baseline  → kind=\"heuristic\"   (жадный list scheduler)",
-        "  oracle    → kind=\"exact\"       (точный поиск, потолок)",
-        "  learned   → kind=\"learned\"     (обученная модель — ПОКА ЗАГЛУШКА)",
+        "All schedulers implement the same Scheduler protocol (vliw/core/api.py):",
+        '  baseline  → kind="heuristic"   (greedy list scheduler)',
+        '  oracle    → kind="exact"       (exact search, ceiling)',
+        '  learned   → kind="learned"     (trained model — experimental)',
         "",
-        "Каркас будущей модели уже зарезервирован: vliw/learned/scheduler.py.",
-        "Когда обучение на Hexagon даст рабочую модель, её кладут туда — она",
-        "реализует тот же schedule(dag, model) → SchedulingResult, и ни CLI, ни",
-        "визуализация не меняются.",
+        "The integration point is vliw/learned/scheduler.py: any model",
+        "implementing schedule(dag, model) -> SchedulingResult works",
+        "directly with the CLI and TUI with zero UI changes.",
         "",
-        f"На текущем сценарии ({session.scenario}) потолок оракула обыгрывает",
-        f"эвристику на {gap} {render.plural(gap, 'такт', 'такта', 'тактов')} — вот "
-        "столько и должна",
-        "отыграть обученная модель, чтобы сравняться с точным поиском.",
+        f"On the current scenario ({session.scenario}), the oracle beats the",
+        f"greedy heuristic by {render.cycles(gap)} — that is the headroom",
+        "available for a learned scheduler to recover.",
     ]
-    _out(panel(body, title="ТОЧКА ПОДСТАНОВКИ МОДЕЛИ", color="accent2"))
+    _out(panel(body, title="MODEL PLUG-IN POINT", color="accent2"))
 
 
 def cmd_hard(session: Session, arg: str) -> None:
-    """Есть ли на графе что выигрывать у эвристики — и где такие графы брать.
-
-    Появилась после замера `docs/archive/CAB.md`: на обеих выборках проекта жадный
-    планировщик стоит в доказанном оптимуме почти везде (298/300 и 300/300),
-    то есть все прежние сравнения обученной модели шли на данных, где
-    выигрывать нечего. Эта команда меряет тот самый бюджет, о котором
-    говорит шапка `vliw/core/oracle.py`.
-    """
+    """Measure whether a graph has a gap over greedy — and harvest hard graphs."""
     import shlex
 
     from .core.hardness import harvest_one, measure
@@ -716,27 +636,24 @@ def cmd_hard(session: Session, arg: str) -> None:
 
     if not n_survey and not n_harvest:
         h = measure(session.dag_obj, machine)
-        print(rule(f"трудность · {session.scenario}"))
+        print(rule(f"hardness · {session.scenario}"))
         print()
-        print(f"  жадная эвристика   {h.baseline:>4} т.")
-        print(f"  оптимум            {h.optimum:>4} т."
-              + Style.dim("   (доказан)" if h.proven else "   (НЕ доказан за бюджет)"))
+        print(f"  greedy heuristic   {h.baseline:>4} cyc")
+        print(f"  optimum            {h.optimum:>4} cyc"
+              + Style.dim("   (proven)" if h.proven else "   (NOT proven within budget)"))
         print()
         if not h.proven:
             print("  " + paint("warning",
-                               "оптимум не доказан — граф нельзя назвать ни трудным, "
-                               "ни лёгким"))
+                               "optimum unproven — cannot classify graph as hard or easy"))
         elif h.hard:
             print("  " + paint("success",
-                               f"ЗАЗОР {h.gap} т. — есть что выигрывать, модели есть "
-                               "чем себя показать"))
+                               f"GAP {h.gap} cyc — real headroom for a smarter scheduler"))
         else:
             print("  " + paint("warning",
-                               "ЗАЗОРА НЕТ — эвристика уже оптимальна, учить на этом "
-                               "графе нечему"))
+                               "NO GAP — greedy heuristic is already optimal on this graph"))
         print()
-        print("  " + Style.dim("доля трудных среди случайных: /hard --survey 200"))
-        print("  " + Style.dim("набрать трудных в файл:       /hard --harvest 50"))
+        print("  " + Style.dim("hard share among random graphs: /hard --survey 200"))
+        print("  " + Style.dim("harvest hard graphs to file:    /hard --harvest 50"))
         return None
 
     from tools.vliw_gen import PRESSURE_WEIGHTS, SHAPES, gen_graph
@@ -747,10 +664,10 @@ def cmd_hard(session: Session, arg: str) -> None:
                     [_I(x.id, f"n{x.id}", x.op, x.preds, f"n{x.id}") for x in instrs])
 
     if n_survey:
-        print(rule(f"опрос трудности · {n_survey} графов на смесь"))
+        print(rule(f"hardness survey · {n_survey} graphs per mix"))
         print()
-        for label, weights in (("обычные веса", None),
-                               ("давление на канал ,5", PRESSURE_WEIGHTS)):
+        for label, weights in (("default weights", None),
+                               ("channel ,5 pressure", PRESSURE_WEIGHTS)):
             rnd = _random.Random(20260831)
             hard = shown = 0
             for k in range(n_survey):
@@ -766,22 +683,17 @@ def cmd_hard(session: Session, arg: str) -> None:
                     sys.stdout.flush()
             pct = 100 * hard / max(shown, 1)
             paint_fn = paint("success", f"{pct:5.1f}%") if pct >= 5 else Style.dim(f"{pct:5.1f}%")
-            print(f"  {label:22} трудных {hard:>4}/{shown:<4} {paint_fn}      ")
+            print(f"  {label:22} hard    {hard:>4}/{shown:<4} {paint_fn}      ")
         print()
         print("  " + Style.dim(
-            "трудность делает не размер графа, а конкуренция за узкий порт: "
-            "DIV живёт только на ,5"))
+            "hardness comes from narrow-port contention, not graph size alone: "
+            "DIV only runs on ,5"))
         return None
 
-    print(rule(f"набор трудных графов · цель {n_harvest}"))
+    print(rule(f"harvesting hard graphs · target {n_harvest}"))
     print()
     from training.encode import encode_completion, encode_prompt
 
-    # Замер 31.08.2026: доля графов с зазором растёт с размером — 0.8% при
-    # n=12, 11.7% при n=20, 18.6% при n=32. Верхняя граница не в трудности, а
-    # в оракуле: он перестаёт доказывать оптимум (5 из 120 при n=24) и
-    # дорожает до 1.65 с на граф к n=32. 16..24 — окно, где трудных уже
-    # много, а эталон ещё доказуем и дёшев.
     N_LO, N_HI = 16, 24
     profile = getattr(machine, "name", "e2k-v6-measured")
     kept, seen, t0 = [], 0, time.monotonic()
@@ -790,14 +702,11 @@ def cmd_hard(session: Session, arg: str) -> None:
 
     def _note(gap: int) -> None:
         if sys.stdout.isatty():
-            print(f"  найдено {len(kept):>4}/{n_harvest}   просмотрено {seen}   "
-                  f"зазор {gap} т.      ", end="\r")
+            print(f"  found {len(kept):>4}/{n_harvest}   scanned {seen}   "
+                  f"gap {gap} cyc      ", end="\r")
             sys.stdout.flush()
 
     if n_jobs > 1:
-        # Счёт независим по графам, поэтому масштабируется процессами почти
-        # линейно. chunksize>1 — потому что задача секундная, а не миллисекундная:
-        # раздавать по одной значит платить за передачу больше, чем считать.
         import multiprocessing as mp
 
         with mp.Pool(n_jobs) as pool:
@@ -823,25 +732,18 @@ def cmd_hard(session: Session, arg: str) -> None:
         for row in kept:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     dt = time.monotonic() - t0
-    print(f"  найдено {len(kept)}/{n_harvest}, просмотрено {seen} "
-          f"({100 * len(kept) / max(seen, 1):.1f}% годных) за {dt:.0f} с      ")
+    print(f"  found {len(kept)}/{n_harvest}, scanned {seen} "
+          f"({100 * len(kept) / max(seen, 1):.1f}% kept) in {dt:.0f} s      ")
     print()
-    print("  " + paint("success", f"записано в {out_path}"))
+    print("  " + paint("success", f"saved to {out_path}"))
     if len(kept) < n_harvest:
         print("  " + paint("warning",
-                           "цель не набрана: подними лимит просмотра или ослабь "
-                           "требование к зазору"))
+                           "target not reached: raise scan limit or relax gap threshold"))
     return None
 
 
 def cmd_isa(session: Session, arg: str) -> None:
-    """Справочник системы команд: во что обходятся операции.
-
-    МЦСТ систему команд не публикует, поэтому таблиц латентностей и портов
-    для e2k публично не существует. Здесь они собираются генератором из
-    `vliw/core/model.py` — из того самого, по чему инструмент считает, — и у
-    каждого числа напечатан источник. См. `vliw/core/isa.py`.
-    """
+    """ISA reference: channels, latencies, peak issue rates, and provenance."""
     import shlex
 
     from .core.isa import collect
@@ -859,7 +761,7 @@ def cmd_isa(session: Session, arg: str) -> None:
     rows = collect(machine)
 
     if out_path is None:
-        print(rule("система команд"))
+        print(rule("ISA reference"))
         _out(isa_view.render_terminal(rows))
         return None
 
@@ -867,12 +769,12 @@ def cmd_isa(session: Session, arg: str) -> None:
 
     text = isa_view.render_markdown(rows, machine, VERSION_LABEL)
     out_path.write_text(text, encoding="utf-8")
-    print(rule("система команд"))
+    print(rule("ISA reference"))
     print()
-    print("  " + paint("success", f"записано в {out_path}")
-          + Style.dim(f"   {len(text.splitlines())} строк, "
-                      f"{len(rows)} классов, "
-                      f"{sum(len(r.mnemonics) for r in rows)} мнемоник"))
+    print("  " + paint("success", f"written to {out_path}")
+          + Style.dim(f"   {len(text.splitlines())} lines, "
+                      f"{len(rows)} classes, "
+                      f"{sum(len(r.mnemonics) for r in rows)} mnemonics"))
     return None
 
 
@@ -882,11 +784,11 @@ def _group_title(cmd: dict) -> str:
 
 
 def cmd_help(session: Session, arg: str) -> None:
-    """Справка: без аргумента — все команды по группам, с аргументом — одна."""
+    """Help: without an argument lists all commands by group; with one explains it."""
     q = arg.strip().lstrip("/").lower()
     if q and q != "help":
         return _help_one(q)
-    print(rule("клиент"))
+    print(rule("commands"))
     _hint()
     for gid, title in GROUPS:
         members = [c for c in COMMANDS if c.get("group") == gid]
@@ -896,30 +798,30 @@ def cmd_help(session: Session, arg: str) -> None:
         print(rule(title))
         rows = [[paint("accent", "/" + c["name"]), c["arg"], c["help"]]
                 for c in members]
-        for l in render.table(["команда", "аргументы", "что делает"], rows,
+        for l in render.table(["command", "arguments", "description"], rows,
                               aligns="<<<"):
             print("  " + l)
         print(Style.dim(
-            "  подробно: /help " + members[0]["name"]
+            "  details: /help " + members[0]["name"]
             + (" … /help " + members[-1]["name"] if len(members) > 1 else "")))
     print()
-    print(Style.dim("  в цикле со «/», снаружи без: python -m vliw run slotclash"))
-    print(Style.dim("  ядро: sum 8  ·  агент: вопрос  ·  /exit"))
+    print(Style.dim("  inside REPL with '/', outside without: python -m vliw run slotclash"))
+    print(Style.dim("  core: sum 8  ·  agent: plain question  ·  /exit"))
 
 
 def _help_one(name: str) -> None:
-    """Подробно об одной команде: сигнатура, докстринт, соседи по группе."""
+    """Detailed help for a single command: signature, docstring, sibling commands."""
     import inspect
 
     cmd = resolve(name)
     if cmd is None:
-        msg = paint("error", f"нет команды /{name}.")
+        msg = paint("error", f"no such command /{name}.")
         hints = suggest(name)
         if hints:
-            msg += Style.dim("  Похоже на: ") + ", ".join(
+            msg += Style.dim("  Did you mean: ") + ", ".join(
                 paint("accent", "/" + h) for h in hints) + Style.dim("?")
         else:
-            msg += Style.dim("  /help — список всех.")
+            msg += Style.dim("  /help — list all commands.")
         print(msg)
         return False
     sig = ("/" + cmd["name"] + " " + cmd["arg"]).strip()
@@ -936,16 +838,16 @@ def _help_one(name: str) -> None:
              if c.get("group") == cmd.get("group") and c is not cmd]
     if peers:
         print()
-        print(Style.dim("  рядом:  ") + Style.dim("   ".join(
+        print(Style.dim("  related: ") + Style.dim("   ".join(
             paint("accent", "/" + p["name"]) for p in peers)))
     return True
 
 
 def cmd_doctor(session: Session, arg: str) -> None:
-    """Диагностика: где именно теряются такты и что с этим делать.
+    """Diagnostics: where cycles are lost and what can be fixed.
 
-    `/doctor` — сводка, `/doctor N` — подробности находки N,
-    `/doctor oracle` — то же для расписания точного поиска.
+    `/doctor` — summary, `/doctor N` — details for finding N,
+    `/doctor oracle` — same diagnostics for the exact oracle schedule.
     """
     which = "baseline"
     detail = 0
@@ -965,7 +867,7 @@ def cmd_doctor(session: Session, arg: str) -> None:
     label = "baseline" if which == "baseline" else "oracle"
 
     if detail:
-        print(rule(f"НАХОДКА №{detail} — {label}"))
+        print(rule(f"FINDING #{detail} — {label}"))
         _out(diagnostics.render_detail(d, detail))
         return
     print(rule(f"doctor · {label} · {session.scenario}"))
@@ -974,32 +876,22 @@ def cmd_doctor(session: Session, arg: str) -> None:
 
 
 def _load_parsed(session: Session, parsed, label: str) -> bool:
-    """Разобранный исходник → граф, расписание компилятора, отчёт.
-
-    Общий путь `/load` (файл) и `/code run` (буфер редактора): разница
-    только в том, откуда взялся текст.
-    """
+    """Convert parsed `.s` into a DAG, check compiler schedule, and print report."""
     if not parsed.ops:
-        print(paint("error", "операций не нашлось — это точно .s-вывод lcc?"))
+        print(paint("error", "no operations found — is this valid lcc .s output?"))
         return False
 
     model = session.model()
     dag = asm_parser.build_dag(parsed, key=f"asm:{label}", title=label)
     session.set_dag(dag, f"asm:{label}")
-    # Метка «разобран ли буфер»: успешный прогон именно БУФЕРА запоминает
-    # его текст. Правка после прогона снова сделает факт «изменён, не
-    # разобран» видимым в РАЗБОРЕ; `/code load` метку не трогает нарочно —
-    # загруженный файл разобран ещё не был.
-    if label == "буфер":
+    if label == "buffer":
         session.code_run_text = session.code_text
 
     cs, comp_problem = asm_parser.compiler_schedule_checked(parsed, dag, model)
     comp_cycles = cs.makespan if cs else None
     base, orc, met = session.results()
 
-    print(rule("загружен · " + label))
-    # Линтер зовём и здесь: до 0.9 его видел только полноэкранный КОД, и
-    # `/load` на том же файле молчал про незаконные каналы.
+    print(rule("loaded · " + label))
     problems = list(parsed.problems) + asm_parser.lint(parsed, model)
     _out(diagnostics.render_parsed(parsed, dag, comp_cycles,
                                    orc.schedule.makespan, met.lower_bound,
@@ -1009,28 +901,26 @@ def _load_parsed(session: Session, parsed, label: str) -> bool:
 
 
 def cmd_load(session: Session, arg: str) -> None:
-    """Загрузить настоящий .s от lcc, разобрать и сравнить с точным поиском."""
+    """Load a real `.s` file from lcc, parse it, and compare against the oracle."""
     path = arg.strip()
     if not path:
-        print(paint("error", "укажите файл: /load examples/probe.s"))
+        print(paint("error", "specify a file: /load examples/probe.s"))
         return False
     try:
         parsed = asm_parser.parse_file(path)
     except OSError as e:
-        print(paint("error", f"не открыть файл: {e}"))
+        print(paint("error", f"cannot open file: {e}"))
         return False
     return _load_parsed(session, parsed, Path(path).name)
 
 
 def cmd_code(session: Session, arg: str) -> None:
-    """Буфер исходника: писать код прямо в инструменте и сразу его прогонять.
+    """Source buffer: write e2k assembly directly in NEX CLI and run it.
 
-    `/code` — состояние буфера (в полноэкранном режиме ещё и подсказка, что
-    редактор открывается выбором КОД или командой /code из строки),
-    `/code run` — прогнать буфер как .s,
-    `/code show` — буфер с номерами строк, `/code clear` — стереть,
-    `/code load <файл.s>` — прочитать файл в буфер,
-    `/code save <файл.s>` — записать буфер в файл.
+    `/code` — buffer status, `/code run` — schedule the buffer as `.s`,
+    `/code show` — print with line numbers, `/code clear` — clear buffer,
+    `/code load <file.s>` — load file into buffer,
+    `/code save <file.s>` — save buffer to file.
     """
     sub, _, rest = arg.strip().partition(" ")
     sub = sub.lower()
@@ -1038,75 +928,74 @@ def cmd_code(session: Session, arg: str) -> None:
 
     if sub in ("run", "go"):
         if not session.code_text.strip():
-            print(paint("error", "буфер КОДА пуст: открой редактор (режим КОД) "
-                                 "или /code load <файл.s>"))
+            print(paint("error", "CODE buffer is empty: open the editor (CODE mode) "
+                                 "or run /code load <file.s>"))
             return False
         try:
-            parsed = asm_parser.parse_asm(session.code_text, source="<буфер>")
+            parsed = asm_parser.parse_asm(session.code_text, source="<buffer>")
         except Exception as e:
-            print(paint("error", f"не разобрать: {e}"))
+            print(paint("error", f"failed to parse: {e}"))
             return False
-        return _load_parsed(session, parsed, "буфер")
+        return _load_parsed(session, parsed, "buffer")
 
     if sub == "show":
         if not session.code_text.strip():
-            print(Style.dim("  буфер КОДА пуст"))
+            print(Style.dim("  CODE buffer is empty"))
             return True
-        print(rule(f"буфер · {len(session.code_text.splitlines())} строк"))
+        print(rule(f"buffer · {len(session.code_text.splitlines())} lines"))
         for i, line in enumerate(session.code_text.splitlines(), 1):
             print(f"  {i:>3}  {line}")
         return True
 
     if sub == "clear":
         session.code_text = ""
-        print(paint("success", "буфер КОДА очищен"))
+        print(paint("success", "CODE buffer cleared"))
         return True
 
     if sub == "load":
         if not rest:
-            print(paint("error", "укажите файл: /code load examples/probe.s"))
+            print(paint("error", "specify a file: /code load examples/probe.s"))
             return False
         try:
             session.code_text = Path(rest).read_text(encoding="utf-8",
                                                       errors="replace")
         except OSError as e:
-            print(paint("error", f"не открыть файл: {e}"))
+            print(paint("error", f"cannot open file: {e}"))
             return False
         session.code_path = rest
         n = len(session.code_text.splitlines())
-        print(paint("success", f"в буфер КОДА: {rest} · {n} строк"
-                    + Style.dim("   прогнать: /code run")))
+        print(paint("success", f"loaded into CODE buffer: {rest} · {n} lines"
+                    + Style.dim("   run: /code run")))
         return True
 
     if sub == "save":
         if not session.code_text.strip():
-            print(paint("error", "буфер пуст — сохранять нечего"))
+            print(paint("error", "buffer is empty — nothing to save"))
             return False
         if not rest:
-            print(paint("error", "укажите файл: /code save my.s"))
+            print(paint("error", "specify a file: /code save my.s"))
             return False
         try:
             Path(rest).write_text(session.code_text, encoding="utf-8")
         except OSError as e:
-            print(paint("error", f"не записать файл: {e}"))
+            print(paint("error", f"cannot write file: {e}"))
             return False
         session.code_path = rest
-        print(paint("success", f"буфер КОДА → {rest}"
-                    + Style.dim("   Ctrl+S сохранит туда же")))
+        print(paint("success", f"CODE buffer → {rest}"
+                    + Style.dim("   Ctrl+S will save to this path")))
         return True
 
-    # голое /code и неизвестный подкомандный глагол — состояние буфера
     n = len(session.code_text.splitlines()) if session.code_text.strip() else 0
-    print(rule("код"))
+    print(rule("code"))
     if n:
-        print(f"  буфер: {n} "
-              + plural_ru(n, "строка", "строки", "строк")
-              + Style.dim("   прогнать: /code run   показать: /code show"))
+        unit = "line" if n == 1 else "lines"
+        print(f"  buffer: {n} {unit}"
+              + Style.dim("   run: /code run   show: /code show"))
     else:
-        print(Style.dim("  буфер пуст.  В полноэкранном режиме открой режим "
-                        "КОД (клавиша 4) — там редактор."))
-        print(Style.dim("  Или: /code load <файл.s> — прочитать готовый .s "
-                        "в буфер."))
+        print(Style.dim("  buffer is empty. In full-screen mode open CODE "
+                        "(key 4) for the editor."))
+        print(Style.dim("  Or: /code load <file.s> — load an existing .s "
+                        "into the buffer."))
     return True
 
 
@@ -1117,30 +1006,30 @@ def plural_ru(n: int, one: str, few: str, many: str) -> str:
 
 
 def cmd_analyze(session: Session, arg: str) -> None:
-    """Типизированный разбор участка: вердикт, причина, план. Без диалога."""
+    """Typed structured block analysis: verdict, root cause, plan (no chat)."""
     from .agent import analyst
 
-    print(rule("анализ · " + session.scenario))
-    print(Style.dim("  структурный разбор, без разговора"))
+    print(rule("analysis · " + session.scenario))
+    print(Style.dim("  structured analysis, no dialogue"))
     print()
     a = analyst.analyze(session)
     _out(analyst_view.render_analysis(a, session.scenario))
 
 
 def cmd_mode(session: Session, arg: str) -> None:
-    """Переключить фокус панели: ядро / разбор / агент."""
+    """Switch active pane focus: CORE / LAB / AGENT."""
     from .ui import panes
 
     a = arg.strip().lower()
     if a:
         dest = panes.resolve_focus(a)
         if dest is None:
-            print(paint("error", f"неизвестная панель {a!r}; доступны: work, lab, mind"))
+            print(paint("error", f"unknown pane {a!r}; available: work, lab, mind"))
             return False
         session.focus = dest
         session.mode = "chat" if dest == "mind" else "explore"
-        print(paint("success", f"панель: {panes.META[dest]['title'].lower()}"))
-    print(rule("панели"))
+        print(paint("success", f"pane: {panes.META[dest]['title'].lower()}"))
+    print(rule("panes"))
     current = getattr(session, "focus", "lab")
     for name in panes.PANES:
         meta = panes.META[name]
@@ -1152,7 +1041,7 @@ def cmd_mode(session: Session, arg: str) -> None:
 
 
 def cmd_ask(session: Session, arg: str) -> None:
-    """Задать вопрос агенту (в режиме agent то же самое — просто текст)."""
+    """Ask the agent a question (in AGENT mode you can just type plain text)."""
     q = arg.strip()
     if not q:
         _out(agent_view.render_intro())
@@ -1161,11 +1050,7 @@ def cmd_ask(session: Session, arg: str) -> None:
 
 
 def _ai_save(updates: dict[str, str | None]) -> None:
-    """Применить настройки API на эту сессию (только память, без диска).
-
-    Ничего никуда не пишется осознанно: закрыл терминал — настроек нет.
-    Чтение ранее записанного вручную `.env` при этом работает как раньше.
-    """
+    """Apply API settings for this session only (in-memory, nothing written to disk)."""
     for k, v in updates.items():
         if v is None:
             os.environ.pop(k, None)
@@ -1174,28 +1059,28 @@ def _ai_save(updates: dict[str, str | None]) -> None:
 
 
 def _ai_status() -> None:
-    """Показать состояние модели (единый финал `/ai` и `/key`)."""
+    """Display language model status (shared finale of `/ai` and `/key`)."""
     from .agent import status
 
-    print(rule("ЯЗЫКОВАЯ МОДЕЛЬ"))
+    print(rule("LANGUAGE MODEL"))
     ok, detail = status()
     _out(agent_view.render_status(ok, detail))
 
 
 def cmd_ai(session: Session, arg: str) -> None:
-    """Состояние языковой модели; с аргументом — настройка за один заход.
+    """Show language model status, or configure a provider in one command.
 
-    Формы (всё вступает в силу сразу и только на эту сессию, без записи):
-      /ai                                        состояние
-      /ai deepseek                               сменить провайдера
-      /ai deepseek key=sk-...                    + вставить ключ (всё сразу)
-      /ai deepseek key=sk-... model=deepseek-chat + зафиксировать модель
+    Forms (applied immediately for this session only, never written to disk):
+      /ai                                        status
+      /ai deepseek                               switch provider
+      /ai deepseek key=sk-...                    switch + set key
+      /ai deepseek key=sk-... model=deepseek-chat + pin model
       /ai grok|anthropic|glm|muse|openrouter key=... model=...
       /ai local-server url=http://localhost:11434/v1 model=...
-      /ai custom url=... model=... key=...       legacy: чужой сервер
-      /ai gigachat key=<id>:<secret>             Сбер (пара OAuth через двоеточие)
+      /ai custom url=... model=... key=...       legacy custom server
+      /ai gigachat key=<id>:<secret>             Sber OAuth pair
       /ai yandex folder=... key=...              Yandex Cloud
-    Отдельная вставка ключа без смены провайдера — `/key` (см. `cmd_key`).
+    To set a key without switching providers, use `/key`.
     """
     from .agent import llm
     from .agent import envfile
@@ -1207,13 +1092,10 @@ def cmd_ai(session: Session, arg: str) -> None:
 
     prov = llm.normalize_provider(toks[0])
     if prov is None or prov == "local":
-        print(paint("error", f"неизвестный провайдер {toks[0]!r}; "
-                             f"доступны: {', '.join(p for p in llm.PROVIDERS if p != 'local')}"))
+        print(paint("error", f"unknown provider {toks[0]!r}; "
+                             f"available: {', '.join(p for p in llm.PROVIDERS if p != 'local')}"))
         return False
     kv: dict[str, str] = {}
-    # Пробелы вокруг `=` терпим (`key = abc`): иначе ключ молча терялся,
-    # видели живьём. Внутри значений пробелов быть не может (ключи/URL/модели
-    # их не содержат), поэтому \S+ безопасен.
     for m in re.finditer(r"([A-Za-z_]+)\s*=\s*(\S+)", arg):
         kv[m.group(1).lower()] = m.group(2)
 
@@ -1228,39 +1110,33 @@ def cmd_ai(session: Session, arg: str) -> None:
 
 
 def _key_guide(prov: str) -> list[str]:
-    """Мини-гайд «что за ключ и где его взять» — вместо голой «форма:»."""
+    """Short guide explaining what an API key is and where to get one."""
     from .agent import llm
 
-    lines = ["Что такое ключ: строка с сайта провайдера — пропуск к ИИ.",
-             "Без него агент отвечает по уже посчитанным числам, это нормально."]
+    lines = ["An API key is a token from your provider granting access to the LLM.",
+             "Without one, the agent still answers offline from computed numbers."]
     hint = llm.key_source_hint(prov)
     if hint:
         lines.append("  " + hint)
     if prov == "gigachat":
-        lines.append("  вставить: /key <client_id> <client_secret>")
-        lines.append("  всё сразу: /ai gigachat key=<id>:<secret>")
+        lines.append("  set:        /key <client_id> <client_secret>")
+        lines.append("  all-in-one: /ai gigachat key=<id>:<secret>")
     else:
-        lines.append("  вставить: /key <ключ>")
-        lines.append(f"  всё сразу: /ai {prov} key=...")
+        lines.append("  set:        /key <key>")
+        lines.append(f"  all-in-one: /ai {prov} key=...")
     return lines
 
 
 def cmd_key(session: Session, arg: str) -> None:
-    """Сохранить API-ключ текущего провайдера: /key <ключ>.
-
-    Куда ляжет — решает провайдер (`llm.key_updates`): одиночный ключ — в его
-    переменную, GigaChat — парой `/key <id> <secret>`. Действует сразу и
-    только на эту сессию: никуда не сохраняется, в выводе ключ маскируется.
-    Всё сразу одной командой — тоже можно: `/ai <провайдер> key=...`.
-    """
+    """Set the API key for the current provider: /key <key> (session-only)."""
     from .agent import llm
     from .agent import envfile
 
     toks = arg.split()
     prov = llm.provider()
     if prov == "local":
-        print(paint("error", "сейчас выбран local (веса на этой машине) — ключ не нужен. "
-                             "Сначала /ai <провайдер>."))
+        print(paint("error", "local mode is active (on-device weights) — no key needed. "
+                             "Switch first with /ai <provider>."))
         return False
     try:
         updates = llm.key_updates(prov, toks)
@@ -1272,16 +1148,16 @@ def cmd_key(session: Session, arg: str) -> None:
     else:
         shown = f"{next(iter(updates))} {envfile.mask(toks[0])}"
     if prov == "yandex" and not llm.setting("YANDEX_FOLDER_ID", ""):
-        print(paint("warning", "ключ сохранён, но нужен ещё каталог: "
+        print(paint("warning", "key saved, but folder ID is still required: "
                                "/ai yandex folder=..."))
 
     _ai_save(updates)
-    print(paint("success", f"принято на эту сессию: {shown} (нигде не сохраняется)"))
+    print(paint("success", f"accepted for this session: {shown} (not saved to disk)"))
     _ai_status()
 
 
 def cmd_status(session: Session, arg: str) -> None:
-    print(rule("КОНТЕКСТ СЕССИИ"))
+    print(rule("SESSION CONTEXT"))
     _out(context.render_status(session))
     print()
     print("  " + logo.status_line(
@@ -1293,29 +1169,29 @@ def cmd_theme(session: Session, arg: str) -> None:
     available = theme.list_themes()
     if name:
         if name not in available:
-            print(paint("error", f"неизвестная тема {name!r}; доступны: "
+            print(paint("error", f"unknown theme {name!r}; available: "
                                  f"{', '.join(available)}"))
             return False
         render.apply_theme(name)
-        print(paint("success", f"тема переключена на {name}"))
-    print(rule("темы"))
+        print(paint("success", f"theme switched to {name}"))
+    print(rule("themes"))
     for t in available:
         th = theme.load_theme(t)
         mark = paint("work", "*") if th.name == render.THEME.name else " "
         print(f"  {mark} {paint('title', t)}")
         _out(wrap(Style.dim(th.description), render.W, "      "))
     print()
-    print(Style.dim(f"  Файлы тем: vliw/ui/themes/*.json  ·  переключить: /theme <имя>"))
+    print(Style.dim("  Theme files: vliw/ui/themes/*.json  ·  switch: /theme <name>"))
     print("  " + op_legend())
 
 
 def _hint() -> None:
-    print(Style.dim("  ядро: sum 8   ·   разбор: /run /compare /doctor"))
-    print(Style.dim("  агент: вопрос обычным языком   ·   /mode work|lab|mind"))
+    print(Style.dim("  core: sum 8   ·   lab: /run /compare /doctor"))
+    print(Style.dim("  agent: plain-English question   ·   /mode work|lab|mind"))
 
 
 def cmd_work(session: Session, arg: str) -> None:
-    """Справка интерпретатора: запись, ядра, слова."""
+    """Interpreter reference: expressions, kernels, and commands."""
     from .ui import interp_view
 
     _out(interp_view.render_welcome())
@@ -1323,12 +1199,12 @@ def cmd_work(session: Session, arg: str) -> None:
     rows = []
     for name, default, hint in kernel_help():
         rows.append([paint("work", name), str(default), hint])
-    for l in render.table(["ядро", "n", "что считает"], rows, aligns="><<"):
+    for l in render.table(["kernel", "n", "what it computes"], rows, aligns="><<"):
         print("  " + l)
 
 
 def cmd_clear(session: Session, arg: str) -> None:
-    """Очистить экран и вернуться к выбору режима."""
+    """Clear the screen and return to the mode picker."""
     if Style.enabled:
         sys.stdout.write("\033[3J\033[2J\033[H")
         sys.stdout.flush()
@@ -1348,114 +1224,93 @@ def cmd_asm(session: Session, arg: str) -> None:
     dag, model = session.dag_obj, session.model()
     which = "baseline" if arg.split()[:1] == ["baseline"] or arg.strip() in ("base", "b") else "oracle"
     sched = base.schedule if which == "baseline" else orc.schedule
-    print(rule(f"ШИРОКИЕ КОМАНДЫ ({which}) — как в .s-выводе lcc"))
+    print(rule(f"WIDE INSTRUCTIONS ({which}) — lcc .s format"))
     print("  " + _header(session))
     print("  " + op_legend())
     print()
     _out(schedule_view.render_asm(sched, dag, model))
     print()
     _out(wrap(Style.dim(
-        "Каждая { … } — одна ШИРОКАЯ команда e2k: всё внутри выполняется "
-        "одновременно, `,N` — номер канала (порта). `nop` — вынужденный простой. "
-        "Модель мы сняли ровно с такого .s (см. /probe), здесь — наш результат "
-        "обратно в том же виде."), render.W, "  "))
+        "Each { … } is one e2k wide instruction: everything inside executes "
+        "in parallel, `,N` is the channel (port), and `nop` is a stall. "
+        "The machine model was measured from this exact `.s` format (see /probe)."),
+        render.W, "  "))
 
 
 def cmd_probe(session: Session, arg: str) -> None:
     body = [
-        "Откуда взялась модель машины — и почему первая версия была неверна.",
+        "How the machine model was measured — and why v1 was wrong.",
         "",
-        "ПЕРВАЯ ПОПЫТКА (ошибочная). Скомпилировали .c с четырьмя делениями и",
-        "четырьмя умножениями, прочли готовые { … } из lcc -O3 -S. Все четыре",
-        "muls легли на канал ,0 подряд — и это прочли как «умножитель один,",
-        "держит порт 8 тактов». Ошибка: четырёх операций мало, чтобы жадный",
-        "планировщик lcc захотел разложить их по каналам. Листинг показывает,",
-        "что компилятор ЗАХОТЕЛ сделать, а не что железо МОЖЕТ.",
+        "FIRST ATTEMPT (wrong). Compiled a .c file with four divisions and four",
+        "multiplications, read { … } from lcc -O3 -S. All four muls landed on",
+        "channel ,0 — misread as 'one multiplier, 8-cycle occupancy'. Four ops",
+        "were simply too few for lcc to spread across channels. A listing shows",
+        "what the compiler CHOSE, not what the hardware CAN do.",
         "",
-        "КАК ПРОВЕРЯЕМ ТЕПЕРЬ — три независимых способа:",
-        "  1. Матрицу портов спрашиваем у АССЕМБЛЕРА: собираем крошечный .s с",
-        "     операцией в конкретном канале. Нельзя — получаем прямой отказ",
-        "     «'muls' cannot be encoded in ALC2». Это факт про кодировку железа.",
-        "  2. Латентность — ЦЕПОЧКОЙ зависимых операций: каждая ждёт предыдущую,",
-        "     и компилятор вынужден развести их ровно на латентность.",
-        "  3. Темп приёма — ПОТОКОМ из 8-16 независимых: шаг между выдачами.",
+        "HOW WE MEASURE NOW — three independent probes:",
+        "  1. Port matrix via the ASSEMBLER: assemble a tiny .s placing each op",
+        "     in each channel. Illegal slots fail with \"cannot be encoded in ALC2\".",
+        "  2. Latency via DEPENDENT CHAINS: each op waits on the previous one,",
+        "     forcing lcc to space bundles by the exact latency.",
+        "  3. Issue rate via INDEPENDENT STREAMS of 8–16 ops.",
         "",
-        "Что получилось:",
-        "  • sdivs — только канал ,5 (остальные пять ассемблер отверг);",
-        "    латентность 11, новое деление принимается раз в 2 такта;",
-        "  • muls/muld — каналы ,0 ,1 ,3 ,4; ЧЕТЫРЕ штуки влезают в одну широкую",
-        "    команду; латентность 4, поток идёт по одному в такт;",
-        "  • ldw/ldd — каналы ,0 ,2 ,3 ,5, латентность 5 (а не 2);",
-        "  • stw/std — всего два канала: ,2 и ,5;",
-        "  • adds/subs/ands/shls — все шесть каналов.",
+        "Measured results:",
+        "  • sdivs — channel ,5 ONLY (all other five rejected by assembler);",
+        "    latency 11, occupancy 2 cycles;",
+        "  • muls/muld — channels ,0 ,1 ,3 ,4 (four fit in one wide instruction);",
+        "    latency 4, fully pipelined (1/cycle);",
+        "  • ldw/ldd — channels ,0 ,2 ,3 ,5, latency 5;",
+        "  • stw/std — two channels only: ,2 and ,5;",
+        "  • adds/subs/ands/shls — all six channels.",
         "",
-        "Вывод: матрица возможностей у e2k действительно неравноправна, но",
-        "монополия ровно одна — делитель. Умножитель узким местом не является.",
+        "Takeaway: e2k ports are genuinely asymmetric, but there is only ONE",
+        "exclusive unit — the divider. Multiplication is not a bottleneck.",
     ]
-    _out(panel(body, title="ИЗМЕРЕНИЕ МОДЕЛИ И РАБОТА НАД ОШИБКАМИ", color="border"))
+    _out(panel(body, title="MODEL MEASUREMENT & CORRECTIONS", color="border"))
     print()
-    print(Style.dim("  Матрица целиком: /model.  Ошибочная версия для сравнения: "
+    print(Style.dim("  Full matrix: /model.  Disproven v1 profile for comparison: "
                     "/model e2k-v6-firstprobe"))
 
 
 # --------------------------------------------------------------------------
-# Обслуживание проекта: тонкая склейка с tools/ — те же проверки, что и
-# отдельными скриптами, но одним входом наравне с /run /doctor и т.д.
+# Project tooling wrappers (`tools/*.py`)
 # --------------------------------------------------------------------------
 
 
 def _run_tool(main_fn, toks: list[str]) -> bool:
-    """Вызвать main(argv) скрипта из tools/ в процессе и вернуть успех.
-
-    Скрипты tools/*.py самодостаточны и умеют запускаться отдельно
-    (`python tools/probe_matrix.py`); здесь та же функция main(), просто без
-    второго питона subprocess'ом — она уже принимает argv и возвращает код
-    возврата вместо sys.exit().
-
-    Ошибки СВОИХ данных ловим и пересказываем. Скрипт, запущенный отдельно,
-    имеет право упасть трассировкой — это нормально для инструмента
-    разработчика. Но здесь он вызван из интерактивной команды, и «Expecting
-    value: line 1 column 1 (char 0)» вместо «файл не в формате jsonl» —
-    это утечка внутренностей наружу: человек видит ошибку парсера JSON и не
-    понимает, что подсунул не тот файл.
-    """
+    """Invoke a `tools/*.py` main(argv) in-process with clean error messages."""
     import json
 
     try:
         return main_fn(toks) in (0, None)
     except json.JSONDecodeError as exc:
-        print(paint("error", f"файл не в формате jsonl (строка {exc.lineno}): "
-                             f"здесь ждут по одному JSON-объекту на строку"))
+        print(paint("error", f"file is not valid jsonl (line {exc.lineno}): "
+                             f"expected one JSON object per line"))
         return False
     except FileNotFoundError as exc:
-        print(paint("error", f"не открыть файл: {exc.filename}"))
+        print(paint("error", f"cannot open file: {exc.filename}"))
         return False
     except (KeyError, ValueError) as exc:
-        print(paint("error", f"файл разобран, но данные не те: {exc}"))
+        print(paint("error", f"file parsed, but data schema did not match: {exc}"))
         return False
 
 
 def cmd_verify(session: Session, arg: str) -> None:
-    """Живая переснятие матрицы портов у ассемблера e2k (tools/probe_matrix.py).
-
-    В отличие от /probe (рассказывает историю измерения) — реально гоняет
-    ассемблер прямо сейчас и сверяет с vliw/core/model.py. Без ассемблера в
-    PATH/E2K_AS не проваливается, а сообщает, что проверить нечем.
-    """
+    """Re-probe the e2k port matrix live with the assembler (`tools/probe_matrix.py`)."""
     from tools import probe_matrix
 
-    print(rule("verify · матрица портов у ассемблера"))
+    print(rule("verify · live assembler port matrix"))
     if not _run_tool(probe_matrix.main, arg.split()):
         return False
 
 
 def cmd_validate(session: Session, arg: str) -> None:
-    """Прогнать jsonl через настоящий Schedule.validate() (tools/validate_jsonl.py)."""
+    """Run jsonl records through real `Schedule.validate()` (`tools/validate_jsonl.py`)."""
     from tools import validate_jsonl
 
     toks = arg.split()
     if not any(not t.startswith("--") for t in toks):
-        print(paint("error", "укажите файл(ы): /validate dataset.jsonl"))
+        print(paint("error", "specify file(s): /validate dataset.jsonl"))
         return False
     print(rule("validate · " + " ".join(t for t in toks if not t.startswith("--"))))
     if not _run_tool(validate_jsonl.main, toks):
@@ -1463,16 +1318,16 @@ def cmd_validate(session: Session, arg: str) -> None:
 
 
 def cmd_report(session: Session, arg: str) -> None:
-    """Свести дампы прогонов (validate_kaggle.py --dump) в таблицу (tools/report_runs.py)."""
+    """Summarize benchmark dumps into a comparison table (`tools/report_runs.py`)."""
     from tools import report_runs
 
-    print(rule("report · сводка прогонов"))
+    print(rule("report · run summary"))
     if not _run_tool(report_runs.main, arg.split()):
         return False
 
 
 def _as_float(text: str) -> float:
-    """Число или 0.0 — без падения. Негодное значение ловит проверка ниже."""
+    """Parse float or return 0.0 without crashing; validated separately below."""
     try:
         return float(text)
     except (TypeError, ValueError):
@@ -1481,12 +1336,7 @@ def _as_float(text: str) -> float:
 
 @dataclass
 class _LearnedArgs:
-    """Разобранные аргументы /learned. Чистая функция — ради тестов.
-
-    Раньше парсинг жил внутри `cmd_learned`, и проверить его можно было
-    только подняв модель. А ломается он тихо: «--temperature 0.7» —
-    «0.7» не isdigit(), и его принимали за имя адаптера.
-    """
+    """Parsed arguments for `/learned` (pure helper for unit testing)."""
 
     name: str | None = None
     bench: int = 0
@@ -1496,27 +1346,18 @@ class _LearnedArgs:
     constrained: bool = False
     cab: bool = False
     data: str = "eval_wide.jsonl"
-    """Файл эвала для --bench. Появился, когда выяснилось, что на
-    `eval_wide.jsonl` жадная эвристика оптимальна на 298 графах из 300 — то
-    есть замер шёл на данных без задачи (docs/archive/CAB.md)."""
     bad_value: tuple[str, str] | None = None
-    """Числовой флаг с нечисловым значением: (флаг, что написали)."""
     raw: bool = False
     status: bool = False
     repair: bool = True
 
 
 def _parse_learned(toks: list[str]) -> _LearnedArgs:
-    """`--flag N` и `--flag=N` для всех флагов со значением."""
+    """Parse `--flag N` and `--flag=N` for `/learned`."""
     a = _LearnedArgs()
     a.raw = "--raw" in toks
     a.status = "--status" in toks
-    # Починка каналов включена по умолчанию: модель ошибается почти
-    # исключительно в канале, а такты ставит верно. --pure выключает и
-    # показывает сырой ответ модели как есть.
     a.repair = "--pure" not in toks
-    # Токены-значения флагов (`--temperature 0.7`) не должны попасть в имя
-    # адаптера: «0.7» не isdigit(), и прежняя проверка принимала его за имя.
     flag_values: set[int] = set()
     for i, t in enumerate(toks):
         if t == "--bench":
@@ -1530,9 +1371,6 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
         elif t.startswith("--best-of="):
             a.best_of = int(t.split("=", 1)[1] or 4)
         elif t == "--temperature":
-            # float() здесь звался напрямую и на «--temperature ой» ронял
-            # команду трассировкой ValueError. Значение проверяется ниже и
-            # сообщается по-человечески.
             a.temperature = _as_float(toks[i + 1]) if i + 1 < len(toks) else 0.0
             flag_values.add(i + 1)
         elif t.startswith("--temperature="):
@@ -1556,9 +1394,6 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
                    if not t.startswith("--") and not t.isdigit()
                    and i not in flag_values), None)
 
-    # Нечисловое значение у числового флага НЕ проглатываем молча. Прежде
-    # «--bench 5o» тихо превращалось в «--bench 15», и человек ждал восемь
-    # минут вместо двух, не понимая, почему примеров больше, чем он просил.
     for i, t in enumerate(toks):
         if t in ("--bench", "--best-of", "--seed") and i + 1 < len(toks):
             nxt = toks[i + 1]
@@ -1575,18 +1410,14 @@ def _parse_learned(toks: list[str]) -> _LearnedArgs:
 
 
 def cmd_learned(session: Session, arg: str) -> None:
-    """Запустить обученный адаптер на текущем графе — локально, без Kaggle.
-
-    Без аргументов и без готовых весов/зависимостей — печатает отчёт о том,
-    чего не хватает, и не падает: это самый частый случай на чужой машине.
-    """
+    """Run a trained LoRA adapter locally on the current graph (no Kaggle needed)."""
     from .learned import runtime
     from .ui import learned_view
 
     a = _parse_learned(arg.split())
     if a.bad_value:
         flag, value = a.bad_value
-        print(paint("error", f"{flag} ждёт число, а получил {value!r}"))
+        print(paint("error", f"{flag} expects a number, got {value!r}"))
         return False
     want_raw, want_status, want_repair = a.raw, a.status, a.repair
     n_bench, best_of_n, temperature, seed = a.bench, a.best_of, a.temperature, a.seed
@@ -1594,7 +1425,7 @@ def cmd_learned(session: Session, arg: str) -> None:
 
     ready, lines = runtime.status(name)
     if want_status or not ready:
-        print(rule("обученный планировщик"))
+        print(rule("learned scheduler"))
         _out(learned_view.render_status(ready, lines))
         return None if want_status else False
 
@@ -1602,7 +1433,7 @@ def cmd_learned(session: Session, arg: str) -> None:
 
     adapter = runtime.resolve_adapter(name)
     if adapter is None:
-        print(paint("error", f"адаптер {name!r} не найден; доступны: "
+        print(paint("error", f"adapter {name!r} not found; available: "
                              + ", ".join(a.name for a in runtime.find_adapters())))
         return False
 
@@ -1612,15 +1443,13 @@ def cmd_learned(session: Session, arg: str) -> None:
     if n_bench:
         data = Path(a.data)
         if not data.exists():
-            print(paint("error", f"нет файла эвала {data} — замер не на чем гонять"))
+            print(paint("error", f"eval file not found: {data}"))
             return False
         if best_of_n and temperature <= 0:
             print(paint("error",
-                        "best-of имеет смысл только при --temperature > 0: "
-                        "при жадной генерации все N ответов одинаковы"))
+                        "best-of only makes sense with --temperature > 0: "
+                        "greedy decoding produces identical samples"))
             return False
-        # Температура без --best-of — тоже законный замер: один сэмплированный
-        # ответ. Классифицируется как best-of-1.
         if temperature > 0 and not best_of_n:
             best_of_n = 1
         bo = None
@@ -1629,17 +1458,17 @@ def cmd_learned(session: Session, arg: str) -> None:
 
             bo = BestOf(n=best_of_n, temperature=temperature, seed=seed)
         gens = n_bench * max(1, best_of_n)
-        print(rule(f"замер · {adapter.name} · {n_bench} примеров"
+        print(rule(f"bench · {adapter.name} · {n_bench} samples"
                    + (f" · best-of {best_of_n} · t={temperature:g}" if bo else "")))
-        print(Style.dim(f"  локально, без Kaggle. Порядка 30 с на генерацию — "
-                        f"ожидаемо {gens * 30 // 60} мин."))
+        print(Style.dim(f"  local run, no Kaggle. ~30 s per generation — "
+                        f"est. {gens * 30 // 60} min."))
         print()
         sys.stdout.flush()
         from .learned import bench as _bench
 
         def _tick(k, row):
-            mark = paint("success", "ok  ") if row.kind == "валидно" else paint("error", "….  ")
-            extra = (f"сэмплы {row.valid_samples}/{len(row.samples)}  "
+            mark = paint("success", "ok  ") if row.kind == "valid" else paint("error", "….  ")
+            extra = (f"samples {row.valid_samples}/{len(row.samples)}  "
                      if row.samples else "")
             print(f"  [{k:>3}/{n_bench}] {mark} n={row.n:<3} {row.kind:<9} {extra}"
                   + Style.dim(row.first_error[:46]))
@@ -1651,14 +1480,14 @@ def cmd_learned(session: Session, arg: str) -> None:
                                        constrained=a.constrained, cab=a.cab),
                                    machine, _tick, best_of=bo)
         except (RuntimeError, OSError, ImportError) as e:
-            print(paint("error", f"замер прерван: {e}"))
+            print(paint("error", f"benchmark aborted: {e}"))
             return False
         print()
         _out(learned_view.render_bench(res, adapter.name))
         return None
 
     dag = session.dag_obj
-    print(rule(f"обученный планировщик · {adapter.name} · {session.scenario}"))
+    print(rule(f"learned scheduler · {adapter.name} · {session.scenario}"))
     print("  " + _header(session))
     print()
     sys.stdout.flush()
@@ -1667,31 +1496,23 @@ def cmd_learned(session: Session, arg: str) -> None:
                            constrained=a.constrained, cab=a.cab)
     if a.constrained:
         print("  " + Style.dim(
-            "ограниченная генерация: формат и канал заданы грамматикой, "
-            "такты по-прежнему выбирает модель"))
+            "constrained decoding: format and channels enforced by grammar, "
+            "cycles still chosen by the model"))
         print()
     if a.cab:
         print("  " + Style.dim(
-            "портфель CAB: из одного ответа строится несколько законных "
-            "расписаний, лучшее выбирает точный критерий"))
+            "CAB portfolio: builds multiple valid schedules from one response "
+            "and selects the shortest"))
         print()
     renderer = learned_view.PlainRenderer()
     res = None
     failed = None
 
-    # Поток событий, а не один блокирующий вызов. Здесь разницы почти не
-    # видно — печать та же, — но поток один и тот же для всех интерфейсов:
-    # полноэкранный заливает по нему решётку, пока модель пишет. Заодно
-    # прерывание теперь доходит до модели: закрытие генератора убивает
-    # подпроцесс llama.cpp, а не оставляет его считать в одиночестве.
     sink = session.event_sink
     events = core.stream(sch, dag, machine)
     try:
         for ev in events:
             if sink is not None:
-                # Показывает тот, кто поставил сток: у него решётка, и он
-                # умеет то, чего печать не умеет. Дублировать поток ещё и в
-                # stdout нельзя — мост покажет его вторым экземпляром в конце.
                 sink(ev)
             else:
                 for line in renderer.feed(ev):
@@ -1708,11 +1529,9 @@ def cmd_learned(session: Session, arg: str) -> None:
 
     if res is None:
         print(paint("error",
-                    f"не удалось запустить модель: {failed or 'нет ответа'}"))
+                    f"failed to run model: {failed or 'no response'}"))
         return False
     print()
-    # Сравниваем только с тем, что уже посчитано: гонять точный поиск ради
-    # сравнения с заведомо незаконным расписанием — впустую.
     base = orc = None
     if res.search_stats.get("valid"):
         base, orc, _ = session.results()
@@ -1723,22 +1542,10 @@ def cmd_learned(session: Session, arg: str) -> None:
 
 
 def cmd_kaggle(session: Session, arg: str) -> None:
-    """Залить/забрать/проверить Kaggle — тонкая обёртка над tools/kaggle_push.sh.
-
-    Логика (учётные данные, сборка build/kaggle/, вызовы kaggle CLI) целиком
-    в самом скрипте — здесь только один вход и передача режима: step0 (по
-    умолчанию) | run1 | all | pull | status.
-    """
+    """Push/pull/check Kaggle runs — thin wrapper over `tools/kaggle_push.sh`."""
     mode = (arg.split() or ["step0"])[0]
     script = Path(__file__).resolve().parent.parent / "tools" / "kaggle_push.sh"
     print(rule(f"kaggle · {mode}"))
-    # Вывод подпроцесса ПЕРЕПЕЧАТЫВАЕТСЯ через print(), а не наследует stdout.
-    # В betaNEX панель показывает то, что bridge.run_command перехватил через
-    # contextlib.redirect_stdout — это подмена на уровне Python. Подпроцесс с
-    # наследованным дескриптором пишет мимо неё, прямо в терминал ПОД
-    # интерфейсом: вывод пропадает из панели и портит отрисовку. Построчное
-    # чтение заодно сохраняет живой поток — заливка идёт минутами, и ждать
-    # её молчащим окном нельзя.
     proc = subprocess.Popen([str(script), mode], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1)
     for line in proc.stdout:
@@ -1749,61 +1556,57 @@ def cmd_kaggle(session: Session, arg: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Реестр команд
-#
-# Команды сгруппированы по занятию («расписание», «машина», …): так читается
-# и /help, и палитра «/». Порядок в списке = порядок внутри группы, порядок
-# GROUPS = порядок групп в справке.
+# Command registry
 # --------------------------------------------------------------------------
 
 COMMANDS = [
-    # --- расписание -------------------------------------------------------
-    {"group": "sched", "name": "run", "arg": "<сценарий>", "help": "прогнать сценарий: расписание оракула + вердикт", "fn": cmd_run},
-    {"group": "sched", "name": "compare", "arg": "[сценарий] [--model]", "help": "baseline и oracle бок о бок", "fn": cmd_compare},
-    {"group": "sched", "name": "tiny", "arg": "[сценарий]", "help": "крошки (tiny priority+defer+beam) против baseline и oracle", "fn": cmd_tiny},
-    {"group": "sched", "name": "play", "arg": "[base|oracle]", "help": "воспроизвести расписание такт за тактом", "fn": cmd_play},
-    {"group": "sched", "name": "asm", "arg": "[base|oracle]", "help": "расписание как широкие команды e2k { … }", "fn": cmd_asm},
-    {"group": "sched", "name": "explain", "arg": "<такт>", "help": "почему в этом такте выбрали именно это", "fn": cmd_explain},
-    # --- граф · диагноз -----------------------------------------------------
-    {"group": "graph", "name": "path", "arg": "", "help": "граф с подсветкой критического пути", "fn": cmd_path},
-    {"group": "graph", "name": "bounds", "arg": "", "help": "две нижние границы makespan", "fn": cmd_bounds},
-    {"group": "graph", "name": "doctor", "arg": "[base|oracle]", "help": "диагностика: где теряются такты и почему", "fn": cmd_doctor},
-    {"group": "graph", "name": "analyze", "arg": "", "help": "типизированный разбор: вердикт, причина, план", "fn": cmd_analyze},
-    # --- модель машины ------------------------------------------------------
-    {"group": "machine", "name": "model", "arg": "[профиль]", "help": "матрица возможностей портов; смена профиля", "fn": cmd_model},
-    {"group": "machine", "name": "probe", "arg": "", "help": "как probe.c измерил модель машины e2k", "fn": cmd_probe},
-    {"group": "machine", "name": "isa", "arg": "[--out ФАЙЛ]", "help": "справочник системы команд: каналы, латентности, темп приёма и чем измерено", "fn": cmd_isa},
-    {"group": "machine", "name": "verify", "arg": "[--show]", "help": "переснять матрицу портов у ассемблера e2k прямо сейчас", "fn": cmd_verify},
-    # --- прогоны ------------------------------------------------------------
-    {"group": "runs", "name": "scenarios", "arg": "", "help": "список доступных сценариев", "fn": cmd_scenarios},
-    {"group": "runs", "name": "random", "arg": "[N] [seed]", "help": "случайный граф на N инструкций и прогон", "fn": cmd_random},
-    {"group": "runs", "name": "all", "arg": "", "help": "сводная таблица по всем сценариям", "fn": cmd_all},
-    {"group": "runs", "name": "sweep", "arg": "[--seeds N]", "help": "массовый прогон по случайным графам", "fn": cmd_sweep},
-    {"group": "runs", "name": "selfcheck", "arg": "[--seeds N]", "help": "сверить оракул независимым перебором", "fn": cmd_selfcheck},
-    {"group": "runs", "name": "hard", "arg": "[--survey N] [--harvest N] [--jobs N]", "help": "есть ли на графе что выигрывать у эвристики; где брать трудные графы", "fn": cmd_hard},
-    # --- агент · обучение ---------------------------------------------------
-    {"group": "agent", "name": "ask", "arg": "<вопрос>", "help": "спросить агента", "fn": cmd_ask},
-    {"group": "agent", "name": "ai", "arg": "[провайдер] [key=…] [model=…]", "help": "состояние модели; /ai <провайдер> key=… — настроить за раз", "fn": cmd_ai},
-    {"group": "agent", "name": "key", "arg": "<ключ>", "help": "вставить API-ключ на эту сессию (нигде не сохраняется)", "fn": cmd_key},
-    {"group": "agent", "name": "learned", "arg": "[--cab] [--constrained] [--bench N] [--data ФАЙЛ] [--pure]", "help": "прогнать обученную модель на текущем графе (локально)", "fn": cmd_learned},
-    {"group": "agent", "name": "agent", "arg": "", "help": "куда встраивается обученная модель", "fn": cmd_agent},
-    # --- данные ---------------------------------------------------------------
-    {"group": "data", "name": "code", "arg": "[run|show|save|load|clear]", "help": "буфер исходника e2k: редактор КОД (клавиша 4), прогон, файлы", "fn": cmd_code},
-    {"group": "data", "name": "load", "arg": "<файл.s>", "help": "загрузить настоящий .s от lcc и разобрать", "fn": cmd_load},
-    {"group": "data", "name": "validate", "arg": "<файл.jsonl…>", "help": "прогнать jsonl через настоящий Schedule.validate()", "fn": cmd_validate},
-    {"group": "data", "name": "report", "arg": "[--dir …]", "help": "свести дампы прогонов в таблицу с дельтами", "fn": cmd_report},
-    {"group": "data", "name": "kaggle", "arg": "[step0|run1|all|pull|status]", "help": "залить/забрать/проверить Kaggle", "fn": cmd_kaggle},
-    # --- сессия ----------------------------------------------------------------
-    {"group": "session", "name": "status", "arg": "", "help": "контекст сессии: сценарий, машина, результат", "fn": cmd_status},
-    {"group": "session", "name": "theme", "arg": "[имя]", "help": "темы оформления; переключить тему", "fn": cmd_theme},
-    {"group": "session", "name": "work", "arg": "", "help": "ядра интерпретатора и синтаксис записи", "fn": cmd_work},
-    {"group": "session", "name": "docs", "arg": "", "help": "что это за прототип и зачем", "fn": cmd_docs},
-    {"group": "session", "name": "mode", "arg": "[work|lab|mind]", "help": "фокус панели: ядро / разбор / агент", "fn": cmd_mode},
-    {"group": "session", "name": "clear", "arg": "", "help": "очистить экран и вернуться к выбору режима", "fn": cmd_clear},
-    {"group": "session", "name": "help", "arg": "", "help": "список команд; «help <команда>» — подробнее", "fn": cmd_help},
+    # --- schedule ---------------------------------------------------------
+    {"group": "sched", "name": "run", "arg": "<scenario>", "help": "run scenario: oracle schedule + verdict", "fn": cmd_run},
+    {"group": "sched", "name": "compare", "arg": "[scenario] [--model]", "help": "baseline vs oracle side by side", "fn": cmd_compare},
+    {"group": "sched", "name": "tiny", "arg": "[scenario]", "help": "TINY AI (priority+defer+beam) vs baseline and oracle", "fn": cmd_tiny},
+    {"group": "sched", "name": "play", "arg": "[base|oracle]", "help": "step through the schedule cycle by cycle", "fn": cmd_play},
+    {"group": "sched", "name": "asm", "arg": "[base|oracle]", "help": "render schedule as e2k wide instructions { … }", "fn": cmd_asm},
+    {"group": "sched", "name": "explain", "arg": "<cycle>", "help": "explain why these ops were issued in a given cycle", "fn": cmd_explain},
+    # --- graph · diagnostics ----------------------------------------------
+    {"group": "graph", "name": "path", "arg": "", "help": "dependency graph with critical path highlighted", "fn": cmd_path},
+    {"group": "graph", "name": "bounds", "arg": "", "help": "two theoretical lower bounds on makespan", "fn": cmd_bounds},
+    {"group": "graph", "name": "doctor", "arg": "[base|oracle]", "help": "diagnostics: where cycles are lost and why", "fn": cmd_doctor},
+    {"group": "graph", "name": "analyze", "arg": "", "help": "typed structured analysis: verdict, root cause, plan", "fn": cmd_analyze},
+    # --- machine model ----------------------------------------------------
+    {"group": "machine", "name": "model", "arg": "[profile]", "help": "port capability matrix; switch machine profile", "fn": cmd_model},
+    {"group": "machine", "name": "probe", "arg": "", "help": "how probe.c measured the e2k machine model", "fn": cmd_probe},
+    {"group": "machine", "name": "isa", "arg": "[--out FILE]", "help": "ISA reference: channels, latencies, peak rate, provenance", "fn": cmd_isa},
+    {"group": "machine", "name": "verify", "arg": "[--show]", "help": "re-probe the port matrix live with the e2k assembler", "fn": cmd_verify},
+    # --- benchmarks -------------------------------------------------------
+    {"group": "runs", "name": "scenarios", "arg": "", "help": "list built-in scenarios", "fn": cmd_scenarios},
+    {"group": "runs", "name": "random", "arg": "[N] [seed]", "help": "generate a random N-instruction DAG and run it", "fn": cmd_random},
+    {"group": "runs", "name": "all", "arg": "", "help": "summary table across all built-in scenarios", "fn": cmd_all},
+    {"group": "runs", "name": "sweep", "arg": "[--seeds N]", "help": "batch sweep across random graphs and profiles", "fn": cmd_sweep},
+    {"group": "runs", "name": "selfcheck", "arg": "[--seeds N]", "help": "verify oracle against independent exhaustive search", "fn": cmd_selfcheck},
+    {"group": "runs", "name": "hard", "arg": "[--survey N] [--harvest N] [--jobs N]", "help": "check greedy-vs-oracle gap; harvest hard graphs", "fn": cmd_hard},
+    # --- agent · learned --------------------------------------------------
+    {"group": "agent", "name": "ask", "arg": "<question>", "help": "ask the LLM agent a question", "fn": cmd_ask},
+    {"group": "agent", "name": "ai", "arg": "[provider] [key=…] [model=…]", "help": "LLM status; /ai <provider> key=… to configure in one step", "fn": cmd_ai},
+    {"group": "agent", "name": "key", "arg": "<key>", "help": "set API key for this session (never stored on disk)", "fn": cmd_key},
+    {"group": "agent", "name": "learned", "arg": "[--cab] [--constrained] [--bench N] [--data FILE] [--pure]", "help": "run trained LoRA model on the current graph (locally)", "fn": cmd_learned},
+    {"group": "agent", "name": "agent", "arg": "", "help": "where a learned scheduler plugs in", "fn": cmd_agent},
+    # --- data -------------------------------------------------------------
+    {"group": "data", "name": "code", "arg": "[run|show|save|load|clear]", "help": "e2k assembly buffer: CODE editor (key 4), run, files", "fn": cmd_code},
+    {"group": "data", "name": "load", "arg": "<file.s>", "help": "load a real .s file from lcc and analyze it", "fn": cmd_load},
+    {"group": "data", "name": "validate", "arg": "<file.jsonl…>", "help": "validate jsonl schedules via Schedule.validate()", "fn": cmd_validate},
+    {"group": "data", "name": "report", "arg": "[--dir …]", "help": "aggregate run dumps into a delta comparison table", "fn": cmd_report},
+    {"group": "data", "name": "kaggle", "arg": "[step0|run1|all|pull|status]", "help": "push/pull/check Kaggle training runs", "fn": cmd_kaggle},
+    # --- session ----------------------------------------------------------
+    {"group": "session", "name": "status", "arg": "", "help": "session context: scenario, machine, results", "fn": cmd_status},
+    {"group": "session", "name": "theme", "arg": "[name]", "help": "list or switch color themes", "fn": cmd_theme},
+    {"group": "session", "name": "work", "arg": "", "help": "interpreter kernels and expression syntax", "fn": cmd_work},
+    {"group": "session", "name": "docs", "arg": "", "help": "brief overview of NEX CLI", "fn": cmd_docs},
+    {"group": "session", "name": "mode", "arg": "[work|lab|mind]", "help": "switch pane focus: CORE / LAB / AGENT", "fn": cmd_mode},
+    {"group": "session", "name": "clear", "arg": "", "help": "clear screen and return to mode picker", "fn": cmd_clear},
+    {"group": "session", "name": "help", "arg": "", "help": "list commands; 'help <command>' for details", "fn": cmd_help},
 ]
 
-#: Порядок групп в справке и палитре — единый, из ui.slash (см. комментарий там).
+#: Unified group order shared by help and the slash palette.
 GROUPS = slash.GROUPS
 
 _ALIASES = {"ls": "scenarios", "cmp": "compare", "r": "run", "cls": "clear"}
@@ -1819,24 +1622,23 @@ def resolve(name: str):
 
 
 def suggest(name: str) -> list[str]:
-    """Похожие имена команд — для «может, вы имели в виду /x?» при опечатке."""
+    """Suggest close command names on typos."""
     names = [c["name"] for c in COMMANDS] + list(_ALIASES)
     return difflib.get_close_matches(name, names, n=3, cutoff=0.5)
 
 
 # --------------------------------------------------------------------------
-# readline: Tab-дополнение и персистентная история (см. импорт в шапке файла)
+# readline: Tab completion and persistent history
 # --------------------------------------------------------------------------
 
 HISTORY_FILE = Path.home() / ".vliw_history"
 HISTORY_SIZE = 1000
 
-# Что дополнять во втором слове — по имени команды в первом.
 _ARG_COMPLETIONS = {
     "run": lambda: list(SCENARIOS),
     "compare": lambda: list(SCENARIOS),
     "tiny": lambda: list(SCENARIOS),
-    "random": lambda: list(SCENARIOS),  # необязательно, но не мешает
+    "random": lambda: list(SCENARIOS),
     "model": lambda: list(PROFILES) + ["measured", "naive"],
     "play": lambda: ["baseline", "oracle"],
     "asm": lambda: ["baseline", "oracle"],
@@ -1847,7 +1649,7 @@ _ARG_COMPLETIONS = {
 
 
 def _learned_adapters():
-    """Имена найденных адаптеров — для Tab-дополнения. Молча пусто, если нет."""
+    """Discovered adapter names for Tab completion (empty if unavailable)."""
     try:
         from .learned import runtime
 
@@ -1857,11 +1659,7 @@ def _learned_adapters():
 
 
 def _completer(text: str, state: int):
-    """Tab-дополнение: первое слово — имя команды, второе — по контексту.
-
-    readline вызывает эту функцию с растущим `state` (0, 1, 2, …) и ждёт
-    поочерёдно все подходящие варианты, затем `None` как сигнал «дальше нет».
-    """
+    """Readline Tab completer: command names and context-aware arguments."""
     try:
         buf = readline.get_line_buffer()
         if " " not in buf:
@@ -1876,16 +1674,14 @@ def _completer(text: str, state: int):
 
 
 def _setup_readline() -> None:
-    """Включить Tab-дополнение и загрузить историю прошлых сессий."""
+    """Enable Tab completion and load command history."""
     if not HAS_READLINE:
         return
     readline.set_completer(_completer)
-    # Только пробел разделяет «слова» — так весь токен «/compare» дополняется
-    # целиком, а не рвётся на «/» и «compare» (у «/» иначе особый смысл).
     readline.set_completer_delims(" \t\n")
     try:
         readline.parse_and_bind("tab: complete")
-    except Exception:  # pragma: no cover - экзотические сборки readline/libedit
+    except Exception:  # pragma: no cover - exotic readline/libedit builds
         pass
     readline.set_history_length(HISTORY_SIZE)
     readline.clear_history()
@@ -1901,11 +1697,11 @@ def _save_history() -> None:
     try:
         readline.write_history_file(HISTORY_FILE)
     except OSError:
-        pass  # история — приятная мелочь, не повод падать
+        pass
 
 
 def _parse_opts(arg: str, defaults: dict) -> dict:
-    """Разобрать «--key value» из строки аргумента, дополнив значениями по умолчанию."""
+    """Parse `--key value` and `--key=value` options with defaults."""
     out = dict(defaults)
     toks = arg.split()
     i = 0
@@ -1923,14 +1719,10 @@ def _parse_opts(arg: str, defaults: dict) -> dict:
     return out
 
 
-# В полноэкранном режиме экраном владеет Textual, поэтому пошаговая пауза
-# через input() там невозможна: /play печатает расписание целиком, а листает
-# его пользователь прокруткой (PgUp/PgDn).
+# True while Textual owns the terminal (disables interactive input() pauses).
 IN_TUI = False
 
-# Идёт ли построчный интерактивный цикл. Нужен командам, которые спрашивают
-# что-то у пользователя (`/clear` показывает экран выбора приложения): в разовом
-# запуске из скрипта спрашивать нельзя — там никто не отвечает.
+# True inside the plain-mode REPL (enables interactive prompts like `/clear`).
 IN_REPL = False
 
 
@@ -1952,7 +1744,7 @@ def _pause(session: Session) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Диспетчер и интерактивный цикл
+# Dispatcher and interactive loop
 # --------------------------------------------------------------------------
 
 
@@ -1963,7 +1755,7 @@ def _run_dag(session: Session, dag) -> bool:
 
 
 def _apply_mode(session: Session, name: str | None) -> None:
-    """Выставить focus/mode по алиасу панели."""
+    """Set focus/mode from a pane alias."""
     from .ui import panes
 
     dest = panes.resolve_focus(name or "lab") or "lab"
@@ -1979,7 +1771,7 @@ def _exec_work(session: Session, s: str) -> bool:
     try:
         result = session.workspace().exec(s)
     except InterpError as e:
-        print(paint("error", f"интерпретатор: {e}"))
+        print(paint("error", f"interpreter: {e}"))
         return False
     if result.kind not in ("reset", "empty") and not session.workspace().empty():
         session.set_dag(session.workspace().snapshot(), "interp")
@@ -1993,7 +1785,7 @@ def _exec_work(session: Session, s: str) -> bool:
 
 
 def handle_input(session: Session, raw: str) -> bool:
-    """Команда CLI, строка интерпретатора, сценарий или вопрос агенту."""
+    """Route a CLI command, interpreter expression, scenario name, or agent question."""
     s = raw.strip()
     if not s:
         return True
@@ -2021,39 +1813,32 @@ def handle_input(session: Session, raw: str) -> bool:
             agent_view.stream_turn(session.agent(), s)
             return True
         except Exception as e:
-            print(paint("error", f"агент: {e}"))
+            print(paint("error", f"agent: {e}"))
             return False
 
     if " " not in s and len(name) <= 20:
         return dispatch(session, name, arg)
-    print(Style.dim("  это не команда.  /help  ·  a=load  ·  вопрос обычным языком"))
+    print(Style.dim("  not a command.  /help  ·  a=load  ·  plain-English question"))
     return False
 
 
 def dispatch(session: Session, name: str, arg: str) -> bool:
-    """Выполнить команду. Возвращает False на нераспознанном имени — этим
-
-    пользуется одноразовый вызов из `main()`, чтобы вернуть код возврата 1
-    (а не молча выйти с 0: скрипт, вызвавший опечатанную команду, должен это
-    увидеть по `$?`, а не только по тексту в stdout).
-    """
+    """Execute a command. Returns False on unknown command or command failure."""
     name = name.lstrip("/").lower()
-    if not name:  # голое «/» (или пусто) — то же самое, что /help
+    if not name:  # bare '/' -> /help
         cmd_help(session, "")
         return True
     cmd = resolve(name)
     if cmd is None:
-        msg = paint("error", f"неизвестная команда /{name}.")
+        msg = paint("error", f"unknown command /{name}.")
         hints = suggest(name)
         if hints:
-            msg += Style.dim("  Может, вы имели в виду: ") + ", ".join(
+            msg += Style.dim("  Did you mean: ") + ", ".join(
                 paint("accent", "/" + h) for h in hints) + Style.dim("?")
         else:
-            msg += Style.dim(" Наберите /help — список команд.")
+            msg += Style.dim(" Type /help for a list of commands.")
         print(msg)
         return False
-    # Команда может сообщить о неудаче, вернув False — тогда разовый
-    # вызов завершится кодом 1, и скрипт это увидит по $?.
     return cmd["fn"](session, arg) is not False
 
 
@@ -2061,13 +1846,13 @@ def _prompt(session: Session) -> str:
     _ = session
     return paint("prompt", "nex ") + Style.dim("> ")
 
-# Маркеры «bracketed paste»: некоторые терминалы оборачивают вставленный текст
-# в ESC[200~ … ESC[201~. input() вернёт их как обычные символы — вырезаем.
+
+# Bracketed paste markers emitted by some terminals around pasted text.
 _PASTE_MARK = re.compile("\x1b\\[20[01]~")
 
 
 def _fullscreen_ok() -> bool:
-    """Поднимается ли полноэкранный интерфейс (Textual)."""
+    """Whether the full-screen Textual interface can start."""
     try:
         from . import tui as nextui
 
@@ -2077,14 +1862,7 @@ def _fullscreen_ok() -> bool:
 
 
 def run_tui(session: Session, pick_app: bool | None = None) -> int:
-    """Полноэкранный интерфейс. При проблеме — экран установки, не «урезанный» цикл.
-
-    Textual (три полноценных экрана) → `ui/setup_screen`: причина сбоя и
-    команды установки/починки. Построчный режим остаётся только явным
-    выбором пользователя — `--plain`. Прежний однооконный экран на curses
-    удалён: Textual покрывает всё, что он умел, а держать третий интерфейс
-    означало трижды править каждую правку.
-    """
+    """Launch the full-screen Textual UI, falling back to `setup_screen` on failure."""
     global IN_TUI
 
     def execute(line: str) -> None:
@@ -2101,19 +1879,13 @@ def run_tui(session: Session, pick_app: bool | None = None) -> int:
         if nextui.available():
             return nextui.run(session, execute, COMMANDS, start_mode=start_mode)
     except Exception as e:
-        # Полноэкранный режим упал уже после проверки available(). Молча
-        # уходить в построчный цикл нельзя: пользователь решит, что «так и
-        # задумано». Показываем причину и команды установки/починки, а
-        # построчный режим остаётся доступен явно — `--plain`.
-        print(paint("warning", f"полноэкранный режим недоступен ({e})"))
+        print(paint("warning", f"full-screen mode unavailable ({e})"))
         from .ui import setup_screen
 
-        return setup_screen.explain(extra=f"сбой запуска Textual: {e}")
+        return setup_screen.explain(extra=f"Textual startup failed: {e}")
     finally:
         IN_TUI = False
 
-    # available() успел стать False между проверкой и вызовом (гонка с
-    # терминалом) — показываем тот же экран установки.
     from .ui import setup_screen
 
     return setup_screen.explain()
@@ -2122,10 +1894,10 @@ def run_tui(session: Session, pick_app: bool | None = None) -> int:
 def repl(session: Session) -> int:
     _setup_readline()
     print()
-    hint = "ядро · разбор · агент.  /run slotclash  ·  sum 8  ·  вопрос. "
+    hint = "core · lab · agent.  /run slotclash  ·  sum 8  ·  ask a question. "
     if HAS_READLINE:
-        hint += "Tab — дополнить, ↑/↓ — история. "
-    hint += "/exit — выход."
+        hint += "Tab — complete, ↑/↓ — history. "
+    hint += "/exit — quit."
     print(Style.dim(hint))
     global IN_REPL
     IN_REPL = True
@@ -2140,11 +1912,11 @@ def _repl_loop(session: Session) -> int:
     while True:
         try:
             line = input("\n" + _prompt(session))
-        except EOFError:              # конец ввода (Ctrl+D / закрытый пайп)
+        except EOFError:              # Ctrl+D / closed pipe
             print()
             return 0
-        except KeyboardInterrupt:     # Ctrl+C на приглашении — отменяем строку
-            print("\n" + Style.dim("^C  (наберите /exit, чтобы выйти)"))
+        except KeyboardInterrupt:     # Ctrl+C at prompt cancels current line
+            print("\n" + Style.dim("^C  (type /exit to quit)"))
             continue
 
         line = _PASTE_MARK.sub("", line)
@@ -2155,26 +1927,26 @@ def _repl_loop(session: Session) -> int:
             cmd_help(session, "")
             continue
         if low in ("/exit", "exit", "/quit", "quit"):
-            print(Style.dim("пока!"))
+            print(Style.dim("bye!"))
             return 0
         try:
             handle_input(session, s)
-        except KeyboardInterrupt:      # Ctrl+C во время команды — отменяем её
-            print("\n" + Style.dim("^C  команда прервана"))
+        except KeyboardInterrupt:      # Ctrl+C during command cancels it
+            print("\n" + Style.dim("^C  command interrupted"))
         except SystemExit as e:
             print(paint("error", str(e)))
-        except Exception as e:         # одна кривая команда не роняет сессию
-            print(paint("error", f"ошибка команды: {e}"))
+        except Exception as e:         # one bad command never crashes the session
+            print(paint("error", f"command error: {e}"))
     return 0
 
 
 # --------------------------------------------------------------------------
-# Разбор аргументов и точка входа
+# Argument parsing and entry point
 # --------------------------------------------------------------------------
 
 
 def _commands_epilog() -> str:
-    lines = ["команды (одинаковые что снаружи, что внутри цикла с «/»):"]
+    lines = ["commands (identical on the CLI and inside the REPL with '/'):"]
     width = max(len(c["name"]) + len(c["arg"]) for c in COMMANDS) + 3
     for gid, title in GROUPS:
         members = [c for c in COMMANDS if c.get("group") == gid]
@@ -2186,14 +1958,14 @@ def _commands_epilog() -> str:
             lines.append(f"    {sig:<{width}} {c['help']}")
     lines += [
         "",
-        "подробнее о команде:  python -m vliw help <команда>",
+        "command details:  python -m vliw help <command>",
         "",
-        "примеры:",
+        "examples:",
         "  python -m vliw run slotclash",
         "  python -m vliw compare --no-color",
-        "  python -m vliw                      # без команды — интерактивный режим",
+        "  python -m vliw                      # no command — interactive mode",
         "",
-        "полная документация: docs/CLI.md",
+        "full documentation: docs/CLI.md",
     ]
     return "\n".join(lines)
 
@@ -2202,45 +1974,39 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m vliw", add_help=True,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="NEX CLI — планировщик VLIW на модели Elbrus e2k-v6. "
-                    "Без аргументов — интерактивный режим; с командой — один запуск.",
+        description="NEX CLI — VLIW instruction scheduler for the Elbrus e2k-v6 model. "
+                    "Without arguments launches interactive mode; with a command runs once.",
         epilog=_commands_epilog(),
     )
     from . import VERSION_LABEL, __version__
 
     p.add_argument("--version", action="version",
                    version=f"NEX CLI {VERSION_LABEL}  ({__version__})",
-                   help="показать версию и выйти")
-    p.add_argument("--profile", choices=list(PROFILES), default=None, help="модель машины")
-    p.add_argument("--width", type=int, default=None, help="переопределить число портов")
-    p.add_argument("--budget", type=float, default=10.0, help="бюджет точного поиска, с")
-    p.add_argument("--portfolio", type=float, default=3.0, help="бюджет запасного поиска, с")
-    p.add_argument("--color", dest="color", action="store_true", default=None, help="включить цвет")
-    p.add_argument("--no-color", dest="color", action="store_false", help="выключить цвет")
-    p.add_argument("--theme", default=None, help="тема оформления (см. /theme)")
+                   help="show version and exit")
+    p.add_argument("--profile", choices=list(PROFILES), default=None, help="machine profile")
+    p.add_argument("--width", type=int, default=None, help="override port count")
+    p.add_argument("--budget", type=float, default=10.0, help="exact oracle time budget (s)")
+    p.add_argument("--portfolio", type=float, default=3.0, help="fallback search budget (s)")
+    p.add_argument("--color", dest="color", action="store_true", default=None, help="enable color")
+    p.add_argument("--no-color", dest="color", action="store_false", help="disable color")
+    p.add_argument("--theme", default=None, help="color theme (see /theme)")
     p.add_argument("--mode",
                    choices=["work", "lab", "mind", "code", "explore", "chat"],
                    default=None,
-                   help="пропустить экран выбора: work / lab / mind / code")
+                   help="skip mode picker: work / lab / mind / code")
     p.add_argument(
         "--plain", action="store_true",
-        help="без полноэкранного режима: обычный построчный интерактив",
+        help="plain line-by-line interactive mode (no full-screen TUI)",
     )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    # UTF-8 включаем ДО разбора аргументов. `--help` обрабатывается внутри
-    # parse_known_args() и завершает процесс там же, поэтому перекодировка из
-    # setup_output() до справки не доходила никогда: на Windows с кодовой
-    # страницей cp1251/cp866 вся русская справка выводилась как «▯▯▯», хотя
-    # обычные команды печатались нормально.
+    # Enable UTF-8 before parsing args so `--help` renders cleanly on Windows.
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    # Раньше здесь перекодировался только Python-поток, а консоль оставалась
-    # на cp1251/cp866 — и `--help` всё равно шёл «?». Теперь и консоль.
     render.utf8_console()
 
     parser = _build_parser()
@@ -2251,28 +2017,15 @@ def main(argv: list[str] | None = None) -> int:
     _apply_mode(session, getattr(args, "mode", None) or "lab")
     if args.profile:
         session.profile = args.profile
-    # Ширину проверяем здесь, до первого использования. Без проверки одно и то
-    # же «невозможное» значение давало три разных исхода: 0 молча игнорировался
-    # (falsy — откат на профиль), -1 порождал машину с именем `.../w-1` и
-    # рапортовал «1 портов», а -3 и ниже роняли наружу `IndexError` из
-    # with_width() — там цикл добора портов не выполняется ни разу и `kept`
-    # остаётся пустым списком.
     if args.width is not None and args.width < 1:
-        print(paint("error", f"ширина машины не может быть {args.width}: "
-                             f"нужно целое от 1 и выше"))
+        print(paint("error", f"machine width cannot be {args.width}: "
+                             f"must be an integer >= 1"))
         return 1
     if args.width:
         session.width = args.width
 
-    # Ctrl+C где угодно — аккуратный выход без трейсбека.
     try:
         if not extras:
-            # Построчный режим — только по явному запросу: `--plain` или
-            # `--no-color` (он документирован как построчный). Если же
-            # полноэкранный режим недоступен по объективной причине, молча
-            # отдавать «урезанный» интерфейс нельзя: на новой машине это
-            # выглядит как сломанная программа. Показываем причину и точные
-            # команды установки (vliw/ui/setup_screen.py).
             if not args.plain and args.color is not False:
                 if _fullscreen_ok():
                     return run_tui(session)
@@ -2281,11 +2034,6 @@ def main(argv: list[str] | None = None) -> int:
                 return setup_screen.explain()
 
             print_logo()
-            # `--mode` пропускает экран выбора и здесь. Полноэкранный режим так
-            # и делал (`pick_app = args.mode is None`), а построчный применял
-            # режим и тут же затирал его вопросом «наберите 1, 2 или 3» — флаг,
-            # обещающий в справке «пропустить экран выбора», в `--plain` не
-            # работал вовсе.
             if getattr(args, "mode", None) is None:
                 chosen = launcher.prompt_plain()
                 if not chosen:
@@ -2293,25 +2041,6 @@ def main(argv: list[str] | None = None) -> int:
                 _apply_mode(session, chosen)
             return repl(session)
 
-        # Логотипа здесь нет намеренно. Это путь одного запуска — для
-        # скриптов, пайпов и CI (контракт кода возврата описан ниже).
-        # Баннер в такой вывод не лезет: он попадал в перенаправленный файл,
-        # в `| grep`, в отчёты испытателей — везде, где нужен только результат.
-        # В интерактивных путях (REPL, возврат из полноэкранного режима,
-        # экран выбора) логотип остаётся — там он к месту.
-
-        # Один запуск команды и выход. Код возврата — по контракту для
-        # скриптов/CI: 0 = успех, 1 = ошибка (неизвестная команда,
-        # неизвестный сценарий/профиль, внутренняя проверка расписания и
-        # т.п.), 130 = прервано Ctrl+C (ниже).
-        # `python -m vliw lab` / `mind` / `code` — войти в workstation с фокусом панели.
-        # «agent» из этого списка убран намеренно. Слово занято командой
-        # `agent` («куда встраивается обученная модель», см. COMMANDS) — она
-        # документирована в --help, а позиционный режим `agent` не описан
-        # нигде. Пока он стоял здесь, он перехватывал команду: `python -m vliw
-        # agent` вместо справки уходил в интерактивный цикл и висел на
-        # приглашении до таймаута. Диалоговый режим по-прежнему доступен как
-        # `chat`, `mind` и `--mode mind`.
         if extras[0].lower() in ("chat", "explore", "lab", "mind",
                                  "code") \
                 and len(extras) == 1:
@@ -2325,38 +2054,17 @@ def main(argv: list[str] | None = None) -> int:
             print_logo()
             return repl(session)
 
-        # `run <сценарий>`, `load <файл>` и разборы того же участка (compare,
-        # doctor, bounds, path, analyze) смотрят на ОДИН граф — для них есть
-        # готовый экран, и печатать вместо него отчёт незачем: в живом
-        # терминале со стоящим textual инструмент открывается сразу на этом
-        # участке, а не пересказывает его текстом. Так задумано с самого
-        # начала — это не поведение по умолчанию для тех, кому текст удобнее,
-        # это единственное поведение.
-        # `sweep`, `selfcheck`, `all`, `scenarios` сюда не входят намеренно:
-        # это прогоны по сотням графов разом, а не разбор одного участка, и
-        # single-screen представления для них попросту нет — печатать таблицу
-        # по 200 графам как «графический экран» бессмысленно, а не неудобно.
         _SINGLE_GRAPH_CMDS = {"run", "load", "compare", "doctor", "bounds",
                               "path", "analyze"}
         cmd_name = extras[0].lower()
         if (cmd_name in _SINGLE_GRAPH_CMDS and not args.plain
                 and args.color is not False and _fullscreen_ok()):
-            # Аргумент разбираем у ВСЕХ команд списка, а не только у run и
-            # load. Раньше `compare mulclash`, `doctor mulclash`, `bounds`,
-            # `path` и `analyze` молча роняли имя участка и открывали
-            # рабочее место на предыдущем — человек просил один участок,
-            # видел другой, и ни слова об этом.
             try:
                 if cmd_name == "load":
-                    # У load аргумент — файл, а не сценарий: разбирать его
-                    # умеет только сама команда. Её ответ обязателен к
-                    # проверке: раньше он игнорировался, и `load нет-файла`
-                    # печатал ошибку, которую тут же накрывал полный экран.
                     if len(extras) > 1 and not handle_input(session,
                                                             " ".join(extras)):
                         return 1
                 else:
-                    # Первый токен, не похожий на флаг (`--model` у compare).
                     scen = next((t for t in extras[1:]
                                  if not t.startswith("-")), None)
                     if scen is not None:
@@ -2364,7 +2072,7 @@ def main(argv: list[str] | None = None) -> int:
             except SystemExit:
                 raise
             except Exception as e:
-                print(paint("error", f"ошибка команды: {e}"))
+                print(paint("error", f"command error: {e}"))
                 return 1
             _apply_mode(session, "lab")
             return run_tui(session, pick_app=False)
@@ -2374,9 +2082,9 @@ def main(argv: list[str] | None = None) -> int:
         except SystemExit:
             raise
         except Exception as e:
-            print(paint("error", f"ошибка команды: {e}"))
+            print(paint("error", f"command error: {e}"))
             return 1
         return 0 if ok else 1
     except KeyboardInterrupt:
-        print("\n" + Style.dim("прервано (Ctrl+C)"))
+        print("\n" + Style.dim("interrupted (Ctrl+C)"))
         return 130

@@ -1,7 +1,6 @@
-"""Таблицы: сценарии, сводка результатов, матрица возможностей, sweep, selfcheck.
+"""Tables: scenarios, summary results, capability matrix, sweep, selfcheck.
 
-Функции берут ГОТОВЫЕ данные (числа/флаги, посчитанные в `vliw.core`/`vliw.cli`)
-и возвращают строки для терминала. Никаких вычислений планирования здесь нет.
+Pure formatting functions over precomputed `vliw.core`/`vliw.cli` data.
 """
 
 from __future__ import annotations
@@ -25,25 +24,24 @@ from .render import (
 
 
 # --------------------------------------------------------------------------
-# Список сценариев
+# Scenario catalog
 # --------------------------------------------------------------------------
 
-
-# Порядок и пояснение групп. Сценарии перечисляются не сплошным списком, а по
-# ГРУППАМ: первые показывают работу планировщика (один граф — две раскладки),
-# остальные — приёмы оптимизации самого кода, где планировщик уже бессилен.
+# Tuple of (core_family_key, english_label, hint).
+# Keys match `DAG.family` in `vliw/core/dag.py`.
 _FAMILY_ORDER = [
-    ("основа", "как вообще выглядит расписание — с этого начинать"),
-    ("монопольный порт", "здесь жадная эвристика теряет такты: есть разрыв с оптимумом"),
-    ("проверка модели", "что бывает, когда модель машины описана неверно"),
-    ("форма графа", "планировщик бессилен — переписывать надо исходник"),
-    ("цена операции", "дешевле не планировать лучше, а убрать дорогую операцию"),
-    ("циклы", "развёртка, рост ILP и его предел"),
-    ("память", "загрузки, обход по указателям, поток данных"),
-    ("ветвления", "обе ветви посчитаны заранее, без перехода"),
+    ("basics",         "basics",         "how a schedule looks — start here"),
+    ("exclusive port", "exclusive port", "greedy heuristic loses cycles here: real gap to optimum"),
+    ("model check",    "model check",    "what happens when the machine model is inaccurate"),
+    ("graph shape",    "graph shape",    "scheduler is helpless — rewrite the source code"),
+    ("op cost",        "op cost",        "cheaper to remove the expensive op than reschedule it"),
+    ("loops",          "loops",          "unrolling, ILP growth, and its ceiling"),
+    ("memory",         "memory",         "loads, pointer chasing, and data flow"),
+    ("branching",      "branches",       "both paths precomputed without branching"),
+    ("narrow class",   "narrow class",   "specialized functional units with limited ports"),
 ]
 
-# Пары «как написано» → «как надо»: их полезно прогнать подряд и сравнить.
+# "As written" -> "improved" pairs worth running back to back.
 _PAIRS = [("seqreduce", "treereduce"), ("divpressure", "divstrength")]
 
 
@@ -51,17 +49,17 @@ def render_scenarios(current: str | None = None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     groups = list(_FAMILY_ORDER)
-    # Сценарии без группы (например, добавленные позже) не должны пропасть.
-    groups += [(f, "") for f in {d.family for d in SCENARIOS.values()}
-               if f not in {g for g, _ in _FAMILY_ORDER}]
+    known = {g for g, _, _ in _FAMILY_ORDER}
+    groups += [(f, f, "") for f in {d.family for d in SCENARIOS.values()}
+               if f not in known]
 
-    for family, hint in groups:
-        keys = [k for k, d in SCENARIOS.items() if d.family == family]
+    for family_key, family_label, hint in groups:
+        keys = [k for k, d in SCENARIOS.items() if d.family == family_key]
         if not keys:
             continue
         if out:
             out.append("")
-        out.append("  " + paint("lab", "* ") + paint("title", family)
+        out.append("  " + paint("lab", "* ") + paint("title", family_label)
                    + ("   " + Style.dim(hint) if hint else ""))
         for key in keys:
             dag = SCENARIOS[key]
@@ -86,14 +84,14 @@ def render_scenarios(current: str | None = None) -> list[str]:
     pairs = "  ·  ".join(f"/run {a} → /run {b}" for a, b in _PAIRS
                          if a in SCENARIOS and b in SCENARIOS)
     if pairs:
-        out += wrap(Style.dim("пары подряд: " + pairs.replace("/run ", "")),
+        out += wrap(Style.dim("compare pairs: " + pairs.replace("/run ", "")),
                     render.W, "  ")
-    out.append(Style.dim("  все разом: all    ·    случайный: random 16"))
+    out.append(Style.dim("  run all: all    ·    random block: random 16"))
     return out
 
 
 # --------------------------------------------------------------------------
-# Матрица возможностей портов + латентности
+# Port capability matrix + latencies
 # --------------------------------------------------------------------------
 
 
@@ -101,7 +99,7 @@ def render_matrix(model: MachineModel) -> list[str]:
     op_names, grid = capability_matrix(model)
     sole = model.sole_host_ops()
     cw = max(len(o) for o in op_names) + 1
-    header = Style.dim("порт ") + " ".join(pad(paint_op(o, o), cw, "^") for o in op_names)
+    header = Style.dim("port ") + " ".join(pad(paint_op(o, o), cw, "^") for o in op_names)
     out = [header, Style.dim("─" * (5 + len(op_names) * (cw + 1)))]
     for port in model.ports:
         cells = []
@@ -111,7 +109,7 @@ def render_matrix(model: MachineModel) -> list[str]:
         tag = ""
         if port.index in sole:
             names = "/".join(sole[port.index])
-            tag = "  " + paint_op(sole[port.index][0], f"< только {names}")
+            tag = "  " + paint_op(sole[port.index][0], f"< sole {names}")
         out.append(Style.dim(f"{model.port_label(port.index):>4} ") + " ".join(cells) + tag)
     return out
 
@@ -120,17 +118,17 @@ def render_model_view(model: MachineModel) -> list[str]:
     out = []
     out += wrap(model.description, render.W, "  ")
     out.append("")
-    out.append("  " + Style.bold("матрица возможностей: порт → какие операции исполнимы"))
+    out.append("  " + Style.bold("capability matrix: port → supported operations"))
     out += ["  " + l for l in render_matrix(model)]
     out.append("")
-    out.append("  " + Style.bold("латентности и монопольное занятие:"))
+    out.append("  " + Style.bold("latencies and exclusive occupancy:"))
     rows = [[p, v, Style.dim(src)] for p, v, src in describe_model(model)]
-    out += ["  " + l for l in table(["параметр", "значение", "источник"], rows)]
+    out += ["  " + l for l in table(["parameter", "value", "source"], rows)]
     return out
 
 
 # --------------------------------------------------------------------------
-# Сводка по всем сценариям (команда all)
+# Summary across all scenarios (`all` command)
 # --------------------------------------------------------------------------
 
 
@@ -151,37 +149,37 @@ def render_summary(rows: list[dict]) -> list[str]:
             r["key"], str(r["n"]), r["model_name"], str(r["lb"]),
             str(r["base_ms"]), str(r["oracle_ms"]),
             Style.green(f"-{gap} ({pct:.0f}%)") if gap else Style.dim("—"),
-            Style.green("доказан") if r["optimal"] else Style.yellow("не доказан"),
-            f"{r['seconds']:.1f}с",
+            Style.green("proven") if r["optimal"] else Style.yellow("unproven"),
+            f"{r['seconds']:.1f}s",
         ])
     out = ["  " + l for l in table(
-        ["сценарий", "N", "модель", "нижн.гр.", "baseline", "oracle",
-         "выигрыш", "оптимум", "время"],
+        ["scenario", "N", "model", "bound", "baseline", "oracle",
+         "gain", "optimum", "time"],
         disp, aligns="<><>>><<>",
     )]
     out.append("")
-    parts = [f"Итого из {len(rows)} сценариев:"]
+    parts = [f"Out of {len(rows)} scenarios:"]
     if n_gap:
         parts.append(
-            f"в {n_gap} есть доказанный разрыв между эвристикой и потолком оракула — "
-            f"именно там обученной модели есть что отыгрывать;"
+            f"{n_gap} have a proven gap between greedy baseline and the oracle — "
+            f"this is where a smarter scheduler has real headroom;"
         )
     if n_proven_equal:
         parts.append(
-            f"в {n_proven_equal} эвристика доказанно оптимальна — учить нечему, "
-            f"и это честный результат, а не неудача поиска;"
+            f"in {n_proven_equal} the greedy heuristic is proven optimal — "
+            f"nothing left to recover;"
         )
     if n_unproven:
         parts.append(
-            f"в {n_unproven} точный поиск не уложился в бюджет: разрыва не нашли, "
-            f"но и отсутствие разрыва не доказали."
+            f"in {n_unproven} exact search hit its budget: no gap found, "
+            f"and optimality remains unproven."
         )
     out += wrap(" ".join(parts), render.W, "  ")
     return out
 
 
 # --------------------------------------------------------------------------
-# Массовый прогон по случайным графам (команда sweep)
+# Random-DAG sweep (`sweep` command)
 # --------------------------------------------------------------------------
 
 
@@ -192,48 +190,47 @@ def render_sweep(rows: list[dict], stopped: bool) -> list[str]:
         share = f"{r['n_gap']}/{r['n_proven']}" if r["n_proven"] else "—"
         disp.append([
             r["model_name"], str(r["width"]),
-            Style.dim("равноправны") if r["uniform"] else Style.yellow("неравноправны"),
+            Style.dim("uniform") if r["uniform"] else Style.yellow("asymmetric"),
             share,
             f"{100.0 * r['n_gap'] / r['n_proven']:.0f}%" if r["n_proven"] else "—",
             f"{r['avg_gap']:.0f}%" if r["avg_gap"] is not None else Style.dim("—"),
             f"{r['worst']}" if r["worst"] else Style.dim("—"),
         ])
     out = ["  " + l for l in table(
-        ["модель", "кан.", "слоты", "с разрывом", "доля", "средний разрыв", "макс, тактов"],
+        ["model", "ch.", "slots", "with gap", "share", "avg gap", "max cyc"],
         disp, aligns="<><>>>>",
     )]
     out.append("")
     if stopped:
         out += wrap(Style.dim(
-            "Часть конфигураций обработана не полностью — сработал лимит времени "
-            "(--time-limit)."), render.W, "  ")
+            "Some configurations were truncated by the time limit (--time-limit)."),
+            render.W, "  ")
     out += wrap(
-        "Читать так: чем неравноправнее порты, тем чаще жадная эвристика "
-        "промахивается. На модели «все порты равноправны» разрыв практически "
-        "отсутствует; на измеренной он появляется там, где дефицитный канал "
-        "(делитель `,5`, запись `,2`/`,5`) достаётся менее срочной операции.",
+        "Takeaway: the more asymmetric the ports, the more often greedy list "
+        "scheduling misses. On a uniform-port model the gap nearly vanishes; "
+        "on the measured model it appears whenever a scarce channel "
+        "(divider `,5`, store `,2`/`,5`) goes to a less urgent op.",
         render.W, "  ")
     out.append("")
     out += wrap(Style.dim(
-        "Для сравнения в наборе есть профиль e2k-v6-firstprobe — опровергнутая "
-        "первая версия модели, где умножителю ошибочно приписана монополия. На "
-        "нём разрывы заметно крупнее, и хорошо видно, насколько выводы зависят "
-        "от качества описания машины."), render.W, "  ")
+        "For reference, profile e2k-v6-firstprobe is the disproven v1 model "
+        "that mistakenly treated MUL as exclusive — showing how strongly "
+        "conclusions depend on machine-model accuracy."), render.W, "  ")
     return out
 
 
 # --------------------------------------------------------------------------
-# Результат сверки оракула перебором (команда selfcheck)
+# Oracle brute-force verification (`selfcheck` command)
 # --------------------------------------------------------------------------
 
 
 def render_selfcheck(res: SelfcheckResult) -> list[str]:
     out = [
         Style.dim(
-            f"Сверяем оракул (точный поиск) с независимым полным перебором: "
-            f"{res.seeds} графов x {len(res.sizes)} размеров x {res.models} моделей."
+            f"Verifying exact oracle against independent brute-force search: "
+            f"{res.seeds} graphs x {len(res.sizes)} sizes x {res.models} models."
         ),
-        Style.dim("Полный перебор считается только на маленьких графах — это нормально."),
+        Style.dim("Brute-force runs on small graphs only — this is expected."),
         "",
     ]
     for tag, problems in res.problems:
@@ -241,13 +238,13 @@ def render_selfcheck(res: SelfcheckResult) -> list[str]:
         out += [f"      {p}" for p in problems]
     if res.failed:
         out.append(Style.red(
-            f"ПРОВАЛ: {res.failed} расхождений из {res.checked} проверок "
-            f"({res.seconds:.0f} с)"))
+            f"FAIL: {res.failed} mismatches out of {res.checked} checks "
+            f"({res.seconds:.0f} s)"))
     else:
-        note = " (частично, по лимиту времени)" if res.stopped_early else ""
+        note = " (partial, time limit reached)" if res.stopped_early else ""
         out.append(Style.green(
-            f"OK: {res.checked} проверок, расхождений нет{note} ({res.seconds:.0f} с)."))
+            f"OK: {res.checked} checks, 0 mismatches{note} ({res.seconds:.0f} s)."))
         out += wrap(
-            "Оптимальность, которую заявляет оракул, подтверждена независимым "
-            "перебором.", render.W, "  ")
+            "Optimality claimed by the oracle is confirmed by independent "
+            "exhaustive search.", render.W, "  ")
     return out

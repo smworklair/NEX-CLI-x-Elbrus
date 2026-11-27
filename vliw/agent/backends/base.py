@@ -1,7 +1,7 @@
-"""Общий интерфейс backend'а и HTTP-помощники на стандартной библиотеке.
+"""Common backend interface and stdlib HTTP helpers.
 
-Тот же приём, что `Backend` в Nex-pilot и `Scheduler` в `vliw.core`:
-верхний слой зависит от контракта, а не от конкретного API.
+Same pattern as `Backend` in Nex-pilot and `Scheduler` in `vliw.core`:
+upper layers depend on the contract, not on a specific provider API.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import urllib.request
 
 TIMEOUT = 60
 MAX_TOKENS = 4000
-# Модели с «размышлением» тратят часть бюджета на него — лимит с запасом,
-# иначе ответ обрывается на полуслове.
+# Reasoning models spend part of the budget on internal thinking — keep a generous
+# limit so responses aren't cut off mid-sentence.
 RETRIES = 3
 RETRY_PAUSE = 2.0
 _RETRY_CODES = {429, 500, 502, 503, 504}
@@ -34,20 +34,20 @@ def _code_of(msg: str) -> int | None:
 
 
 def _is_exhausted(msg: str) -> bool:
-    """Квота кончилась — повторять тот же запрос бессмысленно, надо сменить бэкенд."""
+    """Quota exhausted — retrying the same request is pointless; switch backends."""
     low = msg.lower()
     return any(s in low for s in ("quota", "billing", "exceeded your current",
                                   "rate limit", "capacity"))
 
 
 def _extract_error(raw: str) -> str:
-    """Вытащить человеческое сообщение из тела ошибки любого провайдера."""
+    """Extract a human-readable error message from any provider's error body."""
     try:
         err = json.loads(raw)
     except ValueError:
         return raw
     if isinstance(err, dict):
-        # Google: {"error": {"message": ...}}, остальные: {"message": ...}
+        # Google: {"error": {"message": ...}}, others: {"message": ...}
         sub = err.get("error")
         if isinstance(sub, dict):
             return str(sub.get("message") or raw)
@@ -60,7 +60,7 @@ def _extract_error(raw: str) -> str:
 
 def post_json(url: str, body: dict, headers: dict,
               timeout: float = TIMEOUT) -> dict:
-    """Один POST, вернуть распарсенный JSON. Ошибки — как LLMError."""
+    """Single POST returning parsed JSON. Errors are raised as LLMError."""
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"), headers=headers,
         method="POST")
@@ -70,13 +70,13 @@ def post_json(url: str, body: dict, headers: dict,
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")
         raise LLMError(f"HTTP {e.code}: {_extract_error(raw).strip()[:200]}") from None
-    except Exception as e:  # noqa: BLE001 — сеть даёт что угодно, заворачиваем в LLMError
+    except Exception as e:  # noqa: BLE001 — wrap any network error as LLMError
         raise LLMError(f"{type(e).__name__}: {e}") from None
 
 
 def post_json_retry(url: str, body: dict, headers: dict,
                     timeout: float = TIMEOUT) -> dict:
-    """POST с повторами: бесплатные тарифы регулярно отдают 429/503."""
+    """POST with retries: free tiers routinely return 429/503."""
     last = ""
     for attempt in range(RETRIES):
         if attempt:
@@ -95,7 +95,7 @@ def post_json_retry(url: str, body: dict, headers: dict,
 
 def post_sse(url: str, body: dict, headers: dict,
              timeout: float = TIMEOUT):
-    """POST, отдавать распарсенные SSE-события (`data: {...}`) по мере прихода."""
+    """POST yielding parsed SSE events (`data: {...}`) as they arrive."""
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"), headers=headers,
         method="POST")
@@ -121,11 +121,11 @@ def post_sse(url: str, body: dict, headers: dict,
 
 
 def content_str(content) -> str:
-    """Текст из `content`, который бывает и строкой, и списком чанков.
+    """Extract text from `content`, which may be a string or a list of chunks.
 
-    Новые версии Chat API отдают content списком
-    (`[{'type': 'text', 'text': ...}]`) вместо строки — прямое `.strip()`
-    там падает AttributeError мимо LLMError, наружу летит сырой traceback.
+    Newer Chat API versions return content as a list
+    (`[{'type': 'text', 'text': ...}]`) instead of a string — calling `.strip()`
+    directly would raise AttributeError outside LLMError and leak a raw traceback.
     """
     if isinstance(content, str):
         return content
@@ -143,7 +143,7 @@ def content_str(content) -> str:
 
 
 class Backend:
-    """Контракт backend'а генерации. Синхронный: агент вызывает из потоков."""
+    """Generation backend contract. Synchronous: the agent invokes it from worker threads."""
 
     name = "?"
 
@@ -165,10 +165,10 @@ class Backend:
     def stream(self, system: str, question: str,
                history: list[tuple[str, str]] | None = None,
                temperature: float = 0.3):
-        """Куски текста по мере генерации (генератор строк)."""
+        """Yield text chunks as they are generated."""
         raise NotImplementedError
 
     def structured(self, system: str, question: str, schema: dict,
                    temperature: float = 0.1) -> tuple[str, int]:
-        """Ответ строго по JSON-схеме. Возвращает (JSON-строка, токены ответа)."""
+        """Return output conforming to a JSON schema as (json_str, output_tokens)."""
         raise NotImplementedError

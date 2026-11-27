@@ -1,11 +1,11 @@
-"""Крошка-1: MLP приоритетов. Инференс — чистый stdlib, без numpy.
+"""Tiny-1: priority MLP. Inference is pure stdlib, no numpy.
 
-Архитектура по умолчанию 18 -> 128 -> 64 -> 1:
-  18*128+128 = 2432, 128*64+64 = 8256, 64*1+1 = 65 -> ~10.7К параметров.
-Опция --hidden 256 128 дает ~37К. Обе под лимитом 150К с запасом.
+Default architecture 18 -> 128 -> 64 -> 1:
+  18*128+128 = 2432, 128*64+64 = 8256, 64*1+1 = 65 -> ~10.7K parameters.
+Option --hidden 256 128 gives ~37K. Both stay well below the 150K budget.
 
-Веса — обычный JSON (списки): загрузка без numpy, прямой проход на графе
-n=24 это ~10К умножений — микросекунды.
+Weights are plain JSON lists: zero-numpy loading, and a forward pass on a
+24-node graph is ~10K multiplications — microseconds.
 """
 
 from __future__ import annotations
@@ -30,10 +30,10 @@ class TinyPriority:
         self.b2 = b2  # [H2]
         self.w3 = w3  # [H2]
         self.b3 = b3  # float
-        #: Чему учили: "rank" (порядок), "cycle" (абсолютный такт, legacy),
-        #: "hold" (держка после раннего старта). Планировщик трактует выход
-        #: по маркеру, а не по имени файла — иначе cycle-веса, прочитанные
-        #: как hold, дали бы молча неверные запреты.
+        #: Training target: "rank" (order), "cycle" (absolute cycle, legacy),
+        #: "hold" (delay after ASAP). The scheduler interprets output by this
+        #: marker rather than filename, so cycle weights read as hold will
+        #: never silently produce wrong deferrals.
         self.target = target
 
     @property
@@ -49,7 +49,7 @@ class TinyPriority:
         return f * self.h1 + self.h1 + self.h1 * self.h2 + self.h2 + self.h2 + 1
 
     def scores(self, X: list[list[float]]) -> list[float]:
-        """Прямой проход для всех узлов графа."""
+        """Forward pass for all nodes in the graph."""
         out: list[float] = []
         h1, h2 = self.h1, self.h2
         for row in X:
@@ -102,7 +102,7 @@ class TinyPriority:
              seed: int = 0) -> "TinyPriority":
         rnd = random.Random(seed)
         h1, h2 = hidden
-        # He-инициализация под ReLU.
+        # He initialization for ReLU.
         s1 = math.sqrt(2.0 / n_features)
         w1 = [[rnd.gauss(0.0, s1) for _ in range(h1)] for _ in range(n_features)]
         b1 = [0.0] * h1

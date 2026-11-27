@@ -1,9 +1,7 @@
-"""Визуализация расписания: пачки-рамки, каналы, такты, вердикт, разбор.
+"""Schedule visualization: wide-instruction boxes, channels, cycles, verdict, explain.
 
-Всё здесь — чистые функции отрисовки: на входе готовые данные из `vliw.core`
-(Schedule, DAG, MachineModel, DagMetrics, SchedulingResult), на выходе строки
-для терминала. Одни и те же функции используются и в быстром вызове, и в
-интерактивном цикле — оформление одинаковое.
+Pure rendering functions taking precomputed `vliw.core` objects (Schedule,
+DAG, MachineModel, DagMetrics, SchedulingResult) and returning terminal lines.
 """
 
 from __future__ import annotations
@@ -25,13 +23,12 @@ from .render import (
     wrap,
 )
 
-# CRIT_CODE/DIVERGE_CODE берём через модуль (render.CRIT_CODE), а не прямым
-# импортом: тема может смениться уже после импорта, и прямая привязка осталась
-# бы со старым цветом.
+# Access CRIT_CODE/DIVERGE_CODE via the `render` module so theme switches
+# after import take effect immediately.
 
 
 def critical_set(dag: DAG, met: DagMetrics) -> set[int]:
-    """Узлы критического пути: asap + height == длина критического пути."""
+    """Critical-path nodes: asap + height == critical_path_bound."""
     return {
         i for i in range(len(dag))
         if met.asap[i] + met.height[i] == met.critical_path_bound
@@ -39,7 +36,7 @@ def critical_set(dag: DAG, met: DagMetrics) -> set[int]:
 
 
 # --------------------------------------------------------------------------
-# Пачки (широкие команды) как рамки
+# Wide-instruction bundles as boxes
 # --------------------------------------------------------------------------
 
 
@@ -57,15 +54,15 @@ def _bundle_lines(dag, model, cycle, heads, held, hl) -> list[str]:
     extra = [Style.dim(f"{model.port_label(p)} ↓{dag[i].op}") for p, i in held]
     if extra:
         body += "   " + " ".join(extra)
-    title = f"такт {cycle} · {'1 оп' if len(heads) == 1 else str(len(heads)) + ' оп'}"
+    title = f"cycle {cycle} · {'1 op' if len(heads) == 1 else str(len(heads)) + ' ops'}"
     full = len(heads) == model.width
     if full:
-        title += " · полная пачка"
+        title += " · full bundle"
     return ansi_box([body], title=title, color="success" if full else "border")
 
 
 def schedule_items(sched: Schedule, dag: DAG, model: MachineModel):
-    """('bundle', t, heads, held) | ('wait', t0, t1, held)."""
+    """Return ('bundle', t, heads, held) | ('wait', t0, t1, held)."""
     busy = sched.busy_map()
     heads_by: dict[int, list] = {}
     held_by: dict[int, list] = {}
@@ -90,21 +87,21 @@ def schedule_items(sched: Schedule, dag: DAG, model: MachineModel):
 
 def _wait_line(dag, model, sched, t0, t1, held) -> str:
     span = t1 - t0 + 1
-    label = f"т.{t0}..{t1}" if span > 1 else f"т.{t0}"
+    label = f"c.{t0}..{t1}" if span > 1 else f"c.{t0}"
     if held:
         who = ", ".join(
-            f"{paint_op(dag[i].op, dag[i].name)} держит {model.port_label(p)} до т."
+            f"{paint_op(dag[i].op, dag[i].name)} holds {model.port_label(p)} until c."
             f"{sched.placements[i].cycle + model.occupancy(dag[i].op)}"
             for p, i in held
         )
-        note = paint("error", f"... {cycles(span)} без выдачи") + Style.dim(f" — {who}")
+        note = paint("error", f"... {cycles(span)} idle") + Style.dim(f" — {who}")
     else:
-        note = paint("error", f"... {cycles(span)} без выдачи") + Style.dim(" — ждём операндов")
+        note = paint("error", f"... {cycles(span)} idle") + Style.dim(" — waiting for operands")
     return Style.dim(f"  {label:>10}  ") + note
 
 
 def render_item(dag, model, sched, item, hl) -> list[str]:
-    """Одна пачка (рамкой) или строка ожидания — для пошагового воспроизведения."""
+    """One boxed bundle or wait line — used for step-by-step playback."""
     if item[0] == "bundle":
         _, t, heads, held = item
         return ["  " + l for l in _bundle_lines(dag, model, t, heads, held, hl)]
@@ -113,11 +110,11 @@ def render_item(dag, model, sched, item, hl) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# Расписание как сетка «такты x порты» — основной вид
+# Schedule as a "cycles x ports" grid — primary view
 # --------------------------------------------------------------------------
 
-CONT = "│"      # операция продолжает занимать порт
-EMPTY = "·"     # слот пуст
+CONT = "│"      # operation still occupying the port
+EMPTY = "·"     # empty slot
 
 
 def _cell_width(dag: DAG, avail: int, nports: int) -> int:
@@ -127,16 +124,7 @@ def _cell_width(dag: DAG, avail: int, nports: int) -> int:
 
 def render_grid(sched: Schedule, dag: DAG, model: MachineModel,
                 hl: dict[int, str] | None = None, title: str = "") -> list[str]:
-    """Расписание сеткой: строки — такты, столбцы — порты машины.
-
-    Так устроена сама широкая команда, поэтому таблица читается прямо как
-    состояние машины: видно, какой порт чем занят в каждом такте и где
-    простаивает. Раньше на каждый такт рисовалась отдельная рамка — три
-    строки экрана ради одной операции, и структура машины терялась.
-
-    Длинные серии тактов без выдачи схлопываются в одну строку: иначе
-    тринадцать одинаковых строк ожидания деления заслоняют всё остальное.
-    """
+    """Render schedule as a cycles x ports grid, collapsing multi-cycle stalls."""
     hl = hl or {}
     busy = sched.busy_map()
     ports = list(model.ports)
@@ -147,7 +135,7 @@ def render_grid(sched: Schedule, dag: DAG, model: MachineModel,
     if title:
         out.append(title)
 
-    head = Style.dim(f"{'такт':>5}  ")
+    head = Style.dim(f"{'cycle':>5}  ")
     for p in ports:
         label = model.port_label(p.index)
         if p.index in sole:
@@ -189,9 +177,7 @@ def render_grid(sched: Schedule, dag: DAG, model: MachineModel,
             if span >= 2:
                 label = f"{t}–{run}"
                 row = Style.dim(f"{label:>5}  ") + cells
-                # Подпись добавляем, только если строка ещё влезает в ширину:
-                # иначе она уползала под боковую панель и обрубалась.
-                note = f"  {span} т., " + ("порт занят" if held else "ждём операндов")
+                note = f"  {span} cyc, " + ("port busy" if held else "waiting for operands")
                 if render.vlen(row) + len(note) <= render.W:
                     row += Style.dim(note)
                 out.append(row)
@@ -199,21 +185,21 @@ def render_grid(sched: Schedule, dag: DAG, model: MachineModel,
                 continue
         mark = ""
         if heads == len(ports):
-            mark = paint("success", "  полная пачка")
+            mark = paint("success", "  full bundle")
         out.append(Style.dim(f"{t:>5}  ") + cells + mark)
         t += 1
 
-    out.append(Style.dim(f"{'':>5}  * монопольный порт   {CONT} занят   {EMPTY} пусто"))
+    out.append(Style.dim(f"{'':>5}  * exclusive port   {CONT} busy   {EMPTY} empty"))
     return out
 
 
 def render_schedule(sched, dag, model, hl, title) -> list[str]:
-    """Совместимость: основной вид расписания — сетка."""
+    """Compatibility alias: primary schedule view is the grid."""
     return render_grid(sched, dag, model, hl, title)
 
 
 # --------------------------------------------------------------------------
-# Критический путь в графе
+# Critical path in the DAG
 # --------------------------------------------------------------------------
 
 
@@ -231,51 +217,48 @@ def render_dag_path(dag: DAG, model: MachineModel, met: DagMetrics) -> list[str]
             str(met.height[ins.id]), str(met.asap[ins.id]),
         ])
     out = list(table(
-        ["", "#", "имя", "оп", "лат", "зависит от", "height", "asap"],
+        ["", "#", "name", "op", "lat", "depends on", "height", "asap"],
         rows, aligns=" ><<><>>",
     ))
     out.append("")
     out += wrap(Style.dim(
-        "* — узлы критического пути (asap + height = длина критического пути "
-        f"{met.critical_path_bound}). Эту цепочку зависимостей не ускорит ни один "
-        "планировщик; всё, что можно отыграть, — вокруг неё."), render.W - 2)
+        "* — critical-path nodes (asap + height = critical path length "
+        f"{met.critical_path_bound}). No scheduler can shorten this dependency "
+        "chain; any recoverable cycles lie around it."), render.W - 2)
     return out
 
 
 # --------------------------------------------------------------------------
-# Нижние границы
+# Lower bounds
 # --------------------------------------------------------------------------
 
 
 def render_bounds(dag: DAG, model: MachineModel, met: DagMetrics) -> list[str]:
     body = [
-        f"по критическому пути      : {met.critical_path_bound} "
-        f"{plural(met.critical_path_bound, 'такт', 'такта', 'тактов')}",
-        "  (цепочку зависимостей не ускорить никаким планировщиком)",
+        f"critical-path bound : {cycles(met.critical_path_bound)}",
+        "  (dependency chain cannot be shortened by any scheduler)",
         "",
-        f"по пропускной способности : {met.resource_bound} "
-        f"{plural(met.resource_bound, 'такт', 'такта', 'тактов')}",
-        f"  ({len(dag)} операций делим на порты, которые их умеют исполнять)",
+        f"resource bound      : {cycles(met.resource_bound)}",
+        f"  ({len(dag)} ops divided across the ports capable of executing them)",
         "",
-        f"итог: быстрее {met.lower_bound} "
-        f"{plural(met.lower_bound, 'такт', 'такта', 'тактов')} не выполнить — "
-        f"связывает {met.binding}",
+        f"result: no schedule can beat {cycles(met.lower_bound)} — "
+        f"binding: {met.binding}",
     ]
-    out = ["  " + l for l in panel(body, title="ДВЕ НИЖНИЕ ГРАНИЦЫ", color="border")]
+    out = ["  " + l for l in panel(body, title="TWO LOWER BOUNDS", color="border")]
     out.append("")
     out += wrap(Style.dim(
-        "Разрыв между baseline и нижней границей — это бюджет, за который имеет "
-        "смысл бороться. Смотри /compare."), render.W, "  ")
+        "The gap between baseline and the lower bound is the headroom worth "
+        "investigating. See /compare."), render.W, "  ")
     return out
 
 
 # --------------------------------------------------------------------------
-# Вердикт
+# Verdict
 # --------------------------------------------------------------------------
 
 
 def render_verdict(base: SchedulingResult, orc: SchedulingResult, met: DagMetrics) -> list[str]:
-    """Вердикт акцентной полосой — тот же язык, что у поля ввода."""
+    """Accent-bar verdict comparing baseline, oracle, and lower bound."""
     b, o = base.schedule.makespan, orc.schedule.makespan
     gap = b - o
     lb = met.lower_bound
@@ -283,23 +266,22 @@ def render_verdict(base: SchedulingResult, orc: SchedulingResult, met: DagMetric
     bar = paint(role, "▌")
 
     if gap > 0:
-        head = paint(role, f"выигрыш  -{gap} "
-                           f"{plural(gap, 'такт', 'такта', 'тактов')}  "
-                           f"из {b}  ({100 * gap / b:.0f}%)")
+        head = paint(role, f"gain  -{cycles(gap)}  "
+                           f"out of {b}  ({100 * gap / b:.0f}%)")
     else:
-        head = paint(role, "разницы нет — эвристика уже оптимальна")
+        head = paint(role, "no gap — greedy baseline is already optimal")
 
     if orc.optimal is True:
-        note = paint("success", "оптимум доказан точным поиском")
+        note = paint("success", "optimum proven by exact search")
     elif orc.optimal is False:
-        note = paint("warning", "оптимальность не доказана (лучшее найденное)")
+        note = paint("warning", "optimality unproven (best found within budget)")
     else:
-        note = Style.dim("оптимальность неизвестна")
+        note = Style.dim("optimality unknown")
 
     rows = [
-        ("baseline", "эвристика", b),
-        ("oracle", "точный поиск", o),
-        ("предел", "быстрее невозможно", lb),
+        ("baseline", "greedy heuristic", b),
+        ("oracle", "exact search", o),
+        ("lower bound", "theoretical minimum", lb),
     ]
     out = [f"  {bar} {head}", f"  {bar}"]
     for name, why, val in rows:
@@ -307,24 +289,22 @@ def render_verdict(base: SchedulingResult, orc: SchedulingResult, met: DagMetric
                    + render.pad(paint("title", name), 12)
                    + render.pad(Style.dim(why), 24)
                    + render.pad(paint("title", str(val)), 4, ">")
-                   + Style.dim(" т."))
+                   + Style.dim(" cyc"))
     out.append(f"  {bar}")
     out.append(f"  {bar} {note}")
     return out
 
 
-
-
 def render_stats_line(base: SchedulingResult, orc: SchedulingResult) -> str:
     bs, os_ = base.schedule, orc.schedule
     return Style.dim(
-        f"  baseline {bs.makespan} т./{bs.bundle_count} пачек"
-        f"   ·   oracle {os_.makespan} т./{os_.bundle_count} пачек"
+        f"  baseline {bs.makespan} cyc/{bs.bundle_count} bundles"
+        f"   ·   oracle {os_.makespan} cyc/{os_.bundle_count} bundles"
     )
 
 
 # --------------------------------------------------------------------------
-# Расхождение baseline vs oracle
+# Baseline vs oracle divergence
 # --------------------------------------------------------------------------
 
 
@@ -352,30 +332,25 @@ def render_divergence_line(base, orc, dag, met) -> list[str]:
     d = find_divergence(base.schedule, orc.schedule, dag)
     if d.cycle is None:
         return list(wrap(Style.dim(
-            "Расписания совпали полностью — эвристика приняла те же решения, что и "
-            "точный поиск."), render.W, "  "))
+            "Schedules are identical — the greedy heuristic made the exact "
+            "same decisions as the oracle."), render.W, "  "))
     base_only = ", ".join(
         f"{paint_op(dag[i].op, dag[i].name)}(h={met.height[i]})" for i in d.base_only)
     orc_only = ", ".join(
         f"{paint_op(dag[i].op, dag[i].name)}(h={met.height[i]})" for i in d.oracle_only
-    ) or Style.dim("ничего — сознательно придержал порт")
+    ) or Style.dim("nothing — deliberately held the port open")
     out = list(wrap(
-        f"Первое расхождение — такт {paint('1', str(d.cycle))}.  "
-        f"baseline выдал: {base_only}.  oracle выдал: {orc_only}.", render.W, "  "))
-    out.append(Style.dim(f"  Разбор этого такта: /explain {d.cycle}"))
+        f"First divergence — cycle {paint('1', str(d.cycle))}.  "
+        f"baseline issued: {base_only}.  oracle issued: {orc_only}.", render.W, "  "))
+    out.append(Style.dim(f"  Inspect this cycle: /explain {d.cycle}"))
     return out
 
 
 # --------------------------------------------------------------------------
-# Разбор одного такта
+# Pseudo-.s schedule output (e2k wide instructions in { ... } syntax)
 # --------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------
-# Расписание как псевдо-.s (широкие команды e2k в синтаксисе { … })
-# --------------------------------------------------------------------------
-
-# Наши операции → мнемоники в духе e2k (то, что реально видно в выводе lcc).
+# Abstract op classes -> e2k-style mnemonics seen in lcc output.
 E2K_MNEMO = {
     "ADD": "adds", "SUB": "subs", "MUL": "muls", "DIV": "sdivs",
     "AND": "andd", "SHL": "shls", "LOAD": "ldw", "STORE": "stw",
@@ -383,30 +358,25 @@ E2K_MNEMO = {
 
 
 def render_asm(sched: Schedule, dag: DAG, model: MachineModel) -> list[str]:
-    """Показать расписание так, как оно выглядело бы в реальном .s-выводе lcc:
-    широкие команды в фигурных скобках, каждая операция с каналом (`,0`…`,5`).
-
-    Смысл: модель мы СНЯЛИ с настоящего .s (см. /probe), и полезно увидеть свой
-    результат обратно в том же формате — это и есть та самая «широкая команда».
-    """
+    """Render schedule in e2k `.s` wide-instruction bundle syntax (`{ ... }`)."""
     out: list[str] = []
     for item in schedule_items(sched, dag, model):
         if item[0] == "bundle":
             _, t, heads, held = item
-            out.append(Style.dim("{") + Style.dim(f"                    ! такт {t}"))
+            out.append(Style.dim("{") + Style.dim(f"                    ! cycle {t}"))
             for p, i in heads:
                 mn = E2K_MNEMO.get(dag[i].op, dag[i].op.lower())
                 op = paint_op(dag[i].op, f"{mn}{model.port_label(p)}")
                 out.append(f"  {op}  {Style.dim(dag[i].text)}")
-            for p, i in held:  # монопольная операция всё ещё держит порт
+            for p, i in held:  # exclusive op still occupying its port
                 mn = E2K_MNEMO.get(dag[i].op, dag[i].op.lower())
                 until = sched.placements[i].cycle + model.occupancy(dag[i].op)
-                out.append(Style.dim(f"  ! {model.port_label(p)} занят: {mn} {dag[i].name} до т.{until}"))
+                out.append(Style.dim(f"  ! {model.port_label(p)} busy: {mn} {dag[i].name} until c.{until}"))
             out.append(Style.dim("}"))
         else:
             _, t0, t1, held = item
             span = t1 - t0 + 1
-            why = "порт занят монопольной операцией" if held else "ждём готовности операндов"
+            why = "port held by exclusive op" if held else "waiting for operands"
             out.append(Style.dim(f"  ! nop {span}   ({why})"))
     return out
 
@@ -415,11 +385,11 @@ def render_explain(t: int, base, orc, dag, model) -> list[str]:
     bt = {s.cycle: s for s in base.trace}
     ot = {s.cycle: s for s in orc.trace}
     out: list[str] = []
-    for who, tr, code in (("BASELINE (эвристика)", bt, "33"), ("ORACLE (точный поиск)", ot, "32")):
+    for who, tr, code in (("BASELINE (greedy)", bt, "33"), ("ORACLE (exact search)", ot, "32")):
         step = tr.get(t)
         out.append("  " + paint(code, who))
         if step is None:
-            out.append(Style.dim("    — на этом такте планировщик уже закончил"))
+            out.append(Style.dim("    — scheduler already finished before this cycle"))
             continue
         issued = step.issued
         if issued:
@@ -428,9 +398,9 @@ def render_explain(t: int, base, orc, dag, model) -> list[str]:
                 f"{model.port_label(next(c.channel for c in step.candidates if c.instr == i))}"
                 for i in issued
             )
-            out += wrap("выдал: " + txt, render.W, "    ")
+            out += wrap("issued: " + txt, render.W, "    ")
         else:
-            out.append("    выдал: " + paint("error", "ничего"))
+            out.append("    issued: " + paint("error", "nothing"))
         for c in step.candidates:
             if c.chosen:
                 out += wrap(paint("success", "+ ") + f"{dag[c.instr].name}: {c.reason}", render.W, "    ")
@@ -441,6 +411,6 @@ def render_explain(t: int, base, orc, dag, model) -> list[str]:
             out += wrap(paint("warning", "! " + step.comment), render.W, "    ")
     out.append("")
     out += wrap(Style.dim(
-        "Слева — по какому правилу решала эвристика, справа — что показал точный "
-        "поиск для того же такта."), render.W, "  ")
+        "Top — greedy heuristic decision; bottom — exact oracle decision for the same cycle."),
+        render.W, "  ")
     return out

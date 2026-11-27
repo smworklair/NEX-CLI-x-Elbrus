@@ -1,14 +1,10 @@
-"""Быстрые крошки: тот же результат, что у TinyScheduler, но за меньшее время.
+"""TINY Flash fast scheduler tests: exact parity with TinyScheduler at lower latency.
 
-Главное, что здесь проверяется:
-  * FastNet считает ровно те же числа, что TinyPriority.scores (сравнение по ==,
-    не «почти»), с памятью и без, на чистом Python и на numpy;
-  * TinyFlashScheduler даёт тот же makespan, что полный TinyScheduler, во всех
-    режимах точности ("exact"), и никогда не хуже жадного;
-  * расписание законно и полно, флаг optimal ставится только при makespan ==
-    нижней границе;
-  * режим "asm" законен и не хуже жадного (равенства с полным портфелем он НЕ
-    обещает).
+Verifies:
+  * FastNet computes bit-exact identical scores to TinyPriority.scores (pure Python & numpy);
+  * TinyFlashScheduler matches TinyScheduler makespan in "exact" mode and never trails greedy;
+  * schedules are complete and legal, with `optimal=True` iff `makespan == lower_bound`;
+  * "asm" mode is legal and never worse than greedy.
 """
 
 import json
@@ -38,7 +34,7 @@ def _graphs(n_random=24):
     return gs
 
 
-@unittest.skipUnless(_HAVE_WEIGHTS, "весов нет — только после обучения")
+@unittest.skipUnless(_HAVE_WEIGHTS, "weights not present — available after training")
 class TestFastNet(unittest.TestCase):
     def setUp(self):
         self.nets = {n: TinyPriority.load(str(_TINY / f)) for n, f in
@@ -48,18 +44,18 @@ class TestFastNet(unittest.TestCase):
 
     def _variants(self, net):
         yield "pure", fast.FastNet(net)
-        yield "pure/без памяти", fast.FastNet(net, 0)
-        yield "pure/память 5 строк", fast.FastNet(net, 5)
+        yield "pure/no-memo", fast.FastNet(net, 0)
+        yield "pure/memo-5", fast.FastNet(net, 5)
         if fast._np is not None:
             yield "numpy", fast.FastNetNp(net)
-            yield "numpy/без памяти", fast.FastNetNp(net, 0)
-            yield "numpy/память 5 строк", fast.FastNetNp(net, 5)
+            yield "numpy/no-memo", fast.FastNetNp(net, 0)
+            yield "numpy/memo-5", fast.FastNetNp(net, 5)
 
     def test_bit_identical(self):
         for name, net in self.nets.items():
             refs = [net.scores(X) for X in self.Xs]
             for label, f in self._variants(net):
-                for rep in range(2):  # второй проход идёт из памяти
+                for rep in range(2):  # second pass hits memo cache
                     for X, ref in zip(self.Xs, refs):
                         got = f.scores(X)
                         self.assertEqual(len(got), len(ref))
@@ -90,7 +86,7 @@ class TestFastNet(unittest.TestCase):
         self.assertIsNone(fast.make_fast(None))
 
 
-@unittest.skipUnless(_HAVE_WEIGHTS, "весов нет — только после обучения")
+@unittest.skipUnless(_HAVE_WEIGHTS, "weights not present — available after training")
 class TestTinyFast(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -106,31 +102,31 @@ class TestTinyFast(unittest.TestCase):
             with self.subTest(label=label, graph=key):
                 self.assertEqual(res.schedule.validate(), [])
                 self.assertTrue(res.schedule.complete)
-                self.assertEqual(ms, r0.schedule.makespan, "makespan как у TinyScheduler")
+                self.assertEqual(ms, r0.schedule.makespan, "makespan must match TinyScheduler")
                 g = GreedyListScheduler().schedule(dag, MODEL).schedule.makespan
                 self.assertLessEqual(ms, g)
                 lb = compute_metrics(dag, MODEL).lower_bound
                 if res.optimal:
-                    self.assertEqual(ms, lb, "optimal=True только при makespan == границе")
+                    self.assertEqual(ms, lb, "optimal=True iff makespan == lower_bound")
                 self.assertEqual(res.search_stats["lower_bound"], lb)
 
     def test_exact_default(self):
         self._check(fast.TinyFlashScheduler(), "exact")
 
     def test_exact_without_numpy(self):
-        self._check(fast.TinyFlashScheduler(use_numpy=False), "exact/без numpy")
+        self._check(fast.TinyFlashScheduler(use_numpy=False), "exact/no-numpy")
 
     def test_exact_without_stop(self):
-        self._check(fast.TinyFlashScheduler(stop_at_bound=False), "exact/без остановки")
+        self._check(fast.TinyFlashScheduler(stop_at_bound=False), "exact/no-early-stop")
 
     def test_exact_without_trace_and_memo(self):
-        self._check(fast.TinyFlashScheduler(with_trace=False, memo_limit=0), "exact/без трассы и памяти")
+        self._check(fast.TinyFlashScheduler(with_trace=False, memo_limit=0), "exact/no-trace-no-memo")
 
     def test_custom_order_keeps_result(self):
-        """Порядок групп не меняет итоговый makespan при полном проходе."""
+        """Portfolio group order must not change the final makespan on a full pass."""
         s = fast.TinyFlashScheduler(order=("defer", "hold", "prio", "bt", "rule", "bh"),
                                    stop_at_bound=False)
-        self._check(s, "другой порядок")
+        self._check(s, "reversed-order")
 
     def test_asm_mode_legal_not_worse_than_greedy(self):
         s = fast.TinyFlashScheduler(mode="asm")
@@ -156,7 +152,7 @@ class TestTinyFast(unittest.TestCase):
                 self.assertTrue(res.optimal)
                 self.assertEqual(st["tiny_winner"], "greedy")
                 self.assertEqual(res.schedule.makespan, st["baseline_makespan"])
-        self.assertGreater(hit, 0, "ожидался хотя бы один граф, где жадный уже на границе")
+        self.assertGreater(hit, 0, "expected at least one graph where greedy already meets the lower bound")
 
     def test_trace_matches_when_same_winner(self):
         s = fast.TinyFlashScheduler()
@@ -223,15 +219,9 @@ class TestTinyFast(unittest.TestCase):
             fast.TinyFlashScheduler(order=("bh", "nope"))
 
 
-@unittest.skipUnless(_HAVE_WEIGHTS, "весов нет — только после обучения")
+@unittest.skipUnless(_HAVE_WEIGHTS, "weights not present — available after training")
 class TestTinyFastHardSample(unittest.TestCase):
-    """Трудные графы: только они чувствительны к потере любой группы портфеля.
-
-    На сценариях и малых случайных графах пропажа любой группы незаметна
-    (проверено выключением по одной), на eval_hard — заметна почти для каждой
-    (веер высоты, ручное правило, веер скоров, hold, defer). Поэтому
-    равенство с полным TinyScheduler проверяется ещё и здесь.
-    """
+    """Hard graphs from eval_hard.jsonl: sensitive to every portfolio group, ensuring exact parity."""
 
     N = 100
 
@@ -239,7 +229,7 @@ class TestTinyFastHardSample(unittest.TestCase):
     def setUpClass(cls):
         p = Path(__file__).resolve().parent.parent / "eval_hard.jsonl"
         if not p.exists():
-            raise unittest.SkipTest("нет eval_hard.jsonl")
+            raise unittest.SkipTest("eval_hard.jsonl not present")
         with open(p, encoding="utf-8") as f:
             lines = f.readlines()[:cls.N]
         cls.graphs = [(f"eval_hard#{i}", build_dag(parse_graph_entries(json.loads(l)["prompt"])))
@@ -258,11 +248,10 @@ class TestTinyFastHardSample(unittest.TestCase):
         self._same(fast.TinyFlashScheduler(), "exact")
 
     def test_exact_without_stop_and_numpy(self):
-        self._same(fast.TinyFlashScheduler(stop_at_bound=False, use_numpy=False), "без остановки и numpy")
+        self._same(fast.TinyFlashScheduler(stop_at_bound=False, use_numpy=False), "no-early-stop-no-numpy")
 
     def test_beam_calls_match_parent(self):
-        """Те же веера с теми же зёрнами, что у TinyScheduler: иначе набор
-        вариантов другой, и равенство makespan держалось бы на удаче."""
+        """Must use the exact same fan-out seeds as TinyScheduler so candidate sets match."""
         def record(sched):
             calls = []
             o_orders, o_holds = sched._beam_orders, sched._beam_holds
@@ -300,7 +289,7 @@ class TestTinyFastHardSample(unittest.TestCase):
             with self.subTest(graph=key):
                 self.assertLessEqual(res.schedule.makespan, g)
                 self.assertEqual(res.schedule.validate(), [])
-                # режим asm — не гарантия, а выбор: проигрыш полному портфелю возможен
+                # asm mode trades full-portfolio optimality for speed
                 self.assertGreaterEqual(res.schedule.makespan, self.refs[key])
 
 
@@ -319,7 +308,7 @@ class TestFastNoWeightsNeeded(unittest.TestCase):
 
 
 class TestRenameCompat(unittest.TestCase):
-    """Старое имя TinyFastScheduler осталось алиасом после переименования в TINY Flash."""
+    """Legacy name TinyFastScheduler remains an alias after renaming to TINY Flash."""
 
     def test_old_name_is_alias(self):
         self.assertIs(fast.TinyFastScheduler, fast.TinyFlashScheduler)

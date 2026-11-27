@@ -1,42 +1,32 @@
-"""SEED: ответ модели — подсказка точному поиску, а не замена ему.
+"""SEED: use the model response as a hint to exact search, not a replacement.
 
-ЗАЧЕМ
------
-`vliw/core/oracle.py` в своей шапке предсказал этот ход задолго до того, как
-модель появилась:
+WHY
+---
+`vliw/core/oracle.py` anticipated this design before the model existed:
+the portfolio fallback runs the greedy engine with hundreds of priority
+vectors — conceptually what a learned model does instead of a single fixed
+heuristic. Here the model plugs directly into that slot.
 
-    ПОРТФЕЛЬНЫЙ (если точный не уложился в бюджет). Прогоняем тот же жадный
-    движок с сотнями разных векторов приоритетов… По смыслу это ровно то,
-    чем будет заниматься обученная модель: сэмплировать хорошие порядки
-    вместо единственного жёсткого правила.
-
-А в самом `_portfolio` до сих пор стоит `rnd.uniform` поверх `height`. Здесь
-на это место встаёт модель — не рядом, а вместо, в готовое гнездо.
-
-ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ CAB
+HOW THIS DIFFERS FROM CAB
 -------------------------
-CAB (`portfolio.py`) делает из ответа модели ЗАКОННОЕ расписание и на этом
-останавливается: оптимальность он не доказывает и доказать не может. SEED
-отдаёт тот же материал точному поиску, который доказывает. Разница в том,
-чей ответ считается итогом:
+CAB (`portfolio.py`) turns the model output into a VALID schedule and stops:
+it cannot prove optimality. SEED hands the same material to exact search,
+which does prove optimality:
 
-* CAB  — итог берётся у модели (или у эвристики, если она короче);
-* SEED — итог берётся у оракула, а модель лишь помогает ему быстрее.
+* CAB  — final answer comes from the model (or heuristic if shorter);
+* SEED — final answer comes from the oracle; the model only helps it faster.
 
-Отсюда главное свойство: **модель здесь не может сделать ответ хуже.**
-Подсказка входит в поиск только двумя способами — верхней границей (и
-только законным полным расписанием строго короче baseline) и вектором
-приоритетов для портфельного движка. Ни один вывод «доказанно недостижимо»
-от неё не зависит.
+Key property: **the model cannot make the answer worse.** The hint enters
+search only as an upper bound (strictly shorter valid complete schedule)
+and as priority vectors for the portfolio. No lower-bound proof depends on it.
 
-ЧЕГО ЗДЕСЬ НЕТ
---------------
-Обещания ускорения. Углубление в оракуле идёт СНИЗУ ВВЕРХ (`for target in
-range(lb, ub)`), поэтому лучшая верхняя граница не пропускает дорогие
-провальные пробы низких целей. Она даёт три вещи, и все три надо мерить, а
-не предполагать: мгновенное доказательство, когда подсказка попала в нижнюю
-границу; более узкий доказанный интервал при таймауте; укороченный цикл
-там, где оптимум совпал с верхней границей.
+WHAT IS NOT PROMISED
+--------------------
+Guaranteed speedup. Oracle iterative deepening runs BOTTOM-UP (`range(lb, ub)`),
+so a tighter upper bound does not skip expensive infeasible lower targets.
+Its three benefits (all to be measured, not assumed): instant proof when the
+hint hits the lower bound, a narrower proven interval on timeout, and a
+shorter loop when the optimum equals the upper bound.
 """
 
 from __future__ import annotations
@@ -49,20 +39,19 @@ from .portfolio import choose, floor_from_model, order_from_model, variants
 
 def hint_from_answer(dag: DAG, model: MachineModel,
                      placements: dict[int, tuple[int, int]],
-                     *, source: str = "модель") -> Hint:
-    """Ответ модели → подсказка оракулу.
+                     *, source: str = "model") -> Hint:
+    """Model response -> oracle Hint.
 
-    Расписание берётся у CAB: это лучший ЗАКОННЫЙ кандидат портфеля, а
-    верхней границей может быть только законное расписание. Векторы —
-    те же, что CAB подаёт в `list_schedule`, чтобы портфельный движок
-    оракула получил ровно то мнение модели, которое уже показало себя.
+    The schedule comes from CAB (best VALID portfolio candidate, since an
+    upper bound must be valid). Priority vectors match what CAB passes to
+    `list_schedule`, giving the oracle portfolio the same model guidance.
     """
     from ..core.dag import compute_metrics
 
     metrics = compute_metrics(dag, model)
     best = choose(variants(dag, model, placements))
     greedy = next((v for v in variants(dag, model, placements)
-                   if v.name == "жадный"), None)
+                   if v.name == "greedy"), None)
     limit = greedy.makespan if greedy is not None else len(dag) * 4
     return Hint(
         schedule=best.schedule if best.legal else None,

@@ -1,36 +1,8 @@
-"""Быстрый жадный потактовый движок: ТЕ ЖЕ расписания, что у `list_schedule`.
+"""Fast greedy list-scheduling engine: bit-exact parity with `list_schedule`.
 
-Зачем. На настоящем коде 95 % времени портфеля крошек уходит не в нейросети, а
-в `baseline.list_schedule`: на каждом такте он заново перебирает ВСЕ ещё не
-выданные инструкции и для каждой проверяет всех предшественников, а ещё строит
-кортежи каналов заново. Для блока в 300 операций это сотни тысяч лишних шагов.
-
-Что делает этот модуль. Выдаёт ровно то же расписание — для КАЖДОЙ инструкции
-тот же такт и тот же канал, — но считает иначе:
-
-  * достоверность готовности — счётчиком оставшихся предшественников, а не
-    перебором (`remaining[i]`);
-  * ключ сортировки считается один раз на запуск: `rank[i]` — место инструкции
-    в порядке (−приоритет, номер); дальше на такте сортируются только готовые;
-  * каналы инструкции заранее отсортированы по (цена канала, номер) — первый
-    свободный и есть `min(free, key=(costs, c))` оригинала;
-  * такты, в которые ничего выдать нельзя, пропускаются прыжком к ближайшему
-    моменту, когда это станет возможным (в такты без выдачи состояние машины не
-    меняется, так что результат тот же);
-  * объекты `Schedule`/`Placement` строятся только для тех вариантов, которые
-    действительно нужны (лучший на сей момент), а не для каждого запуска.
-
-Что это НЕ делает: трассу решений (`collect_trace`) не ведёт — это остаётся за
-`baseline.list_schedule`. Поведение при нестандартных входах то же:
-операция без исполнимого канала → «планировщик зациклился» (RuntimeError).
-
-Строгое равенство подтверждается тестами (`tests/test_fastlist.py`): сравнение
-`placements` целиком и порядка выдачи с оригиналом на случайных графах,
-случайных приоритетах (с множеством ничьих), случайных `defer_until`, на всех
-профилях машин и на разной ширине.
-
-Единственное допущение: приоритеты — конечные числа (NaN в ключе сортировки
-ломает порядок и у оригинала).
+Produces the exact same (cycle, channel) and issue order for every instruction
+using remaining-predecessor counters, pre-sorted channels, idle-cycle skipping,
+and lazy `Schedule` construction. Does not collect decision traces.
 """
 
 from __future__ import annotations
@@ -43,12 +15,12 @@ from .dag import DAG
 from .model import MachineModel
 from .schedule import Placement, Schedule
 
-_GUARD = 100000  # как в list_schedule
+_GUARD = 100000  # matches list_schedule
 
-# Таблица «операция → (латентность, занятость, каналы по цене)» зависит только от
-# машины, а считать её дорого (channel_costs зовёт channels_for 150 раз). Модели
-# живут долго (PROFILES), поэтому кэш по id с проверкой `is`; размер ограничен,
-# чтобы массовый прогон с `with_width` не копил модели.
+# Per-machine table: op -> (latency, occupancy, cost-sorted channels).
+# Bounded cache keyed by model id with identity check.
+#
+#
 _TABLES: dict[int, tuple[MachineModel, dict[str, tuple[int, int, tuple[int, ...]]], list[int]]] = {}
 _TABLES_MAX = 16
 
@@ -66,7 +38,7 @@ def _model_table(model: MachineModel):
 
 
 class ListPlan:
-    """Всё, что не зависит от приоритетов и держек: считается один раз на граф."""
+    """DAG-invariant precomputation reused across priority/defer runs."""
 
     __slots__ = ("dag", "model", "n", "width", "lat", "occ", "caps",
                  "npreds", "succs", "roots")
@@ -100,13 +72,12 @@ class ListPlan:
 
     def run(self, priority: Sequence[float],
             defer_until: Mapping[int, int] | None = None) -> "RawSchedule":
-        """Один проход. `priority`: чем больше, тем раньше. `defer_until`:
-        «не раньше такта» (как в `list_schedule`)."""
+        """Single pass. Higher `priority` first; `defer_until` sets earliest issue cycle."""
         n = self.n
         if n == 0:
             return RawSchedule([], [], [], 0)
         neg = [-p for p in priority]
-        order = sorted(range(n), key=neg.__getitem__)  # устойчиво: ничьи — по номеру
+        order = sorted(range(n), key=neg.__getitem__)  # stable: ties break by instruction ID
         rank = [0] * n
         for r, i in enumerate(order):
             rank[i] = r
@@ -128,7 +99,7 @@ class ListPlan:
         while left:
             iters += 1
             if iters > _GUARD:
-                raise RuntimeError("планировщик зациклился")
+                raise RuntimeError("scheduler stuck in loop")
             cands = [i for i in pool if ready_time[i] <= cycle]
             if cands:
                 if len(cands) > 1:
@@ -161,16 +132,16 @@ class ListPlan:
                             else:
                                 newly.append(s)
                     if min(free_at) > cycle:
-                        break  # все каналы заняты: дальше такт ничего не даст
+                        break  # all channels full: nothing more can issue this cycle
                 if did:
                     pool = [i for i in pool if cyc[i] < 0]
                     if newly:
                         pool += newly
                     cycle += 1
                     continue
-            # В этот такт ничего не выдано: состояние машины не изменилось и не
-            # изменится до ближайшего момента, когда какая-то инструкция из пула
-            # станет готова, снимется держка и освободится её канал.
+            # Nothing issued this cycle: jump to earliest cycle where some op
+            # becomes ready, passes defer_until, and has a free channel.
+            #
             wake = -1
             for i in pool:
                 ci = caps[i]
@@ -187,7 +158,7 @@ class ListPlan:
                 if wake < 0 or t < wake:
                     wake = t
             if wake < 0:
-                raise RuntimeError("планировщик зациклился")
+                raise RuntimeError("scheduler stuck in loop")
             cycle = wake if wake > cycle else cycle + 1
 
         ms = 0
@@ -198,8 +169,7 @@ class ListPlan:
         return RawSchedule(cyc, chn, placed, ms)
 
     def to_schedule(self, raw: "RawSchedule") -> Schedule:
-        """Настоящий `Schedule` (порядок вставки в `placements` — порядок выдачи,
-        как у оригинала)."""
+        """Materialize a `Schedule` (insertion order matches issue order)."""
         s = Schedule(self.dag, self.model)
         pl = s.placements
         cyc, chn = raw.cycle, raw.channel
@@ -210,19 +180,17 @@ class ListPlan:
 
 @dataclass(slots=True)
 class RawSchedule:
-    """Расписание без объектов: такт и канал по номеру инструкции."""
+    """Lightweight schedule result: cycle and channel arrays indexed by instruction ID."""
 
     cycle: list[int]
     channel: list[int]
-    order: list[int]  # инструкции в порядке выдачи
+    order: list[int]  # instructions in issue order
     makespan: int
 
 
 def list_schedule_fast(dag: DAG, model: MachineModel, priority: Sequence[float],
                        *, defer_until: Mapping[int, int] | None = None,
                        height: Sequence[int] | None = None) -> tuple[Schedule, list]:
-    """Замена `baseline.list_schedule(..., collect_trace=False)` по сигнатуре:
-    тот же `Schedule`, пустая трасса. `height` принимается ради совместимости
-    (на расписание не влияет)."""
+    """Drop-in replacement for `baseline.list_schedule(..., collect_trace=False)`."""
     plan = ListPlan(dag, model)
     return plan.to_schedule(plan.run(priority, defer_until)), []

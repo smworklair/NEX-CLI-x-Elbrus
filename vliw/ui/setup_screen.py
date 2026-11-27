@@ -1,15 +1,14 @@
-"""Экран-помощник вместо «урезанного» интерфейса.
+"""Interactive setup assistant screen shown when the full-screen TUI cannot start.
 
-Показывается, когда основной полноэкранный экран поднять нельзя, а `--plain`
-явно не запрошен. Это не тупиковое сообщение и не справочник: экран ведёт себя
-как ассистент. Пользователь пишет обычными словами («запусти», «нет textual»,
-«не работает») или выбирает пункт стрелками — ассистент показывает короткий
-план с точными командами, спрашивает согласие и сам выполняет безопасные шаги:
-ставит недостающие пакеты, проверяет окружение, открывает NEX CLI.
+Displayed whenever the full-screen Textual UI is unavailable and `--plain`
+was not explicitly requested. Acts as a lightweight assistant: the user can
+type plain questions ("launch", "missing textual", "won't start") or pick an
+item with arrow keys, inspect the exact shell commands, confirm, and run safe
+setup steps (install missing packages, verify the environment, launch NEX CLI).
 
-Всё оформление и ввод — stdlib: ANSI-цвета из `vliw.ui.render`, логотип из
-`vliw.ui.logo`, ответы — из `vliw.help_answers`. Ни textual, ни rich, ни numpy
-здесь не требуются: экран как раз и нужен на чистой машине.
+Pure standard library: ANSI colors from `vliw.ui.render`, header from
+`vliw.ui.logo`, answers from `vliw.help_answers`. Requires neither textual,
+rich, nor numpy.
 """
 
 from __future__ import annotations
@@ -29,9 +28,7 @@ from . import render
 from .logo import render_title
 from .render import Style, paint
 
-# Фиолетовая композиция экрана запуска. Тема включается только здесь и только
-# на время жизни экрана: выход из `welcome()`/`explain()` завершает процесс,
-# поэтому full TUI (он стартует отдельным процессом) остаётся в своей теме.
+# Purple theme active only for the lifetime of this boot/setup screen.
 _BOOT_THEME = "nnl-purple"
 
 MIN_TEXTUAL = "8.2"
@@ -41,20 +38,20 @@ _VT: bool | None = None
 
 
 # --------------------------------------------------------------------------
-# Что установлено и почему не поднялся основной экран
+# Environment detection and reasons the full-screen UI could not start
 # --------------------------------------------------------------------------
 
 
 def _has(module: str) -> bool:
-    """Есть ли модуль, не импортируя его (импорт textual заметно медленный)."""
+    """Check whether a module is installed without importing it."""
     try:
         return importlib.util.find_spec(module) is not None
-    except Exception:  # pragma: no cover - сломанное окружение
+    except Exception:  # pragma: no cover - broken environment
         return False
 
 
 def missing() -> list[str]:
-    """Недостающие пакеты в виде спецификаций для pip."""
+    """Missing UI packages as pip requirement specs."""
     out: list[str] = []
     if not _has("textual"):
         out.append(f"textual>={MIN_TEXTUAL}")
@@ -64,42 +61,42 @@ def missing() -> list[str]:
 
 
 def reasons(extra: str | None = None) -> list[str]:
-    """Почему полноэкранный режим не поднимается — по пунктам."""
+    """List concrete reasons why the full-screen UI did not start."""
     out: list[str] = []
     if sys.version_info < (3, 10):
         out.append(
-            f"Python {platform.python_version()} старше 3.10 — "
-            "NEX CLI требует 3.10 или новее"
+            f"Python {platform.python_version()} is older than 3.10 — "
+            "NEX CLI requires 3.10 or newer"
         )
     if not _has("textual"):
         out.append(
-            f"не установлен пакет textual (нужен >= {MIN_TEXTUAL}) — "
-            "без него нет полноэкранного интерфейса"
+            f"package textual is not installed (requires >= {MIN_TEXTUAL}) — "
+            "needed for the full-screen interface"
         )
     elif not _has("rich"):
         out.append(
-            f"не установлен пакет rich (нужен >= {MIN_RICH}) — "
-            "без него нет цветного вывода"
+            f"package rich is not installed (requires >= {MIN_RICH}) — "
+            "needed for colored output"
         )
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         out.append(
-            "ввод или вывод не подключён к терминалу "
-            "(пайп, перенаправление в файл, фоновый запуск)"
+            "stdin or stdout is not attached to a terminal "
+            "(pipe, file redirection, or non-interactive console)"
         )
     if extra:
         out.append(extra)
     if not out:
-        out.append("полноэкранный режим отключён в этом окружении")
+        out.append("full-screen mode is disabled in this environment")
     return out
 
 
 def _exe() -> str:
-    """Путь к текущему Python, готовый для вставки в командную строку."""
+    """Current Python executable path, quoted if it contains spaces."""
     return f'"{sys.executable}"' if " " in sys.executable else sys.executable
 
 
 def _project_dir() -> Path | None:
-    """Каталог проекта, если запущены из исходников (есть pyproject.toml)."""
+    """Project root directory when running from source (contains pyproject.toml)."""
     for parent in Path(__file__).resolve().parents:
         if (parent / "pyproject.toml").is_file():
             return parent
@@ -107,7 +104,7 @@ def _project_dir() -> Path | None:
 
 
 def _store_stub() -> bool:
-    """Запущены через заглушку Microsoft Store из WindowsApps."""
+    """Whether running via the WindowsApps Microsoft Store Python stub."""
     return "WindowsApps" in sys.executable
 
 
@@ -119,7 +116,7 @@ def _version(module: str) -> str:
     try:
         return importlib.metadata.version(module)
     except Exception:
-        return "есть" if _has(module) else "нет"
+        return "installed" if _has(module) else "missing"
 
 
 def _tty() -> bool:
@@ -127,7 +124,7 @@ def _tty() -> bool:
 
 
 # --------------------------------------------------------------------------
-# Оформление: перенос, рамка, меню
+# Layout helpers: wrapping, boxes, arrow-key menu
 # --------------------------------------------------------------------------
 
 
@@ -136,11 +133,7 @@ def _ширина() -> int:
 
 
 def _обернуть(текст: str, ширина: int) -> list[str]:
-    """Перенос строки; строки с отступом в 4 пробела — команды.
-
-    Команды не переносим вставкой `\\n`: терминал сам сделает мягкий перенос,
-    а копирование длинной команды останется целым.
-    """
+    """Wrap prose; lines indented by 4 spaces are shell commands left intact."""
     if not текст:
         return [""]
     if текст.startswith("    "):
@@ -149,7 +142,7 @@ def _обернуть(текст: str, ширина: int) -> list[str]:
 
 
 def _рамка(строки: list[str], заголовок: str, ширина: int, роль: str = "border") -> list[str]:
-    """Рамка вокруг ПЛОСКОГО текста; ширина — внешняя, в символах."""
+    """Draw a box around plain text lines with given outer width."""
     внутренняя = ширина - 4
     тело: list[str] = []
     for строка in строки:
@@ -174,53 +167,48 @@ def _пункт(текст: str) -> str:
 
 
 def _статус() -> str:
-    venv = "venv" if _in_venv() else "без venv"
-    textual = _version("textual") if _has("textual") else "нет"
-    rich = _version("rich") if _has("rich") else "нет"
+    venv = "venv" if _in_venv() else "no venv"
+    textual = _version("textual") if _has("textual") else "missing"
+    rich = _version("rich") if _has("rich") else "missing"
     return (f"Python {platform.python_version()} · {platform.system()} "
             f"{platform.release()} · {venv} · textual: {textual} · rich: {rich}")
 
 
 def _статус_кратко() -> str:
-    venv = "venv" if _in_venv() else "без venv"
-    textual = "есть" if _has("textual") else "нет"
-    rich = "есть" if _has("rich") else "нет"
-    tty = "терминал OK" if _tty() else "терминал НЕ TTY"
+    venv = "venv" if _in_venv() else "no venv"
+    textual = "ok" if _has("textual") else "missing"
+    rich = "ok" if _has("rich") else "missing"
+    tty = "TTY OK" if _tty() else "NOT A TTY"
     return (f"Python {platform.python_version()} · {venv} · textual: {textual} · "
             f"rich: {rich} · {tty}")
 
 
 def _о_продукте() -> list[str]:
     return [
-        "NEX CLI — рабочее место для планирования инструкций под VLIW-машину "
-        "Эльбрус e2k. Он показывает, как программа ложится на каналы и порты "
-        "машины, где теряются такты и что можно ускорить перестановкой.",
+        "NEX CLI is a workspace for instruction scheduling on the Elbrus e2k "
+        "VLIW architecture. It shows how instructions map onto channels and "
+        "ports, where cycles are lost, and what can be sped up by reordering.",
         "",
-        "Внутри три режима: КОД — редактор .s и расписание; РАЗБОР — весь граф "
-        "и диагноз; АГЕНТ — вопросы к LLM о текущем графе. Планировщик, оракул "
-        "и разовые команды работают на чистом Python — им полноэкранные панели "
-        "не нужны.",
+        "Three modes inside: CODE — .s editor and schedule; LAB — full graph "
+        "and diagnostics; AGENT — LLM Q&A about the current graph. The scheduler, "
+        "oracle, and one-shot commands run on pure Python without full-screen panes.",
     ]
 
 
 def _приветствие() -> list[str]:
     return [
-        "Здравствуйте! Я NNL-помощник NEX CLI.",
-        "Скажите словами — поставлю недостающее, запущу, разберу ошибку.",
+        "Hello! I'm the NEX CLI NNL assistant.",
+        "Tell me what you need — I can install missing packages, launch, or troubleshoot.",
     ]
 
 
 def _шапка_кратко() -> list[str]:
-    """Шапка экрана запуска: LEGO-логотип «NNL» + строка названия.
-
-    Без лишних строк: экран должен целиком влезать в окно в 30 строк,
-    чтобы верхняя шляпка кирпичей не уезжала за край.
-    """
+    """Compact launch header: brick-style 'NNL' logo + title line."""
     out = render_title(indent="  ")
     out += [
         "",
         "  " + paint("title", "NEX CLI") + Style.dim("  ·  ")
-        + paint("mountain", "NNL-помощник") + Style.dim("  ·  ")
+        + paint("mountain", "NNL Assistant") + Style.dim("  ·  ")
         + paint("mountain", "Elbrus e2k") + Style.dim("  ·  ")
         + paint("warning", VERSION_LABEL),
     ]
@@ -228,22 +216,22 @@ def _шапка_кратко() -> list[str]:
 
 
 def _печать_причины(extra: str | None) -> None:
-    """Причина сбоя: подпись только у первой строки, продолжения — под ней."""
+    """Print failure reasons with aligned continuation lines."""
     ширина = max(24, render.term_cols() - 4)
     for i, причина in enumerate(reasons(extra)):
-        подпись = "  Причина: " if i == 0 else "           "
+        подпись = "  Reason: " if i == 0 else "          "
         for j, часть in enumerate(render.wrap(причина, ширина - len(подпись))):
             префикс = подпись if (i == 0 and j == 0) else " " * len(подпись)
             print(префикс + часть)
 
 
 # --------------------------------------------------------------------------
-# Ввод с клавиатуры: стрелки и Enter, без сторонних библиотек
+# Keyboard input: arrow keys and Enter using stdlib only
 # --------------------------------------------------------------------------
 
 
 def _vt_доступен() -> bool:
-    """Можно ли пользоваться управляющими последовательностями ANSI."""
+    """Whether ANSI VT escape sequences are supported."""
     global _VT
     if _VT is not None:
         return _VT
@@ -260,13 +248,13 @@ def _vt_доступен() -> bool:
             _VT = False
         else:
             _VT = bool(k.SetConsoleMode(handle, режим.value | 0x0004))
-    except Exception:  # pragma: no cover - старый Windows
+    except Exception:  # pragma: no cover - legacy Windows
         _VT = False
     return _VT
 
 
 def _клавиша() -> str:
-    """Одна клавиша: вверх / вниз / ввод / esc или обычный символ."""
+    """Read a single key: up / down / enter / esc or printable char."""
     if os.name == "nt":
         import msvcrt
 
@@ -314,8 +302,6 @@ def _клавиша() -> str:
 def _строка_пункта(метка: str, подсказка: str, выбран: bool) -> str:
     указатель = paint("accent", ">") if выбран else " "
     if подсказка:
-        # Длинная подсказка на узком терминале переносится и ломает перерисовку
-        # стрелками: строка меню должна оставаться одной физической строкой.
         доступно = render.term_cols() - 5 - len(метка)
         if доступно <= 3:
             подсказка = ""
@@ -333,7 +319,7 @@ def _меню_вводом(
     подсказка: str,
     приём_текста: bool,
 ) -> int | str | None:
-    """Запасной режим для терминалов без ANSI: цифры и обычный input."""
+    """Fallback numbered menu for terminals without ANSI VT support."""
     if заголовок:
         хвост = ("   " + подсказка) if подсказка else ""
         print("  " + paint("accent", заголовок) + Style.dim(хвост))
@@ -357,7 +343,7 @@ def _меню_вводом(
             return i
     if приём_текста:
         return ответ
-    print("  " + Style.dim("Нет такого пункта."))
+    print("  " + Style.dim("Invalid choice."))
     return None
 
 
@@ -365,15 +351,10 @@ def _меню(
     пункты: list[tuple[str, str]],
     *,
     заголовок: str = "",
-    подсказка: str = "↑/↓ — выбор · Enter — подтвердить",
+    подсказка: str = "↑/↓ — select · Enter — confirm",
     приём_текста: bool = False,
 ) -> int | str | None:
-    """Выбор стрелками. Возвращает индекс, текст запроса или None (выход/назад).
-
-    Если `приём_текста`, первая напечатанная буква не выбирает пункт, а
-    превращается в начало вопроса — так пользователю не обязательно сначала
-    искать «Задать вопрос» в меню.
-    """
+    """Arrow-key menu returning selected index, typed query, or None (exit/back)."""
     if not _tty() or not _vt_доступен():
         return _меню_вводом(пункты, заголовок, подсказка, приём_текста)
 
@@ -436,17 +417,12 @@ def _меню(
 
 
 # --------------------------------------------------------------------------
-# Планы действий: команды, которые ассистент предлагает выполнить
+# Action plans: commands the assistant proposes and executes on approval
 # --------------------------------------------------------------------------
 
 
 def _команда_текст(команда: list[str]) -> str:
-    """Команда в виде, который можно скопировать в терминал целиком.
-
-    `subprocess.list2cmdline` не экранирует `>` и `|`: спецификация
-    `textual>=8.2` в cmd превратилась бы в перенаправление вывода. Поэтому
-    метасимволы оболочки здесь quoted явно.
-    """
+    """Format a command list cleanly for copy-paste into a shell."""
     if os.name == "nt":
         части: list[str] = []
         for аргумент in команда:
@@ -472,7 +448,7 @@ def _команда_установки(пакеты: list[str] | None = None) ->
 def _шаг_установки(пакеты: list[str] | None = None) -> dict:
     пакеты = пакеты or _пакеты_интерфейса()
     return {
-        "текст": "Поставить " + ", ".join(пакеты),
+        "текст": "Install " + ", ".join(пакеты),
         "команда": _команда_установки(пакеты),
         "вид": "установка",
     }
@@ -480,7 +456,7 @@ def _шаг_установки(пакеты: list[str] | None = None) -> dict:
 
 def _шаг_запуска() -> dict:
     return {
-        "текст": "Открыть NEX CLI",
+        "текст": "Launch NEX CLI",
         "команда": [sys.executable, "-m", "vliw"],
         "вид": "запуск",
     }
@@ -492,37 +468,37 @@ def _план_запуска() -> dict:
     резюме: list[str] = []
     if пакеты:
         резюме.append(
-            "Сначала поставлю " + " и ".join(пакеты) + ", потом открою NEX CLI. "
-            "Это займёт меньше минуты."
+            "I will install " + " and ".join(пакеты) + " first, then open NEX CLI. "
+            "This takes less than a minute."
         )
         шаги.append(_шаг_установки(пакеты))
     else:
-        резюме.append("Всё готово — открываю NEX CLI.")
+        резюме.append("Everything is ready — opening NEX CLI.")
 
     if _tty():
         шаги.append(_шаг_запуска())
     else:
         резюме.append(
-            "Терминал не интерактивный: полноэкранный интерфейс не откроется. "
-            "Запустите эту же команду из PowerShell, Windows Terminal или "
-            "обычного терминала Linux."
+            "Terminal is non-interactive: the full-screen UI cannot open here. "
+            "Run the same command from PowerShell, Windows Terminal, or a "
+            "standard Linux/macOS terminal."
         )
     if _store_stub():
         резюме.append(
-            "Внимание: сейчас используется заглушка Microsoft Store. "
-            "Лучше поставить Python с python.org — иначе пакеты могут "
-            "устанавливаться не туда."
+            "Warning: running via the Microsoft Store Python stub. "
+            "Installing Python from python.org is recommended so packages "
+            "land in the right interpreter."
         )
 
     if пакеты and _tty():
-        название = "Установить интерфейс и открыть NEX CLI"
-        кнопка = "Установить и открыть"
+        название = "Install UI packages and open NEX CLI"
+        кнопка = "Install and open"
     elif пакеты:
-        название = "Установить интерфейс"
-        кнопка = "Установить"
+        название = "Install UI packages"
+        кнопка = "Install"
     else:
-        название = "Открыть NEX CLI"
-        кнопка = "Открыть NEX CLI"
+        название = "Open NEX CLI"
+        кнопка = "Open NEX CLI"
     return {
         "название": название,
         "тема": "запуск",
@@ -536,48 +512,48 @@ def _план_запуска() -> dict:
 def _план_починки() -> dict:
     пакеты = missing()
     шаги: list[dict] = []
-    резюме = ["Проверю, чего не хватает, поставлю недостающее и попробую открыть NEX CLI заново."]
+    резюме = ["I will check what is missing, install missing UI packages, and retry opening NEX CLI."]
     if пакеты:
         шаги.append(_шаг_установки(пакеты))
     if _tty():
         шаги.append(_шаг_запуска())
     else:
         резюме.append(
-            "Сейчас терминал не интерактивный — сначала откройте настоящее окно "
-            "терминала, иначе полноэкранный режим не поднимется."
+            "This terminal is non-interactive — open a real terminal window first "
+            "so full-screen mode can start."
         )
     if not пакеты and _tty():
-        резюме.append("Пакеты на месте. Если окно снова не откроется, покажу, где смотреть traceback.")
+        резюме.append("Packages are installed. If the UI still won't open, I'll show how to get a traceback.")
     return {
-        "название": "Починить запуск",
+        "название": "Fix launch",
         "тема": "проблема",
         "резюме": резюме,
         "шаги": шаги,
         "можно_выполнить": bool(шаги),
-        "кнопка": "Починить и открыть",
+        "кнопка": "Fix and open",
     }
 
 
 def _план_проверки() -> dict:
     return {
-        "название": "Проверить окружение",
+        "название": "Check environment",
         "тема": "проверка",
-        "резюме": ["Проверю Python, pip, textual, rich и терминал. Ничего не изменю."],
-        "шаги": [{"текст": "Собрать диагностику", "вид": "проверка"}],
+        "резюме": ["I will check Python, pip, textual, rich, and your terminal without changing anything."],
+        "шаги": [{"текст": "Collect diagnostics", "вид": "проверка"}],
         "можно_выполнить": True,
-        "кнопка": "Проверить сейчас",
+        "кнопка": "Check now",
     }
 
 
 def _план_обновления() -> dict:
     пакеты = _пакеты_интерфейса()
     return {
-        "название": "Обновить интерфейс",
+        "название": "Update UI packages",
         "тема": "обновление",
-        "резюме": ["Обновлю textual и rich до актуальных версий. Сценарии и настройки это не затронет."],
+        "резюме": ["I will upgrade textual and rich to the latest versions. Scenarios and settings are untouched."],
         "шаги": [_шаг_установки(пакеты)],
         "можно_выполнить": True,
-        "кнопка": "Обновить",
+        "кнопка": "Update",
     }
 
 
@@ -585,19 +561,19 @@ def _план_venv() -> dict:
     проект = _project_dir()
     if проект is None:
         return {
-            "название": "Отдельное окружение .venv",
+            "название": "Isolated .venv environment",
             "тема": "venv",
             "резюме": [
-                "Каталог проекта не найден, поэтому точный путь подставить не могу. "
-                "Создайте окружение в папке проекта командами ниже."
+                "Project directory not found, so I cannot fill in the exact path. "
+                "Create the virtual environment inside your project folder using the commands below."
             ],
             "шаги": [
-                {"текст": "Создать окружение", "команда": [sys.executable, "-m", "venv", ".venv"]},
-                {"текст": "Поставить NEX CLI с интерфейсом",
+                {"текст": "Create virtual environment", "команда": [sys.executable, "-m", "venv", ".venv"]},
+                {"текст": "Install NEX CLI with TUI",
                  "команда": ["python", "-m", "pip", "install", "-e", ".[tui]"]},
             ],
             "можно_выполнить": False,
-            "кнопка": "Показать команды",
+            "кнопка": "Show commands",
         }
     cwd = str(проект)
     if os.name == "nt":
@@ -605,22 +581,22 @@ def _план_venv() -> dict:
     else:
         python = str(проект / ".venv" / "bin" / "python")
     return {
-        "название": "Отдельное окружение .venv",
+        "название": "Isolated .venv environment",
         "тема": "venv",
         "резюме": [
-            "Создам .venv в каталоге проекта, поставлю туда NEX CLI с интерфейсом "
-            "и запущу его. Системный Python останется нетронутым."
+            "I will create .venv in the project directory, install NEX CLI with the TUI, "
+            "and launch it. System Python remains untouched."
         ],
         "шаги": [
-            {"текст": "Создать окружение .venv",
+            {"текст": "Create .venv environment",
              "команда": [sys.executable, "-m", "venv", ".venv"], "cwd": cwd},
-            {"текст": "Поставить NEX CLI с интерфейсом",
+            {"текст": "Install NEX CLI with TUI",
              "команда": [python, "-m", "pip", "install", "-e", ".[tui]"], "cwd": cwd},
-            {"текст": "Открыть NEX CLI из .venv",
+            {"текст": "Launch NEX CLI from .venv",
              "команда": [python, "-m", "vliw"], "cwd": cwd, "вид": "запуск"},
         ],
         "можно_выполнить": True,
-        "кнопка": "Создать и открыть",
+        "кнопка": "Create and open",
     }
 
 
@@ -630,19 +606,19 @@ def _план_удаления() -> dict:
     else:
         удалить_venv = ["rm", "-rf", ".venv"]
     return {
-        "название": "Удалить NEX CLI",
+        "название": "Uninstall NEX CLI",
         "тема": "удаление",
         "резюме": [
-            "Покажу безопасный порядок. Сам ничего удалять не буду: это необратимо."
+            "I will show the safe uninstall steps. I won't delete anything automatically since it is irreversible."
         ],
         "шаги": [
-            {"текст": "Убрать пакет NEX CLI",
+            {"текст": "Uninstall NEX CLI package",
              "команда": [sys.executable, "-m", "pip", "uninstall", "vliw-ai-scheduler"]},
-            {"текст": "Удалить окружение .venv, если создавали", "команда": удалить_venv},
-            {"текст": "Удалить каталог проекта вручную, если он больше не нужен"},
+            {"текст": "Remove .venv environment (if created)", "команда": удалить_venv},
+            {"текст": "Delete the project folder manually if no longer needed"},
         ],
         "можно_выполнить": False,
-        "кнопка": "Показать команды",
+        "кнопка": "Show commands",
     }
 
 
@@ -669,9 +645,9 @@ def _напечатать_план(план: dict) -> None:
     for абзац in план.get("резюме", []):
         for часть in _обернуть(абзац, ширина):
             print("  " + часть if часть else "")
-    print("  " + Style.dim("Сейчас: " + _статус_кратко()))
+    print("  " + Style.dim("Current: " + _статус_кратко()))
     print()
-    print("  " + Style.dim("План:"))
+    print("  " + Style.dim("Plan:"))
     for i, шаг in enumerate(план.get("шаги", []), 1):
         print("   " + paint("accent", str(i)) + ". " + шаг["текст"])
         if шаг.get("cwd"):
@@ -683,7 +659,7 @@ def _напечатать_план(план: dict) -> None:
 
 def _напечатать_команды(план: dict) -> None:
     print()
-    print("  " + paint("accent", "NNL · команды"))
+    print("  " + paint("accent", "NNL · commands"))
     print("  " + Style.dim("─" * min(64, render.term_cols() - 6)))
     for i, шаг in enumerate(план.get("шаги", []), 1):
         print()
@@ -693,7 +669,7 @@ def _напечатать_команды(план: dict) -> None:
         if шаг.get("команда"):
             print("    " + paint("success", _команда_текст(шаг["команда"])))
         elif not шаг.get("вид"):
-            print("    " + Style.dim("выполняется вручную"))
+            print("    " + Style.dim("manual step"))
     print()
 
 
@@ -703,12 +679,12 @@ def _выполнить(команда: list[str], cwd: str | None = None) -> in
     try:
         return subprocess.call(команда, cwd=cwd)
     except OSError as e:
-        print("  " + paint("error", f"не удалось запустить: {e}"))
+        print("  " + paint("error", f"failed to run: {e}"))
         return 1
 
 
 def _выполнить_план(план: dict, только_установка: bool = False) -> int | None:
-    """Выполнить шаги плана после согласия. 0 — полноэкранный интерфейс открылся."""
+    """Execute plan steps after user confirmation. Returns 0 if TUI launched."""
     шаги = план.get("шаги", [])
     for i, шаг in enumerate(шаги, 1):
         if только_установка and шаг.get("вид") == "запуск":
@@ -720,28 +696,28 @@ def _выполнить_план(план: dict, только_установка
             continue
         команда = шаг.get("команда")
         if not команда:
-            print("  " + Style.dim("этот шаг выполняется вручную"))
+            print("  " + Style.dim("this step must be performed manually"))
             continue
 
         код = _выполнить(команда, шаг.get("cwd"))
         if шаг.get("вид") == "установка":
             if код != 0 and not _has("pip"):
                 print()
-                print("  " + paint("warning", "pip не найден — ставлю его через ensurepip"))
+                print("  " + paint("warning", "pip not found — installing via ensurepip"))
                 _выполнить([sys.executable, "-m", "ensurepip", "--upgrade"])
                 код = _выполнить(команда, шаг.get("cwd"))
             importlib.invalidate_caches()
             if код == 0 and missing():
                 print()
-                print("  " + paint("warning", "pip завершился успешно, но модули не видны."))
-                print("  " + Style.dim("Похоже, пакеты поставлены другому Python. "
-                                       "Запустите установку тем же интерпретатором, что и NEX CLI."))
+                print("  " + paint("warning", "pip succeeded, but modules are still not visible."))
+                print("  " + Style.dim("Packages may have been installed into a different Python. "
+                                       "Run pip with the same interpreter as NEX CLI."))
                 _пауза()
                 return None
         if код != 0:
             print()
-            print("  " + paint("error", f"шаг не выполнен (код {код})."))
-            print("  " + Style.dim("Проверьте интернет и права. Если pip недоступен:"))
+            print("  " + paint("error", f"step failed (exit code {код})."))
+            print("  " + Style.dim("Check internet access and permissions. If pip is missing:"))
             print("    " + paint("success", f"{_exe()} -m ensurepip --upgrade"))
             _пауза()
             return None
@@ -749,18 +725,18 @@ def _выполнить_план(план: dict, только_установка
             return 0 if код == 0 else None
 
     print()
-    print("  " + paint("success", "готово"))
+    print("  " + paint("success", "done"))
     if план.get("тема") == "обновление":
-        print("  " + Style.dim("Если проект установлен из исходников, обновите и его: git pull, "
-                               "затем pip install -e \".[tui]\"."))
+        print("  " + Style.dim('If installed from source, also update the repo: git pull, '
+                               'then pip install -e ".[tui]".'))
     _пауза()
     return None
 
 
 def _показать_план(план: dict) -> int | None:
-    """Карточка плана: команды, согласие и выполнение."""
+    """Plan card: show commands, ask confirmation, and execute."""
     _напечатать_план(план)
-    кнопка = план.get("кнопка", "Выполнить")
+    кнопка = план.get("кнопка", "Run")
     можно = план.get("можно_выполнить", False)
     есть_запуск = any(ш.get("вид") == "запуск" for ш in план.get("шаги", []))
     есть_установка = any(ш.get("вид") == "установка" for ш in план.get("шаги", []))
@@ -768,29 +744,29 @@ def _показать_план(план: dict) -> int | None:
     while True:
         пункты: list[tuple[str, str]] = []
         if можно:
-            пункты.append((кнопка, "выполню шаги за вас"))
+            пункты.append((кнопка, "run these steps for me"))
             if есть_установка and есть_запуск:
-                пункты.append(("Только установить", "без запуска интерфейса"))
+                пункты.append(("Install only", "without launching the UI"))
         else:
-            пункты.append(("Показать команды", "скопировать и выполнить вручную"))
+            пункты.append(("Show commands", "copy and run manually"))
         if можно:
-            пункты.append(("Показать команды", "что именно будет выполнено"))
+            пункты.append(("Show commands", "inspect exact commands"))
         if план.get("тема"):
-            пункты.append(("Подробнее", "полное объяснение"))
-        пункты.append(("Назад", "вернуться в меню"))
+            пункты.append(("More details", "full explanation"))
+        пункты.append(("Back", "return to menu"))
 
-        выбор = _меню(пункты, заголовок="Что делаем?")
+        выбор = _меню(пункты, заголовок="What next?")
         if выбор is None:
             return None
         метка = пункты[выбор][0]
         if метка == кнопка and можно:
             return _выполнить_план(план)
-        if метка == "Только установить":
+        if метка == "Install only":
             return _выполнить_план(план, только_установка=True)
-        if метка == "Показать команды":
+        if метка == "Show commands":
             _напечатать_команды(план)
             _пауза()
-        elif метка == "Подробнее":
+        elif метка == "More details":
             _печать_ответа(план["тема"], полный=True)
             _пауза()
         else:
@@ -798,7 +774,7 @@ def _показать_план(план: dict) -> int | None:
 
 
 # --------------------------------------------------------------------------
-# Ответы ассистента
+# Assistant responses
 # --------------------------------------------------------------------------
 
 
@@ -823,22 +799,22 @@ def _печать_ответа(тема: str, полный: bool = False) -> Non
 
 
 def _показать_кратко(тема: str) -> int | None:
-    """Короткий ответ и одно очевидное действие вместо стены справки."""
+    """Short answer plus a single obvious action instead of a wall of text."""
     _печать_ответа(тема)
     план = _план_для_темы(тема)
     while True:
         пункты: list[tuple[str, str]] = []
         if план is not None:
-            пункты.append((план.get("кнопка", "Подготовить"), "покажу команды и спрошу согласие"))
-        пункты.append(("Подробнее", "полное объяснение"))
-        пункты.append(("Назад", "вернуться в меню"))
-        выбор = _меню(пункты, заголовок="Что дальше?")
+            пункты.append((план.get("кнопка", "Prepare"), "show commands and ask before running"))
+        пункты.append(("More details", "full explanation"))
+        пункты.append(("Back", "return to menu"))
+        выбор = _меню(пункты, заголовок="What next?")
         if выбор is None:
             return None
         метка = пункты[выбор][0]
-        if план is not None and метка == план.get("кнопка", "Подготовить"):
+        if план is not None and метка == план.get("кнопка", "Prepare"):
             return _показать_план(план)
-        if метка == "Подробнее":
+        if метка == "More details":
             _печать_ответа(тема, полный=True)
             _пауза()
         else:
@@ -846,60 +822,59 @@ def _показать_кратко(тема: str) -> int | None:
 
 
 def _объяснить_установки() -> int | None:
-    """Почему помощник просит доустановить пакеты — без запуска установки."""
+    """Explain why extra packages are requested without starting installation."""
     пакеты = missing()
     ширина = render.term_cols() - 6
     print()
-    print("  " + paint("accent", "NNL · зачем нужны дополнительные установки"))
+    print("  " + paint("accent", "NNL · why extra packages are needed"))
     print("  " + Style.dim("─" * min(64, ширина)))
-    print("  Планировщик, оракул и разовые команды работают на чистом Python.")
-    print("  Дополнительные пакеты нужны только для полноэкранного интерфейса:")
-    print("    " + paint("success", "textual") + " — панели, вкладки и экраны "
-          "КОД / РАЗБОР / АГЕНТ;")
-    print("    " + paint("success", "rich") + " — цвет, таблицы и рамки внутри них.")
+    print("  The scheduler, oracle, and one-shot commands run on pure Python.")
+    print("  Extra packages are needed only for the full-screen interface:")
+    print("    " + paint("success", "textual") + " — panes, tabs, and CODE / LAB / AGENT screens;")
+    print("    " + paint("success", "rich") + " — colors, tables, and borders inside them.")
     print()
     if пакеты:
-        print("  Сейчас не хватает: " + paint("warning", ", ".join(пакеты)) + ".")
-        print("  Без них вместо панелей открывается этот экран — данные и "
-              "команды те же.")
+        print("  Currently missing: " + paint("warning", ", ".join(пакеты)) + ".")
+        print("  Without them this helper screen opens instead — data and commands are identical.")
     else:
-        print("  Сейчас " + paint("success", "оба пакета на месте")
-              + " — полный интерфейс доступен.")
+        print("  Both packages are " + paint("success", "installed")
+              + " — full-screen UI is available.")
     print()
 
     пункты: list[tuple[str, str]] = []
     if пакеты:
-        пункты.append(("Поставить и открыть",
-                       "покажу команды и спрошу согласие"))
-    пункты.append(("Подробнее", "полное объяснение требований"))
-    пункты.append(("Назад", "вернуться в меню"))
-    выбор = _меню(пункты, заголовок="Что дальше?")
+        пункты.append(("Install and open",
+                       "show commands and ask before running"))
+    пункты.append(("More details", "full requirements overview"))
+    пункты.append(("Back", "return to menu"))
+    выбор = _меню(пункты, заголовок="What next?")
     if выбор is None:
         return None
     метка = пункты[выбор][0]
-    if пакеты and метка == "Поставить и открыть":
+    if пакеты and метка == "Install and open":
         return _показать_план(_план_запуска())
-    if метка == "Подробнее":
+    if метка == "More details":
         _печать_ответа("требования", полный=True)
         _пауза()
     return None
 
 
 def _беседа(вопрос: str) -> bool:
-    """Приветствие/благодарность/прощание. True — пора выходить."""
+    """Handle greetings/thanks/farewells. Returns True when user says goodbye."""
     низ = " ".join(вопрос.lower().replace("ё", "е").strip("!?.,;: ").split())
-    if низ.startswith(("спасибо", "благодар")):
+    if низ.startswith(("спасибо", "благодар", "thank", "thx")):
         print()
-        print("  " + paint("accent", "NNL · всегда пожалуйста"))
+        print("  " + paint("accent", "NNL · you're welcome"))
         print("  " + Style.dim("─" * min(64, render.term_cols() - 6)))
-        print("  Если понадобится помощь с запуском — я рядом.")
+        print("  If you need help launching or setting up, I'm right here.")
         print()
         return False
-    if низ in ("пока", "до свидания", "до встречи", "хорошего дня"):
+    if низ in ("пока", "до свидания", "до встречи", "хорошего дня",
+               "bye", "goodbye", "see you", "have a nice day"):
         print()
-        print("  " + paint("accent", "NNL · до встречи"))
+        print("  " + paint("accent", "NNL · see you later"))
         print("  " + Style.dim("─" * min(64, render.term_cols() - 6)))
-        print("  Запустить снова: " + paint("success", f"{_exe()} -m vliw"))
+        print("  Launch again: " + paint("success", f"{_exe()} -m vliw"))
         print()
         return True
     _печать_ответа("беседа")
@@ -908,14 +883,14 @@ def _беседа(вопрос: str) -> bool:
 
 def _не_понял() -> None:
     print()
-    print("  " + paint("warning", "NNL · не понял вопрос"))
-    print("  " + Style.dim("Я помогаю только с NEX CLI: запуск, установка, ошибки и режимы."))
-    print("  " + Style.dim("Скажите иначе или выберите пункт в меню ниже."))
+    print("  " + paint("warning", "NNL · didn't understand that"))
+    print("  " + Style.dim("I only help with NEX CLI: setup, launch, errors, and modes."))
+    print("  " + Style.dim("Try rephrasing or pick an option from the menu below."))
     print()
 
 
 def _проверка_строки() -> list[tuple[str, str, str]]:
-    """(пункт, значение, статус) — статус: ok / нет / инфо."""
+    """Return (item, value, status) tuples for environment diagnostics."""
     py_ok = sys.version_info >= (3, 10)
     tty_ok = _tty()
     pip_ok = _has("pip")
@@ -924,59 +899,59 @@ def _проверка_строки() -> list[tuple[str, str, str]]:
     проект = _project_dir()
     строки = [
         ("Python", f"{platform.python_version()} · "
-                   f"{'64 бита' if sys.maxsize > 2 ** 32 else '32 бита'}",
-         "OK" if py_ok else "НУЖЕН 3.10+"),
-        ("терминал", f"{sys.stdin.isatty()} {sys.stdout.isatty()}",
-         "OK" if tty_ok else "НЕ TTY"),
-        ("pip", "есть" if pip_ok else "нет — нужен ensurepip",
-         "OK" if pip_ok else "НЕТ"),
-        ("venv", "активен" if _in_venv() else "не активен (не обязателен)", "инфо"),
-        ("textual", _version("textual") if textual_ok else "нет", "OK" if textual_ok else "НЕТ"),
-        ("rich", _version("rich") if rich_ok else "нет", "OK" if rich_ok else "НЕТ"),
-        ("проект", str(проект) if проект else "каталог с pyproject.toml не найден", "инфо"),
+                   f"{'64-bit' if sys.maxsize > 2 ** 32 else '32-bit'}",
+         "OK" if py_ok else "NEED 3.10+"),
+        ("terminal", f"{sys.stdin.isatty()} {sys.stdout.isatty()}",
+         "OK" if tty_ok else "NOT TTY"),
+        ("pip", "available" if pip_ok else "missing — run ensurepip",
+         "OK" if pip_ok else "MISSING"),
+        ("venv", "active" if _in_venv() else "not active (optional)", "info"),
+        ("textual", _version("textual") if textual_ok else "missing", "OK" if textual_ok else "MISSING"),
+        ("rich", _version("rich") if rich_ok else "missing", "OK" if rich_ok else "MISSING"),
+        ("project", str(проект) if проект else "no pyproject.toml found", "info"),
     ]
     if _store_stub():
-        строки.append(("Python", "заглушка Microsoft Store (WindowsApps)", "ВНИМАНИЕ"))
+        строки.append(("Python", "Microsoft Store stub (WindowsApps)", "WARNING"))
     return строки
 
 
 def _проверить(пауза: bool = True) -> None:
     print()
-    print("  " + paint("accent", "Проверка окружения"))
+    print("  " + paint("accent", "Environment check"))
     print("  " + Style.dim("─" * min(64, render.term_cols() - 6)))
     for имя, значение, статус in _проверка_строки():
         if len(значение) > 46:
             значение = значение[:43] + "..."
-        метка = {"OK": paint("success", "OK"), "НЕТ": paint("error", "НЕТ"),
-                 "НЕ TTY": paint("warning", "НЕ TTY"),
-                 "ВНИМАНИЕ": paint("warning", "ВНИМАНИЕ"),
-                 "НУЖЕН 3.10+": paint("error", "НУЖЕН 3.10+"),
-                 "инфо": Style.dim("—")}.get(статус, статус)
+        метка = {"OK": paint("success", "OK"), "MISSING": paint("error", "MISSING"),
+                 "NOT TTY": paint("warning", "NOT TTY"),
+                 "WARNING": paint("warning", "WARNING"),
+                 "NEED 3.10+": paint("error", "NEED 3.10+"),
+                 "info": Style.dim("—")}.get(статус, статус)
         print("  " + render.pad(имя, 10) + render.pad(значение, 46) + " " + метка)
 
     print()
     if not _has("textual"):
-        print("  " + paint("warning", "Полноэкранный интерфейс не поднимется без textual."))
-        print("  " + Style.dim("Ассистент может поставить его и открыть NEX CLI."))
+        print("  " + paint("warning", "Full-screen UI cannot start without textual."))
+        print("  " + Style.dim("The assistant can install it and launch NEX CLI."))
     elif not _tty():
-        print("  " + paint("warning", "Пакеты на месте, но терминал не интерактивный."))
-        print("  " + Style.dim("Откройте PowerShell / Windows Terminal / обычный "
-                               "терминал Linux и запустите снова."))
+        print("  " + paint("warning", "Packages are installed, but the terminal is not interactive."))
+        print("  " + Style.dim("Open PowerShell / Windows Terminal / a standard Linux/macOS "
+                               "terminal and run again."))
     else:
-        print("  " + paint("success", "Всё нужное на месте — можно открывать NEX CLI."))
+        print("  " + paint("success", "Everything required is in place — ready to open NEX CLI."))
     if пауза:
         _пауза()
 
 
 def _пауза() -> None:
     try:
-        input("\n  " + Style.dim("Enter — назад в меню "))
+        input("\n  " + Style.dim("Enter — back to menu "))
     except (EOFError, KeyboardInterrupt):
         print()
 
 
 # --------------------------------------------------------------------------
-# Понимание запроса и главный цикл
+# Intent detection and main loop
 # --------------------------------------------------------------------------
 
 
@@ -984,18 +959,20 @@ _ПРИЗНАКИ_ПОЧИНКИ = (
     "не работает", "не запускается", "не открывается", "не установ",
     "сломал", "ошибк", "traceback", "падает", "черный экран", "чёрный экран",
     "зависа", "не отвечает", "закрывается сразу",
+    "not working", "doesn't work", "won't start", "won't open", "broken",
+    "error", "crash", "black screen", "freeze", "fix",
 )
-_ПРИЗНАКИ_УДАЛЕНИЯ = ("удал", "снести", "деинстал", "uninstall", "стереть установку")
-_ПРИЗНАКИ_ОБНОВЛЕНИЯ = ("обнов", "upgrade", "git pull", "новая версия", "свежую версию")
-_ПРИЗНАКИ_VENV = ("venv", "виртуал", "ensurepip", "pip не найден", "нет pip", "без pip")
-_ПРИЗНАКИ_ПРОВЕРКИ = ("проверь", "провер", "диагност", "doctor", "selfcheck", "тест")
-_ПРИЗНАКИ_ЗАПУСКА = ("запуст", "открой", "открыть", "старт", "включи", "launch", " run ")
+_ПРИЗНАКИ_УДАЛЕНИЯ = ("удал", "снести", "деинстал", "uninstall", "стереть установку", "remove")
+_ПРИЗНАКИ_ОБНОВЛЕНИЯ = ("обнов", "upgrade", "update", "git pull", "новая версия", "свежую версию")
+_ПРИЗНАКИ_VENV = ("venv", "виртуал", "virtualenv", "ensurepip", "pip не найден", "нет pip", "без pip", "no pip")
+_ПРИЗНАКИ_ПРОВЕРКИ = ("проверь", "провер", "диагност", "doctor", "selfcheck", "тест", "check", "verify", "test")
+_ПРИЗНАКИ_ЗАПУСКА = ("запуст", "открой", "открыть", "старт", "включи", "launch", " run ", "start", "open")
 _ПРИЗНАКИ_УСТАНОВКИ = ("установ", "поставь", "поставить", "инсталл", "install",
-                       "скачай", "подготовь", "настрой")
+                       "скачай", "подготовь", "настрой", "setup", "set up")
 
 
 def _намерение(текст: str) -> str | None:
-    """Что человек хочет сделать — до попытки угадать тему NNL-блоком."""
+    """Detect user action intent before falling back to the NNL topic classifier."""
     низ = " " + текст.lower().replace("ё", "е") + " "
     if any(с in низ for с in _ПРИЗНАКИ_ПОЧИНКИ):
         return "починка"
@@ -1014,9 +991,7 @@ def _намерение(текст: str) -> str | None:
     return None
 
 
-# Вопросы, которые нельзя выполнять как команду. «зачем нужны доп установки»
-# содержит корень «установ» и раньше попадало в «установка» → запускался план
-# установки. Вопросительное слово важнее действия: сначала объясняем.
+# Questions should be answered, not immediately executed as action commands.
 _ВОПРОСНЫЕ = (
     "зачем", "почему", "отчего", "для чего", "что такое", "что это",
     "что значит", "что за ", "чем полез", "в чем смысл", "в чём смысл",
@@ -1027,21 +1002,24 @@ _ВОПРОСНЫЕ = (
     "нужно ли", "надо ли", "обязательно ли", "можно ли", "стоит ли",
     "есть ли", "какие", "какой", "какая", "каких", "каким", "какую",
     "где ", "когда", "сколько",
+    "why ", "what is", "what are", "what does", "how to ", "how do ",
+    "how does", "do i need", "is it required", "can i ", "where ", "which ",
 )
 
 
 def _это_вопрос(текст: str) -> bool:
-    """Вопрос ли это, а не команда. Спрашивают — объясняем, не запускаем."""
+    """Return True if the input is an explanatory question rather than an imperative."""
     низ = " " + текст.lower().replace("ё", "е") + " "
     return any(слово in низ for слово in _ВОПРОСНЫЕ)
 
 
 def _спросили_зачем_установки(текст: str) -> bool:
-    """«Зачем/почему нужны доп установки» — это вопрос о требованиях."""
+    """Detect questions asking why extra packages/installations are needed."""
     низ = " " + текст.lower().replace("ё", "е") + " "
     зачем = ("зачем", "почему", "для чего", "нужно ли", "надо ли",
-             "обязательно ли", "стоит ли")
-    про_пакеты = ("установ", "постав", "пакет", "textual", "rich", "доп")
+             "обязательно ли", "стоит ли", "why ", "do i need", "is it required")
+    про_пакеты = ("установ", "постав", "пакет", "textual", "rich", "доп",
+                  "install", "package", "extra", "depend")
     return any(м in низ for м in зачем) and any(м in низ for м in про_пакеты)
 
 
@@ -1057,7 +1035,7 @@ def _задать_вопрос(extra: str | None = None) -> int | None:
 
 
 def _обработать_запрос(текст: str, extra: str | None = None) -> int | None:
-    """Запрос обычными словами → действие или короткий ответ. 0 — TUI открылся."""
+    """Route natural-language input to an action plan or short answer. 0 = TUI opened."""
     текст = текст.strip()
     if not текст:
         return None
@@ -1067,8 +1045,6 @@ def _обработать_запрос(текст: str, extra: str | None = None
     if _спросили_зачем_установки(текст):
         return _объяснить_установки()
 
-    # Вопрос — это не команда: «зачем нужны доп установки» не должно ставить
-    # пакеты, даже если в нём есть корень «установ».
     вид = None if _это_вопрос(текст) else _намерение(текст)
     if вид == "починка":
         return _показать_план(_план_починки())
@@ -1085,10 +1061,10 @@ def _обработать_запрос(текст: str, extra: str | None = None
 
     if not help_nnl.доступно():
         print()
-        print("  " + paint("warning", "NNL-блок помощи не найден."))
-        print("  " + Style.dim("Похоже, каталог nnl_vliw или vliw/help_weights.json "
-                               "не попал в установку."))
-        print("  " + Style.dim("Пока покажу готовые шаги установки."))
+        print("  " + paint("warning", "NNL help block not found."))
+        print("  " + Style.dim("It looks like nnl_vliw or vliw/help_weights.json "
+                               "is missing from this installation."))
+        print("  " + Style.dim("Showing manual installation steps instead."))
         _печать_ответа("установка", полный=True)
         return None
 
@@ -1104,29 +1080,27 @@ def _обработать_запрос(текст: str, extra: str | None = None
 
 def _главное_меню() -> int | str | None:
     пакеты = missing()
-    первый = "Установить и запустить" if пакеты else "Запустить NEX CLI"
+    первый = "Install and launch" if пакеты else "Launch NEX CLI"
     return _меню(
         [
-            (первый, "поставить недостающее и открыть"),
-            ("Проверить окружение", "Python, пакеты, терминал"),
-            ("Что такое NEX CLI", "коротко о планировщике"),
-            ("Задать вопрос", "написать обычными словами"),
-            ("Выход", ""),
+            (первый, "install missing packages and open"),
+            ("Check environment", "Python, packages, terminal"),
+            ("What is NEX CLI", "brief overview of the scheduler"),
+            ("Ask a question", "type in plain English"),
+            ("Exit", ""),
         ],
-        заголовок="Чем помочь?",
-        подсказка="↑/↓ — выбор · Enter — подтвердить",
+        заголовок="How can I help?",
+        подсказка="↑/↓ — select · Enter — confirm",
         приём_текста=True,
     )
 
 
 def welcome(extra: str | None = None) -> int:
-    """Экран-помощник: запрос → план → согласие → выполнение.
+    """Interactive setup assistant: prompt -> plan -> confirmation -> run.
 
-    Код 0 — полноэкранный интерфейс открылся; 1 — пользователь вышел.
+    Returns 0 if the full-screen UI opened; 1 if the user exited.
     """
     render.apply_theme(_BOOT_THEME)
-    # Прямой вызов (не через cli.main) не проходил setup_output: в свежем
-    # cmd оставались cp866 и выключенный VT, и экран выглядел сломанным.
     render.utf8_console()
     if render.Style.enabled:
         render.enable_vt()
@@ -1134,19 +1108,19 @@ def welcome(extra: str | None = None) -> int:
     for строка in _шапка_кратко():
         print(строка)
     print()
-    for строка in _рамка(_приветствие(), "NNL-помощник", ширина):
+    for строка in _рамка(_приветствие(), "NNL Assistant", ширина):
         print(строка)
     print()
     _печать_причины(extra)
     print("  " + Style.dim(_статус()))
     print()
-    print("  " + Style.dim("Можно сразу напечатать запрос: «запусти», «нет textual», «не работает»."))
+    print("  " + Style.dim('You can type directly: "launch", "missing textual", "not working".'))
     print()
 
     while True:
         выбор = _главное_меню()
         if выбор is None:
-            print("  " + Style.dim("До встречи. Запустить снова: "
+            print("  " + Style.dim("Goodbye. Launch again: "
                                    + f"{_exe()} -m vliw"))
             return 1
         if isinstance(выбор, str):
@@ -1160,7 +1134,7 @@ def welcome(extra: str | None = None) -> int:
         elif выбор == 3:
             код = _задать_вопрос(extra)
         else:
-            print("  " + Style.dim("До встречи. Запустить снова: "
+            print("  " + Style.dim("Goodbye. Launch again: "
                                    + f"{_exe()} -m vliw"))
             return 1
         if код == 0:
@@ -1171,57 +1145,57 @@ def welcome(extra: str | None = None) -> int:
 
 
 # --------------------------------------------------------------------------
-# Статический вывод для пайпов, CI и тестов
+# Static output for pipes, CI, and tests
 # --------------------------------------------------------------------------
 
 
 def lines(extra: str | None = None) -> list[str]:
-    """Готовые строки экрана (без печати) — удобно проверять в тестах."""
+    """Build static setup-screen lines without printing (useful for tests/pipes)."""
     exe = _exe()
     out: list[str] = [""]
     out += render_title(indent="  ")
     out += [
         "",
-        "  " + paint("warning", "полноэкранный интерфейс не запустился")
-        + Style.dim("  ·  экран приветствия и установки"),
+        "  " + paint("warning", "full-screen interface did not start")
+        + Style.dim("  ·  welcome and setup screen"),
     ]
 
-    out += _заголовок("Почему открылся этот экран")
+    out += _заголовок("Why this screen opened")
     for r in reasons(extra):
         out.append(_пункт(r))
     out.append("    " + Style.dim(_статус()))
 
     out += [""]
-    out += _рамка(_приветствие(), "NNL-помощник", _ширина())
+    out += _рамка(_приветствие(), "NNL Assistant", _ширина())
 
-    out += _заголовок("Что это за программа")
+    out += _заголовок("About NEX CLI")
     for строка in _о_продукте():
         out.append("  " + строка)
 
     missing_pkgs = missing()
     if missing_pkgs:
-        out += _заголовок("Установить (Windows / macOS / Linux)")
+        out += _заголовок("Install (Windows / macOS / Linux)")
         out.append("    " + paint("success", f"{exe} -m pip install "
                                             + " ".join(f'"{p}"' for p in missing_pkgs)))
         project = _project_dir()
         if project is not None:
             out += [
                 "",
-                "  " + paint("accent", "Или из каталога проекта (заодно ставит сам NEX CLI):"),
+                "  " + paint("accent", "Or from the project directory (installs NEX CLI too):"),
                 "    " + Style.dim(f"cd {project}"),
                 "    " + paint("success", f'{exe} -m pip install -e ".[tui]"'),
             ]
         out += [
             "",
-            "  " + paint("accent", "Пошагово, с отдельным окружением:"),
-            "    " + Style.dim(f"cd {project if project else 'путь/к/каталогу/проекта'}"),
+            "  " + paint("accent", "Step by step with a virtual environment:"),
+            "    " + Style.dim(f"cd {project if project else 'path/to/project/dir'}"),
             "    " + paint("success", f"{exe} -m venv .venv"),
             "    " + Style.dim(".venv\\Scripts\\activate        (Windows)"
                                    "   /   source .venv/bin/activate   (Linux, macOS)"),
             "    " + paint("success", "python -m pip install --upgrade pip"),
             "    " + paint("success", 'python -m pip install "textual>=8.2" "rich>=13"'),
             "",
-            "  " + paint("accent", "Проверить, что встало:"),
+            "  " + paint("accent", "Verify installation:"),
             "    " + paint("success",
                           f'{exe} -c "import textual, rich; '
                           f'print(textual.__version__, rich.__version__)"'),
@@ -1229,56 +1203,56 @@ def lines(extra: str | None = None) -> list[str]:
 
     out += [
         "",
-        "  " + paint("accent", "Запустить:"),
+        "  " + paint("accent", "Launch:"),
         "    " + paint("success", f"{exe} -m vliw"),
         "",
-        "  " + Style.dim("В терминале этот экран умеет сам поставить недостающее "
-                          "и открыть NEX CLI — без ручного ввода команд."),
+        "  " + Style.dim("In an interactive terminal this screen can install missing packages "
+                          "and open NEX CLI automatically."),
         "",
-        "  " + Style.dim("Работает и без установки:"),
+        "  " + Style.dim("Works without installing UI packages:"),
         "    " + Style.dim(f"{exe} -m vliw run slotclash"),
         "    " + Style.dim(f"{exe} -m vliw compare"),
         "    " + Style.dim(f"{exe} -m vliw --help"),
         "",
-        "  " + Style.dim("Совсем без панелей, построчно:"),
+        "  " + Style.dim("Plain line-by-line mode (no panes):"),
         "    " + Style.dim(f"{exe} -m vliw --plain"),
     ]
 
-    out += _заголовок("Если окно не открывается")
+    out += _заголовок("If the window still won't open")
     out += [
-        "    " + Style.dim("Запускайте из настоящего окна терминала: PowerShell, cmd,"),
-        "    " + Style.dim("Windows Terminal или обычный терминал Linux — не из пайпа,"),
-        "    " + Style.dim("не из перенаправленного вывода и не из встроенной консоли IDE."),
+        "    " + Style.dim("Run from a real terminal: PowerShell, cmd,"),
+        "    " + Style.dim("Windows Terminal, or a standard Linux/macOS terminal — not a pipe,"),
+        "    " + Style.dim("redirected output, or non-TTY IDE console."),
         "    " + Style.dim(f'{exe} -c "import sys; '
                           'print(sys.stdin.isatty(), sys.stdout.isatty())"'),
-        "    " + Style.dim("должно напечатать: True True"),
+        "    " + Style.dim("expected output: True True"),
     ]
 
     if missing_pkgs:
         out += [
             "",
-            "  " + Style.dim("Нет pip?"),
+            "  " + Style.dim("No pip?"),
             "    " + Style.dim(f"{exe} -m ensurepip --upgrade"),
         ]
 
     out += [
         "",
-        "  " + Style.dim("Окружение:"),
+        "  " + Style.dim("Environment:"),
         "    " + Style.dim(_статус()),
         "    " + Style.dim(sys.executable),
     ]
     if _store_stub():
         out += [
             "",
-            "  " + paint("error", "внимание: это заглушка Microsoft Store (WindowsApps)."),
-            "  " + Style.dim("поставьте Python с python.org или используйте полный путь к python.exe"),
+            "  " + paint("error", "warning: running via the Microsoft Store stub (WindowsApps)."),
+            "  " + Style.dim("install Python from python.org or call python.exe by full path"),
         ]
     out.append("")
     return out
 
 
 def explain(extra: str | None = None) -> int:
-    """Показать экран. В терминале — интерактивно, в пайпе — статически."""
+    """Show the setup screen: interactive in a TTY, static in a pipe."""
     if _tty():
         return welcome(extra)
     render.apply_theme(_BOOT_THEME)

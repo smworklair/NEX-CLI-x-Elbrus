@@ -1,44 +1,34 @@
-# tools/ — вспомогательные скрипты
+# `tools/` — Helper Scripts
 
-Всё здесь запускается локально на CPU и ничего не требует, кроме `.venv`
-(единственное исключение отмечено). Порядок — примерно тот, в котором это
-нужно по ходу работы.
+Everything here runs locally on CPU and requires nothing beyond `.venv` (the single exception is noted). Listed roughly in workflow order.
 
-| скрипт | что делает | когда нужен |
+| script | what it does | when needed |
 |---|---|---|
-| `probe_matrix.py` | переснимает матрицу портов у настоящего ассемблера e2k и сверяет с `vliw/core/model.py` | после любой правки профиля машины |
-| `vliw_gen.py` | генерирует примеры «граф → расписание», расписания через CP-SAT, доказуемо оптимальные | нужны новые данные (требует `ortools`) |
-| `validate_jsonl.py` | прогоняет jsonl через настоящий `Schedule.validate()`, печатает сводку | после любой генерации или правки данных |
-| `build_split.py` | собирает `train_merged.jsonl` и held-out `eval_wide.jsonl` (4..24 инстр., послойно) | перед обучением |
-| `kaggle_prep.py` | собирает `build/kaggle/`: датасет + два ядра-скрипта | перед заливкой |
-| `kaggle_push.sh` | заливает и запускает; `pull` забирает дампы обратно, `status` смотрит без заливки | нужен `~/.kaggle/kaggle.json` |
-| `report_runs.py` | сводит дампы прогонов в таблицу с дельтами и разбивкой по размеру графа | после прогонов |
-| `bench_bestof.py` | замер best-of-N локально, часами, с возобновлением после обрыва | проверка гипотез без Kaggle |
-| `check_real_vs_synth.py` | компилирует обычные C-программы настоящим lcc и сравнивает словарь операций с обучающим | после правок парсера или данных |
-| `collect_real_schedule.py` | самодостаточный сбор графа и расписания с чужого `.s` | внешним разработчикам, без репозитория |
+| `probe_matrix.py` | re-probes the port matrix against the real `e2k` assembler and compares with `vliw/core/model.py` | after any change to a machine profile |
+| `vliw_gen.py` | generates "graph → schedule" examples via CP-SAT, provably optimal | when generating new data (requires `ortools`) |
+| `validate_jsonl.py` | runs jsonl records through real `Schedule.validate()` and prints a summary | after generating or editing datasets |
+| `build_split.py` | builds `train_merged.jsonl` and held-out `eval_wide.jsonl` (4..24 ops, stratified) | before training |
+| `kaggle_prep.py` | assembles `build/kaggle/`: dataset + two kernel scripts | before uploading |
+| `kaggle_push.sh` | uploads and runs; `pull` downloads dumps back, `status` checks without pushing | requires `~/.kaggle/kaggle.json` |
+| `report_runs.py` | summarizes run dumps into a table with deltas and graph-size breakdown | after runs |
+| `bench_bestof.py` | measures best-of-N locally over hours with resume-after-interrupt | testing hypotheses without Kaggle |
+| `check_real_vs_synth.py` | compiles ordinary C programs with real `lcc` and compares the op vocabulary against training data | after parser or dataset changes |
+| `collect_real_schedule.py` | standalone graph and schedule extractor from an external `.s` file | for external contributors without the repo |
 
-`probe_matrix.py`, `validate_jsonl.py` и `report_runs.py` доступны и как
-команды `vliw` (`/verify`, `/validate`, `/report`) — та же проверка в
-процессе, без второго питона. `kaggle_push.sh` — как `/kaggle`. См.
-[`../docs/CLI.md`](../docs/CLI.md#данные).
+`probe_matrix.py`, `validate_jsonl.py`, and `report_runs.py` are also available as `vliw` commands (`/verify`, `/validate`, `/report`) — same checks in-process without spawning a second Python. `kaggle_push.sh` is available as `/kaggle`. See [`../docs/CLI.md`](../docs/CLI.md#data).
 
-## Обычный цикл
+## Standard Workflow
 
 ```bash
-python tools/probe_matrix.py                              # железо не разъехалось
-python -m unittest discover -s tests -t .                 # код не разъехался
-python tools/validate_jsonl.py train_merged.jsonl         # данные законны
-tools/kaggle_push.sh                                      # шаг 0 на Kaggle
-tools/kaggle_push.sh pull && python tools/report_runs.py  # результаты в таблицу
+python tools/probe_matrix.py                              # hardware model hasn't drifted
+python -m unittest discover -s tests -t .                 # code hasn't drifted
+python tools/validate_jsonl.py train_merged.jsonl         # dataset is valid
+tools/kaggle_push.sh                                      # step 0 on Kaggle
+tools/kaggle_push.sh pull && python tools/report_runs.py  # aggregate results into table
 ```
 
-Порядок прогонов и что каким шагом доказывается — в
-[`../docs/archive/RUNBOOK_EOS.md`](../docs/archive/RUNBOOK_EOS.md).
+Run order and what each step proves: [`../docs/archive/RUNBOOK_EOS.md`](../docs/archive/RUNBOOK_EOS.md).
 
-## Что здесь намеренно НЕ так
+## Intentional Quirks
 
-`vliw_gen.py` импортирует константы из `vliw.core.model`, а
-`training/validate_kaggle.py` — дублирует их у себя. Это не недосмотр:
-валидатор должен работать на Kaggle, где пакета `vliw` нет, и потому обязан
-быть самодостаточным. Расхождение между ними ловит `probe_matrix.py` и
-`tests/test_model.py`.
+`vliw_gen.py` imports constants from `vliw.core.model`, whereas `training/validate_kaggle.py` duplicates them inline. That is not an oversight: the validator must run on Kaggle where the `vliw` package is not installed, so it has to be self-contained. Any drift between the two is caught by `probe_matrix.py` and `tests/test_model.py`.

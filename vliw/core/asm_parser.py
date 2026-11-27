@@ -1,28 +1,8 @@
-"""Разбор настоящего `.s`-вывода lcc для Эльбруса.
+"""Parser for real lcc `.s` assembly output targeting Elbrus (e2k).
 
-Это мост между прототипом и реальным кодом. Раньше инструмент умел только
-синтетические сценарии; здесь он принимает файл, который выдал компилятор, и
-строит по нему граф зависимостей — после чего к нему применимы все те же
-инструменты: точный поиск, диагностика, сравнение.
-
-Что понимаем в файле:
-
-  * широкие команды в фигурных скобках `{ … }` — одна пачка = один такт выдачи;
-  * операции с указанием канала: `adds,0 %r1, %r2, %r3`;
-  * `nop N` — компилятор так кодирует вынужденную задержку;
-  * метки, директивы (`.text`, `.global`, …) и комментарии — пропускаем.
-
-Чего НЕ делаем и почему. Мы не эмулируем семантику: нас интересуют только
-зависимости по регистрам (кто пишет — кто читает) и класс операции. Этого
-достаточно, чтобы построить граф и переспланировать участок. Предикаты,
-спекуляция, обращения к памяти сложнее «загрузить/сохранить» игнорируются —
-ровно так же, как их игнорирует модель машины в `model.py`.
-
-Допущение о порядке операндов: последний операнд — приёмник
-(`adds,0 %r1, %r2, %r3` → `r3 = r1 + r2`). Так устроено большинство операций
-в выводе lcc; для нашей задачи (граф зависимостей) важен именно приёмник.
-Строки, которые не удалось разобрать, считаются и показываются в отчёте —
-инструмент не делает вид, что понял файл целиком.
+Parses `{ ... }` wide instructions, explicit channel suffixes (`adds,0`),
+and `nop N` stall counts, building a register-level RAW dependency DAG and
+reconstructing the compiler schedule for exact comparison and linting.
 """
 
 from __future__ import annotations
@@ -35,9 +15,9 @@ from .dag import DAG, Instr
 from .model import MachineModel
 from .schedule import Schedule
 
-# Мнемоника e2k -> класс операции нашей модели. Список покрывает то, что
-# реально встречалось в экспериментах (probe.c / test.c); всё незнакомое
-# считается простой арифметикой и помечается как нераспознанное.
+# e2k mnemonic -> machine-model operation class.
+# Unknown channel-tagged mnemonics map to UNKNOWN.
+#
 MNEMONICS: dict[str, str] = {
     "adds": "ADD", "addd": "ADD", "addw": "ADD", "incs": "ADD", "incd": "ADD",
     "subs": "SUB", "subd": "SUB", "subw": "SUB", "decs": "SUB",
@@ -51,53 +31,53 @@ MNEMONICS: dict[str, str] = {
     "sars": "SHL", "sard": "SHL", "scls": "SHL", "scrs": "SHL",
     "ands": "AND", "andd": "AND", "ors": "AND", "ord": "AND",
     "xors": "AND", "xord": "AND", "andns": "AND",
-    # `sxt` — расширение знака, встречается в настоящем выводе lcc. Здесь
-    # раньше стоял `adds_`: такой мнемоники нет, ни в одной пробе и ни в
-    # одном скомпилированном файле она не встречается — опечатка с первого
-    # коммита, занимавшая место настоящей операции.
+    # `sxt` — sign extension seen in real lcc output.
+    #
+    #
+    #
     "movts": "ADD", "movtd": "ADD", "sxt": "ADD",
 
-    # --- Плавающая точка, предикаты, упакованные (30.08.2026) ----------------
-    # Каналы и латентности этих классов сняты у ассемблера и компилятора, а не
-    # предположены — см. model.py. До этого все они попадали в UNKNOWN, и на
-    # выводе `lcc -O3` таких операций было 37%.
+    # --- Floating-point, predicates, packed ops (2026-08-30) ----------------
+    # Channels and latencies probed against the real assembler/compiler.
+    #
+    #
     "fadds": "FADD", "faddd": "FADD", "fsubs": "FADD", "fsubd": "FADD",
     "fmuls": "FMUL", "fmuld": "FMUL",
-    # Сращённое умножение-сложение. Добавлено 02.09.2026: разбор настоящего
-    # вывода lcc -O3 на обычном числовом ядре показал 16 таких операций из
-    # 138 — то есть 12% кода уходило в UNKNOWN с заглушкой вместо модели.
+    # Fused multiply-add (added 2026-09-02 from lcc -O3 kernels).
+    #
+    #
     "fmul_addd": "FMA", "fmul_adds": "FMA",
     "fmul_subd": "FMA", "fmul_subs": "FMA",
     "fmul_rsubd": "FMA", "fmul_rsubs": "FMA",
-    # Чтение из буфера предподкачки (APB). Каналы сняты у ассемблера
-    # 02.09.2026: у всего семейства `,0 ,1 ,2 ,3`, и только у четверного
-    # `movaq` уже — `,0 ,2`. Поэтому классов два: иначе модель разрешала бы
-    # `movaq` там, где ассемблер его отвергает.
+    # Array prefetch buffer (APB) reads: `,0,1,2,3`, except `movaq` on `,0,2`.
+    #
+    #
+    #
     "movab": "MOVA", "movah": "MOVA", "movaw": "MOVA",
     "movad": "MOVA", "movaqp": "MOVA",
     "movaq": "MOVAQ",
-    # `incr` продвигает индекс AAU. В канал ALC не попадает: в настоящем
-    # листинге он стоит в одной широкой команде со `staad,2`, а staad канал
-    # ,2 занимает наверняка (ассемблер отвергает `adds,2` рядом с ним).
-    # ВЫВОД ИЗ НАБЛЮДЕНИЯ, а не из пробы: изолированно ассемблер `incr` не
-    # принимает вовсе, поэтому перебрать каналы, как для остальных, нельзя.
+    # `incr` advances AAU index; does not occupy an ALC slot (co-issues with `staad,2`).
+    #
+    #
+    #
+    #
     "incr": "INCR",
-    # Преобразования формата, каналы ,0 ,1 ,3 ,4 сняты у ассемблера.
+    # Format conversions; channels ,0 ,1 ,3 ,4 verified with assembler.
     "istofd": "CONV", "istofs": "CONV", "idtofd": "CONV", "idtofs": "CONV",
     "fdtoistr": "CONV", "fstoistr": "CONV", "fdtois": "CONV", "fstois": "CONV",
     "fdtoid": "CONV", "fstoid": "CONV", "fdtofs": "CONV", "fstofd": "CONV",
     "fdivs": "FDIV", "fdivd": "FDIV",
 
-    # Сравнения, кладущие результат в предикат. Их много и они разные по
-    # ширине операнда (`b` — байтовая форма записи, `d` — двойное слово);
-    # для планирования это один класс: канал и латентность у них общие.
+    # Comparisons writing predicate registers (shared channel/latency class).
+    #
+    #
     "cmpesb": "PRED", "cmpedb": "PRED", "cmplsb": "PRED", "cmpldb": "PRED",
     "cmplesb": "PRED", "cmpledb": "PRED", "cmpbsb": "PRED", "cmpbdb": "PRED",
     "cmpandesb": "PRED", "cmpandedb": "PRED",
     "cmpandsb": "PRED", "cmpanddb": "PRED",
 
-    # Упакованные: `p*` — 64-битные, `qp*` — 128-битные. Оба класса живут в
-    # тех же двух каналах, поэтому различать их для планирования нечем.
+    # Packed ops: `p*` (64-bit) and `qp*` (128-bit) share the same channels.
+    #
     "paddw": "PACK", "paddb": "PACK", "paddh": "PACK", "paddd": "PACK",
     "psubw": "PACK", "psubb": "PACK", "psubh": "PACK", "psubd": "PACK",
     "pcmpgtw": "PACK", "pcmpeqw": "PACK", "pminsw": "PACK", "pmaxsw": "PACK",
@@ -106,157 +86,126 @@ MNEMONICS: dict[str, str] = {
     "qpminsw": "PACK", "qpmaxsw": "PACK", "qpcmpgtw": "PACK",
     "qppackdl": "PACK", "qpswitchd": "PACK",
 
-    # Упакованная ЛОГИКА и сдвиги — шире арифметики по каналам (,0 ,1 ,3 ,4
-    # против ,0 ,3), проверено ассемблером.
+    # Packed logic and shifts: wider channel mask (,0 ,1 ,3 ,4 vs ,0 ,3).
+    #
     "qpor": "PACKLOG", "qpand": "PACKLOG", "qpxor": "PACKLOG",
     "qpsllw": "PACKLOG", "qpsrlw": "PACKLOG", "qpsraw": "PACKLOG",
     "por": "PACKLOG", "pand": "PACKLOG", "pxor": "PACKLOG",
     "psllw": "PACKLOG", "psrlw": "PACKLOG",
 
-    # Упакованная плавающая точка — те же каналы и та же цена, что у
-    # скалярной: отдельного класса не заводим.
+    # Packed FP shares channels and timing with scalar FP.
+    #
     "pfadds": "FADD", "pfaddd": "FADD", "pfsubs": "FADD",
     "pfmuls": "FMUL", "pfmuld": "FMUL",
 
-    # Устройство доступа к массивам: обмен с его регистрами и запись через
-    # него. Каналы ,2 и ,5 — те же, что у обычной записи в память.
+    # Array Access Unit (AAU): register moves and stores on channels ,2 ,5.
+    #
     "aaurw": "AAU", "aaurwd": "AAU", "aaurr": "AAU", "aaurrd": "AAU",
     "staaw": "AAU", "staad": "AAU", "staah": "AAU", "staab": "AAU",
     "staaq": "AAU", "mmurw": "AAU", "mmurr": "AAU",
 
-    # Сращённые операции: сдвиг со сложением за такт. Только ,1 и ,4.
+    # Combined shift-and-add ops: channels ,1 and ,4 only.
     "shl_adds": "COMBO", "shl_addd": "COMBO",
     "shr_adds": "COMBO", "shr_addd": "COMBO",
     "getf_adds": "COMBO", "getf_addd": "COMBO",
 
-    # Битовые поля: вставка уже, чтение и выбор шире.
+    # Bitfield ops: insert is narrower; extract/merge are wider.
     "insfs": "INSF", "insfd": "INSF",
     "getfs": "MERGE", "getfd": "MERGE",
     "merges": "MERGE", "merged": "MERGE",
 
-    # Широкая загрузка/запись — те же порты, что у обычных.
+    # Wide load/store share the standard memory ports.
     "ldqp": "LOAD", "ldapq": "LOAD", "stqp": "STORE", "stapq": "STORE",
 
-    # Запись в регистры состояния (счётчик цикла %lsr и подобные) — ,0.
+    # Writes to state registers (loop counter %lsr, etc.) — channel ,0.
     "rwd": "RW", "rws": "RW",
 }
 
-# `adds,0 %r1, %r2, %r3` — мнемоника, необязательный канал, операнды.
+# `adds,0 %r1, %r2, %r3` — mnemonic, optional channel, operands.
 CONTROL = {
     "nop", "return", "ct", "ibranch", "call", "disp", "rbranch",
     "setwd", "setbn", "setsft", "settr", "setmas", "setei",
     "getsp", "getpl", "bap", "eap", "flushr", "flushc", "wait",
     "ipd", "abn", "abp", "abg", "alc", "loop_mode", "pref", "landing",
-    # Добавлено 02.09.2026 по разбору настоящего вывода lcc -O3:
-    # `ldisp %ctpr2, .L394` готовит цель перехода — ровно как `disp`, который
-    # уже здесь; `fapb ct=0, dcd=0, fmt=4, ...` настраивает буфер
-    # асинхронной предподкачки и не трогает регистров вообще. Обе — настройка,
-    # а не вычисление, и в графе зависимостей им не место.
+    # Control/setup ops (`ldisp`, `fapb`, etc.) excluded from compute DAG.
+    #
+    #
+    #
+    #
     "ldisp", "fapb",
 }
-"""Управляющие и настроечные операции — в графе ВЫЧИСЛЕНИЙ им не место.
-
-`setwd` объявляет окно регистров, `disp` готовит переход, `getsp` берёт
-указатель стека — они не считают и зависимостей по данным не создают.
-Раньше список был из шести имён, а всё остальное попадало в граф как
-арифметика: на настоящем `-O3` такие фантомы занимали чужие порты и
-восстановление расписания компилятора падало на первом же `setwd` в такте 0.
-Считаются отдельно (`ParsedAsm.control_ops`): спрятать их молча было бы
-враньём, посчитать сложением — тоже.
-"""
+"""Control/setup mnemonics excluded from the compute DAG and counted in `ParsedAsm.control_ops`."""
 
 _OP = re.compile(
-    r"^\s*(?P<mn>[a-z][a-z0-9_]*)"      # мнемоника
-    r"(?:,(?P<chan>\d+))?"              # канал: ,0 … ,5
-    r"(?P<flags>(?:,[a-z][a-z0-9]*)*)"  # модификаторы после канала: ,sm и др.
+    r"^\s*(?P<mn>[a-z][a-z0-9_]*)"      # mnemonic
+    r"(?:,(?P<chan>\d+))?"              # channel: ,0 .. ,5
+    r"(?P<flags>(?:,[a-z][a-z0-9]*)*)"  # post-channel modifiers: ,sm etc.
     r"(?:\s+(?P<args>.*?))?\s*$"
 )
-"""Команда широкой команды.
-
-МОДИФИКАТОРЫ. После канала компилятор ставит признаки исполнения — прежде
-всего `,sm` (speculative mode, спекулятивное исполнение). Раньше их не было
-в шаблоне, и такая строка не подходила под него ЦЕЛИКОМ: операция молча
-пропадала. На пробах это не проявлялось (в `examples/probes/*.s` ни одного
-`,sm`), а на настоящем `-O3` так теряется больше половины кода — 90 строк
-из 182 на обычном цикле. Модификаторы разбираются и сохраняются в
-`AsmOp.flags`: спекулятивная операция всё равно занимает канал и такт,
-поэтому в графе ей место, а признак может понадобиться позже.
-"""
+"""Instruction regex inside a wide instruction (captures post-channel modifiers like `,sm`)."""
 _NOP = re.compile(r"^\s*nop\s+(?P<n>\d+)\s*$", re.I)
-# ВНИМАНИЕ на отсутствие \b в конце. Он там был и молча ломал разбор всего
-# настоящего кода в циклах: после `]` следующий символ — запятая, оба
-# несловесные, границы слова между ними нет, и `%db[16]` не совпадал ВООБЩЕ.
-# А `%db[N]` — это вращающиеся регистры, которыми Эльбрус делает программную
-# конвейеризацию, то есть в оптимизированном цикле они повсюду (75 строк из
-# 167 в обычном числовом ядре). Приёмник-вращающийся регистр пропадал, и
-# приёмником назначался последний ВИДИМЫЙ регистр — то есть чужой источник.
-# Граф зависимостей после этого описывал не ту программу.
+# NOTE: no trailing \b — rotating registers like `%db[16],` end with `]`
+# followed by `,` (both non-word chars), so \b would miss them.
+#
+#
+#
+#
+#
+#
 _REG = re.compile(r"%?\b([a-z]+\d+|[a-z]+\[\d+\])")
 _COMMENT = re.compile(r"(//|!|;).*$")
 
 
 @dataclass
 class AsmOp:
-    """Одна операция из `.s`."""
+    """Single parsed operation from `.s`."""
 
     index: int
     mnemonic: str
-    op: str                 # класс нашей модели: ADD/MUL/DIV/LOAD/…
-    channel: int | None     # номер канала из `,N`, если был указан
+    op: str                 # machine-model op class: ADD/MUL/DIV/LOAD/...
+    channel: int | None     # explicit channel from `,N`, if present
     dst: str | None
     srcs: tuple[str, ...]
-    bundle: int             # номер широкой команды, в которой стояла
-    cycle: int              # такт выдачи по расписанию компилятора
+    bundle: int             # index of enclosing wide instruction
+    cycle: int              # issue cycle in compiler schedule
     text: str
     known: bool = True
     flags: tuple[str, ...] = ()
-    """Модификаторы после канала: `("sm",)` у спекулятивной операции."""
+    """Post-channel modifiers, e.g. `("sm",)` for speculative execution."""
     line: int = 0
-    """Номер строки в исходнике, 1-based.
-
-    Нужен редактору КОДА: он ставит расписание НА текст (такт и канал в
-    гуттере той самой строки) и водит курсор от находки к строке. Без этого
-    операция и её строка связаны только порядком, а порядок ломает первый
-    же пропуск нераспознанной строки.
-    """
+    """1-based source line number for editor gutter annotations and navigation."""
 
 
 @dataclass
 class AsmProblem:
-    """Замечание к строке исходника.
-
-    Разбор и раньше считал, сколько строк не понял и сколько мнемоник не
-    знает, — но только ЧИСЛОМ в отчёте («пропущено строк: 3»). Найти эти
-    строки человек мог лишь глазами. Замечание держит номер строки, поэтому
-    редактор ставит метку прямо на неё, а клик по списку ведёт курсор.
-    """
+    """Line-anchored parser or linter diagnostic."""
 
     line: int
     kind: str              # parse | mnemonic | channel | busy | free
     severity: str          # error | warn | info
     text: str
     hint: str = ""
-    op: int = -1           # индекс операции, если замечание про операцию
+    op: int = -1           # operation index, if diagnostic refers to an op
 
 
 @dataclass
 class ParsedAsm:
-    """Результат разбора файла."""
+    """Parsed assembly result."""
 
     ops: list[AsmOp] = field(default_factory=list)
     bundles: int = 0
     nop_cycles: int = 0
     skipped_lines: int = 0
     control_ops: int = 0
-    """Сколько управляющих операций пропущено (см. CONTROL)."""
+    """Count of skipped control/setup operations (see CONTROL)."""
     unknown_mnemonics: dict[str, int] = field(default_factory=dict)
     source: str = ""
     problems: list[AsmProblem] = field(default_factory=list)
-    """Что разбор не понял — с номерами строк, а не только счётчиком."""
+    """Line-anchored parse warnings and errors."""
 
     @property
     def compiler_cycles(self) -> int:
-        """Длина расписания, которое построил сам компилятор."""
+        """Total cycle span of the compiler's own schedule."""
         if not self.ops:
             return 0
         return max(o.cycle for o in self.ops) + 1
@@ -269,7 +218,7 @@ class ParsedAsm:
 
 
 def parse_asm(text: str, source: str = "") -> ParsedAsm:
-    """Разобрать текст `.s` в набор операций с их исходным расписанием."""
+    """Parse `.s` assembly text into operations and compiler issue cycles."""
     res = ParsedAsm(source=source)
     bundle = -1
     cycle = 0
@@ -296,13 +245,13 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
             cycle += 1
             continue
 
-        # Директивы и метки к расписанию отношения не имеют.
+        # Skip directives and labels.
         if line.startswith(".") or line.endswith(":"):
             continue
 
         m_nop = _NOP.match(line)
         if m_nop:
-            # `nop N` — задержка перед следующей широкой командой.
+            # `nop N` — explicit stall cycles before the next wide instruction.
             pending_nop += int(m_nop.group("n"))
             res.nop_cycles += int(m_nop.group("n"))
             continue
@@ -312,8 +261,8 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
             res.skipped_lines += 1
             res.problems.append(AsmProblem(
                 line=lineno, kind="parse", severity="warn",
-                text="строку не разобрать — в граф она не попала",
-                hint="ждём операцию вида `adds,0 %r1, %r2, %r3`"))
+                text="could not parse line — omitted from DAG",
+                hint="expected an operation like `adds,0 %r1, %r2, %r3`"))
             continue
 
         mn = m.group("mn").lower()
@@ -326,29 +275,29 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
         op_class = MNEMONICS.get(mn)
         known = op_class is not None
         if not known:
-            # Незнакомая мнемоника БЕЗ канала — не операция ALC. В e2k всё,
-            # что исполняется на шести арифметических каналах, несёт `,N`;
-            # без него это предикатная логика (`landp`, `pass`), подготовка
-            # перехода (`ldisp`) или иной блок. Раньше такие попадали в граф
-            # сложением и занимали чужие порты — восстановление расписания
-            # компилятора падало на первом же из них. Считаем их вместе с
-            # управляющими и в граф вычислений не берём.
+            # Unknown mnemonic WITHOUT channel is not an ALC op (e.g. predicate/control);
+            # count under control_ops rather than inserting into compute DAG.
+            #
+            #
+            #
+            #
+            #
             if chan is None:
                 res.control_ops += 1
                 res.unknown_mnemonics[mn] = res.unknown_mnemonics.get(mn, 0) + 1
                 continue
-            # С каналом — настоящая операция ALC, просто класс нам неизвестен.
-            # Раньше здесь стояло op_class = "ADD": чужая операция уезжала в
-            # отчёт сложением с латентностью 1, и `fdivd` считался как ADD.
+            # Channel-tagged unknown op: keep in DAG as UNKNOWN (latency 1 placeholder).
+            #
+            #
             op_class = "UNKNOWN"
             res.unknown_mnemonics[mn] = res.unknown_mnemonics.get(mn, 0) + 1
             near = difflib.get_close_matches(mn, MNEMONICS, n=3, cutoff=0.72)
             res.problems.append(AsmProblem(
                 line=lineno, kind="mnemonic", severity="warn", op=len(res.ops),
-                text=f"мнемоника `{mn}` незнакомая — класс UNKNOWN "
-                     f"(латентность 1, любой канал: заглушка, не измерение)",
-                hint=("может быть: " + "  ".join(near)) if near else
-                     "список известных — в MNEMONICS (core/asm_parser.py)"))
+                text=f"unknown mnemonic `{mn}` — assigned class UNKNOWN "
+                     f"(latency 1, any channel: placeholder, not measured)",
+                hint=("did you mean: " + "  ".join(near)) if near else
+                     "known mnemonics are listed in MNEMONICS (core/asm_parser.py)"))
 
         args = (m.group("args") or "").strip()
         regs = _REG.findall(args)
@@ -366,14 +315,14 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
 
     res.bundles = bundle + 1
     if not saw_bundle and res.ops:
-        # Файл без фигурных скобок: считаем, что каждая операция — свой такт.
+        # Brace-free file: treat each operation as its own cycle.
         #
-        # Условие смотрит на то, ВСТРЕЧАЛАСЬ ли хоть одна `{`, а не на
-        # `in_bundle`. Прежняя проверка (`not in_bundle` и все такты нулевые)
-        # ошибалась на файле из ОДНОЙ широкой команды: после закрывающей `}`
-        # флаг снят, такты у всех операций нулевые — и разбор растаскивал
-        # соседей по такту на разные такты, ровно теряя то, ради чего файл и
-        # читается. На многотактных файлах не проявлялось: там такты разные.
+        # Check `saw_bundle` rather than `not in_bundle` so a single-bundle file
+        # does not get split across separate cycles.
+        #
+        #
+        #
+        #
         for i, o in enumerate(res.ops):
             o.cycle = i
             o.bundle = i
@@ -382,34 +331,17 @@ def parse_asm(text: str, source: str = "") -> ParsedAsm:
 
 
 def build_dag(parsed: ParsedAsm, key: str = "asm", title: str = "") -> DAG:
-    """Построить граф зависимостей по чтению/записи регистров (RAW).
+    """Build RAW register dependency DAG respecting wide-instruction semantics.
 
-    СЕМАНТИКА ШИРОКОЙ КОМАНДЫ. Все операции одного такта читают операнды
-    ОДНОВРЕМЕННО, прежде чем ляжет хоть одна запись этого же такта. Поэтому
-    текстовый порядок внутри `{ … }` ничего не значит, и вот эта пара из
-    probe.s — НЕ зависимость по данным:
-
-        {  ldw,0    0x0, [ a+16 ], %r5      ← пишет %r5
-           sdivs,5  %r5, %r6, %r4           ← читает СТАРЫЙ %r5
-        }
-
-    Деление берёт значение, загруженное раньше, а загрузка готовит %r5 для
-    следующего потребителя: обычное переиспользование регистра при
-    программной конвейеризации.
-
-    Прежняя версия шла по операциям подряд и такие пары читала как «запись →
-    чтение» по номеру строки. Последствия не косметические: выдуманные рёбра
-    завышали критический путь, а расписание самого компилятора переставало
-    проходить `Schedule.validate()` — инструмент объявлял вывод lcc
-    незаконным на ровном месте. Здесь такт обрабатывается целиком: сначала
-    все читают состояние ПРЕДЫДУЩИХ тактов, потом все пишут.
+    All operations in the same cycle read operands from PREVIOUS cycles
+    simultaneously before any writes in the current cycle take effect.
     """
     last_writer: dict[str, int] = {}
     instrs: list[Instr] = []
 
     def group_key(o: AsmOp) -> int:
-        # Такт неизвестен (файл без фигурных скобок) — операция сама по себе,
-        # иначе весь файл слипся бы в один «такт» и зависимости исчезли бы.
+        # Brace-free file: each op is its own cycle so sequential deps are preserved.
+        #
         return o.cycle if o.cycle >= 0 else -(o.index + 1)
 
     i = 0
@@ -419,8 +351,8 @@ def build_dag(parsed: ParsedAsm, key: str = "asm", title: str = "") -> DAG:
         while j < len(ops) and group_key(ops[j]) == group_key(ops[i]):
             j += 1
 
-        # Такт целиком: сперва ЧИТАЮТ все операции такта — по состоянию,
-        # сложившемуся к его началу, — и только потом применяются записи.
+        # Process whole cycle: all reads see prior-cycle writers, then apply writes.
+        #
         for o in ops[i:j]:
             preds = []
             for src in o.srcs:
@@ -441,20 +373,18 @@ def build_dag(parsed: ParsedAsm, key: str = "asm", title: str = "") -> DAG:
 
     return DAG(
         key=key,
-        title=title or f"Разобранный .s: {parsed.source or 'без имени'}",
-        note=(f"{len(parsed.ops)} операций из {parsed.bundles} широких команд. "
-              f"Граф построен по зависимостям «запись → чтение» регистров; "
-              f"расписание компилятора — {parsed.compiler_cycles} тактов."),
+        title=title or f"Parsed .s: {parsed.source or 'unnamed'}",
+        note=(f"{len(parsed.ops)} ops in {parsed.bundles} wide instructions. "
+              f"DAG built from RAW register dependencies; "
+              f"compiler schedule — {parsed.compiler_cycles} cycles."),
         instrs=instrs,
     )
 
 
 def compiler_schedule(parsed: ParsedAsm, dag: DAG, model: MachineModel) -> Schedule | None:
-    """Восстановить расписание, которое построил САМ компилятор.
+    """Reconstruct the compiler's own schedule for direct comparison with exact search.
 
-    Нужно, чтобы честно сравнить: сколько тактов получилось у lcc и сколько
-    даёт точный поиск на том же графе. Если в файле не было явных каналов или
-    раскладка противоречит модели машины, возвращаем None — врать не будем.
+    Returns None if channel assignment conflicts with the machine model.
     """
     sched = Schedule(dag, model)
     used: dict[tuple[int, int], int] = {}
@@ -477,71 +407,41 @@ def compiler_schedule(parsed: ParsedAsm, dag: DAG, model: MachineModel) -> Sched
 
 
 UNKNOWN_SHARE_LIMIT = 0.05
-"""С какой доли UNKNOWN сравнение с компилятором перестаёт что-либо значить."""
+"""UNKNOWN op fraction above which compiler comparison becomes meaningless."""
 
 
 def unknown_share(parsed: ParsedAsm) -> float:
-    """Доля операций, класс которых машине неизвестен."""
+    """Fraction of operations classified as UNKNOWN."""
     if not parsed.ops:
         return 0.0
     return sum(1 for o in parsed.ops if o.op == "UNKNOWN") / len(parsed.ops)
 
 
 def compiler_schedule_checked(parsed: ParsedAsm, dag: DAG, model: MachineModel):
-    """Расписание компилятора + причина, если его нельзя показывать.
-
-    Одна функция на оба интерфейса намеренно. До 0.9 построчный режим и
-    полноэкранный КОД решали это порознь и разошлись: `/load` проверял
-    расписание через `Schedule.validate()` и отбрасывал непрошедшее, а КОД
-    показывал makespan любого восстановленного; про долю UNKNOWN не думал
-    ни один. Разъехаться двум копиям тут нечему — копия одна.
-
-    Возвращает `(schedule|None, problem|None)`, где problem — пара
-    (заголовок, подробность) для показа человеку.
-    """
+    """Return `(schedule|None, problem|None)` where `problem` is `(title, detail)`."""
     sched = compiler_schedule(parsed, dag, model)
     if sched is None:
-        return None, ("расписание компилятора не восстановлено",
-                      "раскладка по каналам не сходится с моделью")
+        return None, ("compiler schedule could not be reconstructed",
+                      "channel layout conflicts with machine model")
     errs = sched.validate()
     if errs:
         detail = (errs[0] if len(errs) == 1
-                  else f"{len(errs)} замечаний, первое: {errs[0]}")
+                  else f"{len(errs)} issues, first: {errs[0]}")
         return None, (
-            "расписание компилятора не принято проверкой",
-            detail + ". Частая причина на настоящем -O3 — конвейеризованный "
-                     "цикл: значение берётся из предыдущей итерации, а разбор "
-                     "читает файл линейно")
+            "compiler schedule failed validation",
+            detail + ". Common cause on -O3 code is a software-pipelined "
+                     "loop: values carry from the previous iteration while the parser "
+                     "reads the block linearly")
     return sched, None
 
 
 def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
-    """Проверить разобранный исходник по модели машины.
-
-    Разбор отвечает на вопрос «что здесь написано», линтер — на вопрос
-    «может ли машина это исполнить так, как написано». Три вещи, на которых
-    рукописный e2k-ассемблер ломается чаще всего, и все три проверяются
-    ИЗМЕРЕННЫМИ числами из `model.py`, а не догадкой:
-
-      1. канал не тот — `muls,2` ассемблер отвергает («cannot be encoded in
-         ALC2»), потому что умножение живёт на `,0 ,1 ,3 ,4`;
-      2. порт уже занят — деление держит `,5` два такта, и второе деление
-         в следующем такте физически не примут;
-      3. результат ещё не готов — латентность деления 11 тактов, и чтение
-         его приёмника через такт читает старое значение.
-
-    Третья ошибка самая злая: она не мешает ни ассемблеру, ни нашему
-    разбору — код собирается и «работает», просто считает не то. Поэтому
-    замечание несёт номер такта, в котором значение будет готово.
-
-    Возвращает список замечаний, отсортированный по строке; замечания
-    разбора (`parsed.problems`) сюда НЕ входят — они уже есть у разбора.
-    """
+    """Lint parsed assembly against the machine model (illegal channels, port conflicts, early reads)."""
     out: list[AsmProblem] = []
     if not parsed.ops:
         return out
 
-    # 1. Канал против матрицы портов.
+    # 1. Channel vs port capability matrix.
     for o in parsed.ops:
         if o.channel is None:
             continue
@@ -550,19 +450,19 @@ def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
             names = " ".join(model.port_label(p) for p in allowed)
             out.append(AsmProblem(
                 line=o.line, kind="channel", severity="error", op=o.index,
-                text=f"{o.mnemonic} в канале ,{o.channel} — этого канала у "
-                     f"операции нет",
-                hint=f"{o.op} исполним на: {names}"))
+                text=f"{o.mnemonic} on channel ,{o.channel} — unsupported channel for "
+                     f"{o.op}",
+                hint=f"{o.op} executes on: {names}"))
 
-    # 2. Порт занят. Считаем ровно так же, как compiler_schedule: операция с
-    #    occupancy > 1 держит клетку и в следующих тактах.
+    # 2. Port occupancy conflicts (multi-cycle occupancy blocks subsequent cycles).
+    #
     held: dict[tuple[int, int], AsmOp] = {}
     for o in parsed.ops:
-        # Операции с отдельным слогом (семейство movaX) канал ALC не занимают
-        # и конфликтовать с арифметикой не могут — измерено у ассемблера,
-        # см. OpClass.free_slot. Без этой проверки разбор настоящего кода
-        # находил конфликты там, где lcc совершенно законно ставит `movad,0`
-        # рядом с `fmul_addd,0` в одной широкой команде.
+        # Separate-syllable ops (movaX) do not occupy ALC slots (`OpClass.free_slot`).
+        #
+        #
+        #
+        #
         try:
             if model.op(o.op).free_slot:
                 continue
@@ -581,23 +481,23 @@ def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
             free_at = prev.cycle + model.occupancy(prev.op)
             out.append(AsmProblem(
                 line=o.line, kind="busy", severity="error", op=o.index,
-                text=(f"канал ,{port} в такте {o.cycle} уже занят: "
-                      + (f"{prev.mnemonic} из строки {prev.line}" if same else
-                         f"{prev.mnemonic} из строки {prev.line} держит порт "
-                         f"{model.occupancy(prev.op)} т.")),
-                hint=f"порт освободится в такте {free_at}"))
+                text=(f"channel ,{port} in cycle {o.cycle} is already busy: "
+                      + (f"{prev.mnemonic} on line {prev.line}" if same else
+                         f"{prev.mnemonic} on line {prev.line} holds port for "
+                         f"{model.occupancy(prev.op)} cyc")),
+                hint=f"port frees in cycle {free_at}"))
         for k in range(occ):
             held.setdefault((o.cycle + k, port), o)
 
-    # 3. Результат ещё не готов: чтение раньше латентности.
+    # 3. Operand not ready: read before producer latency elapses.
     #
-    # ТАКТ ЦЕЛИКОМ, а не построчно. Все операции широкой команды читают
-    # операнды одновременно, до того как ляжет хоть одна запись этого же
-    # такта, — поэтому сосед по такту производителем быть не может. Проверка
-    # шла по порядку строк и объявляла НЕЗАКОННЫМ вывод самого lcc: в
-    # probe.s соседние `ldw` и `sdivs` внутри одной `{ … }` давали три
-    # «ошибки» на ровном месте. То же самое чинилось в build_dag — здесь
-    # отдельная копия логики, и она отстала.
+    # Whole-cycle semantics: all ops in a wide instruction read prior cycles first.
+    #
+    #
+    #
+    #
+    #
+    #
     last_writer: dict[str, AsmOp] = {}
     ops = parsed.ops
     i = 0
@@ -614,26 +514,26 @@ def lint(parsed: ParsedAsm, model: MachineModel) -> list[AsmProblem]:
                 if o.cycle < ready:
                     out.append(AsmProblem(
                         line=o.line, kind="ready", severity="error", op=o.index,
-                        text=f"%{src} читается в такте {o.cycle}, а "
-                             f"{w.mnemonic} из строки {w.line} отдаст его "
-                             f"только в такте {ready}",
-                        hint=f"латентность {w.op} — {model.latency(w.op)} т.; "
-                             f"нужен разрыв в {ready - w.cycle} т."))
+                        text=f"%{src} read in cycle {o.cycle}, but "
+                             f"{w.mnemonic} on line {w.line} produces it "
+                             f"only in cycle {ready}",
+                        hint=f"{w.op} latency is {model.latency(w.op)} cyc; "
+                             f"requires a {ready - w.cycle}-cycle gap"))
         for o in ops[i:j]:
             if o.dst:
                 last_writer[o.dst] = o
         i = j
 
-    # 4. Каналы вообще не проставлены: расписание компилятора мы тогда не
-    #    восстанавливаем, а раскладываем сами — и это надо сказать вслух,
-    #    иначе «18 тактов у lcc» выглядит как замер, хотя это наша догадка.
+    # 4. Missing explicit channels: warn that port layout is inferred.
+    #
+    #
     free = [o for o in parsed.ops if o.channel is None]
     if free:
         out.append(AsmProblem(
             line=free[0].line, kind="free", severity="info", op=free[0].index,
-            text=f"{len(free)} из {len(parsed.ops)} операций без канала — "
-                 f"раскладку по портам домысливаем",
-            hint="в выводе lcc канал есть всегда: `adds,0 …`"))
+            text=f"{len(free)} of {len(parsed.ops)} ops lack explicit channel — "
+                 f"port layout is inferred",
+            hint="lcc output always includes explicit channels, e.g. `adds,0 ...`"))
 
     out.sort(key=lambda p: (p.line, p.kind))
     return out

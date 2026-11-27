@@ -1,4 +1,4 @@
-"""Mistral (Le Chat API): OpenAI-подобный `/v1/chat/completions`."""
+"""Mistral (Le Chat API): OpenAI-compatible `/v1/chat/completions`."""
 
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ def _messages(system, history, question):
 def _text_of(data: dict) -> tuple[str, int]:
     choices = data.get("choices") or []
     if not choices:
-        raise LLMError("модель не вернула ответ")
+        raise LLMError("model returned no response")
     text = content_str(choices[0].get("message", {}).get("content")).strip()
     used = int(data.get("usage", {}).get("completion_tokens", 0) or 0)
     if not text:
-        raise LLMError(f"пустой ответ (finish={choices[0].get('finish_reason')})")
+        raise LLMError(f"empty response (finish={choices[0].get('finish_reason')})")
     return text, used
 
 
@@ -35,8 +35,8 @@ class MistralBackend(Backend):
     def __init__(self, api_key: str, model: str | None = None,
                  timeout: float = TIMEOUT):
         if not api_key:
-            raise LLMError("ключ не задан для le chat: задайте MISTRAL_API_KEY, "
-                           "NEX_API_KEY или ~/.config/nex/key")
+            raise LLMError("API key not set for Mistral: set MISTRAL_API_KEY, "
+                           "NEX_API_KEY, or ~/.config/nex/key")
         self._key = api_key
         self._model = model or _DEFAULT_MODEL
         self._timeout = timeout
@@ -57,10 +57,9 @@ class MistralBackend(Backend):
         if stream:
             body["stream"] = True
         if schema:
-            # Строгая схема требует additionalProperties: false и режет
-            # свободные схемы с 400/422 — тогда второй попыткой просим
-            # plain json_object (см. structured): JSON всё равно валиден,
-            # проверяет его вызывающий разбором.
+            # Strict json_schema requires additionalProperties: false and rejects
+            # loose schemas with 400/422 — retry with plain json_object (see
+            # structured); the caller validates the parsed JSON anyway.
             body["response_format"] = {"type": "json_object"} if loose_schema else {
                 "type": "json_schema",
                 "json_schema": {"name": "analysis", "schema": schema, "strict": True},

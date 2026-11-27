@@ -1,158 +1,142 @@
 <p align="center">
-  <img src="NEX-Elbrus-banner-v1_4.jpg" alt="NEX × Эльбрус: планировщик широких команд" width="100%">
+  <img src="NEX-Elbrus-banner-v1_5.jpg" alt="NEX × Elbrus: VLIW bundle scheduler" width="100%">
 </p>
 
 <p align="center">
-  <img alt="версия 1.4" src="https://img.shields.io/badge/версия-1.4-2C5C99?style=for-the-badge">
+  <img alt="version 1.5" src="https://img.shields.io/badge/version-1.5-2C5C99?style=for-the-badge">
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-4B86CF?style=for-the-badge">
-  <img alt="лицензия: некоммерческая" src="https://img.shields.io/badge/лицензия-некоммерческая-C0504D?style=for-the-badge">
+  <img alt="license: non-commercial" src="https://img.shields.io/badge/license-non--commercial-C0504D?style=for-the-badge">
 </p>
-
-**NEX CLI показывает, где код для процессора Эльбрус теряет такты, считает, как можно лучше, и проверяет, помогает ли в этом нейросеть.**
-
-Эльбрус выполняет до шести операций за такт, а раскладывает их компилятор `lcc` заранее. NEX CLI берёт готовый `.s`-файл,
-режет его на блоки и сравнивает три способа расписания на одной и той же модели машины: жадный, точный и обученный.
 
 <p align="center">
-  <img src="docs/img/readme/three.png" alt="Три способа разложить операции по тактам" width="85%">
+  <a href="https://github.com/smworklair/NEX-CLI-x-Elbrus/tree/ru">Russian version (v1.4): branch <code>ru</code></a>
 </p>
 
-> **Текущая версия: 1.4** (11.11.2026). Такты модельные, а не замеры на железе; `loop_mode` пока не моделируется.
-> Проверка версии: `python -m vliw --version`. Что нового — [`docs/RELEASE_1_4.md`](docs/RELEASE_1_4.md).
+**NEX CLI pinpoints where Elbrus VLIW code loses cycles, computes optimal bundle schedules, and tests whether small neural networks can close the gap.**
 
-## Что получилось
+Elbrus issues up to six operations per cycle in a wide instruction bundle (VLIW bundle), statically scheduled at compile time by `lcc`. NEX CLI ingests a compiled `.s` file, partitions it into basic blocks, and benchmarks three schedulers on the same machine model: a greedy list scheduler, an exact branch-and-bound oracle, and a learned policy.
 
-| | жадный | TINY Flash | точный оптимум |
+<p align="center">
+  <img src="docs/img/readme/three.png" alt="Three ways to schedule operations across cycles" width="85%">
+</p>
+
+> **Current version: 1.5** (2026-11-27). Cycle counts are model-based, not hardware measurements; `loop_mode` (software-pipelined loops) is not modeled yet.
+> Check version: `python -m vliw --version`. What's new: [`CHANGELOG.md` §1.5](CHANGELOG.md#15-2026-11-27).
+
+## Results
+
+| | greedy baseline | TINY Flash | exact optimum |
 |---|---|---|---|
-| настоящий код, оптимальных блоков из 947 | 890 | **927** | 947 |
-| трудные графы, из 300 | 18 | **284** | 300 |
-| время на блок | 0,4 мс | 0,6 мс | до 20 с |
+| real code, optimal basic blocks out of 947 | 890 | **927** | 947 |
+| hard graphs, out of 300 | 18 | **284** | 300 |
+| time per basic block | 0.4 ms | 0.6 ms | up to 20 s |
 
-На настоящем коде жадный уже оптимален в 94% блоков, а потери — 0,51% тактов. TINY Flash
-(тот же планировщик, что TINY AI) возвращает около 70% этих потерь
-и не делает хуже жадного ни на одном из 1 547 проверенных графов.
+On real code, the greedy list scheduler baseline already hits the optimum on 94% of basic blocks, leaving only 0.51% in recoverable cycles. TINY Flash (the fast runtime for TINY AI) recovers roughly 70% of that scheduling headroom and never regresses against the baseline on any of the 1,547 tested graphs.
 
 <p align="center">
-  <img src="docs/img/readme/results.png" alt="Результаты на настоящем коде" width="49%">
-  <img src="docs/img/readme/speed.svg" alt="TINY Flash быстрее в 26 раз" width="49%">
+  <img src="docs/img/readme/results.png" alt="Results on real code" width="49%">
+  <img src="docs/img/readme/speed.svg" alt="TINY Flash is 26x faster" width="49%">
 </p>
 
-Как теряется один такт, на примере `slotclash`:
+How a single cycle is lost to functional-unit contention, illustrated on `slotclash`:
 
 <p align="center">
-  <img src="docs/img/readme/slotclash.png" alt="Жадный, TINY AI и оракул на slotclash" width="75%">
+  <img src="docs/img/readme/slotclash.png" alt="Greedy, TINY AI, and oracle on slotclash" width="75%">
 </p>
 
-## Как это выглядит
+## What It Looks Like
 
-Запуск `python -m vliw` открывает экран выбора, дальше четыре режима. Если `textual` ещё не установлен,
-открывается экран-помощник: он предложит поставить недостающее и сам откроет рабочее место после согласия.
+Running `python -m vliw` opens the mode selector with four workspaces. If `textual` is not installed yet, a setup assistant opens instead: it offers to install the missing packages and launches the workspace automatically once confirmed.
 
 <p align="center">
-  <img src="docs/img/readme/code.png" alt="КОД: файл разобран и прогнан" width="49%">
-  <img src="docs/img/readme/lab.png" alt="РАЗБОР: участок slotclash" width="49%">
-  <img src="docs/img/readme/agent.png" alt="АГЕНТ: ответ по посчитанным числам" width="49%">
-  <img src="docs/img/readme/core.png" alt="ЯДРО: интерпретатор" width="49%">
+  <img src="docs/img/readme/code.png" alt="CODE: file parsed and executed" width="49%">
+  <img src="docs/img/readme/lab.png" alt="LAB: slotclash scenario" width="49%">
+  <img src="docs/img/readme/agent.png" alt="AGENT: answer grounded in computed numbers" width="49%">
+  <img src="docs/img/readme/core.png" alt="CORE: interpreter" width="49%">
 </p>
 
-| режим | для чего | подробно |
+| mode | purpose | details |
 |---|---|---|
-| **КОД** (1) | редактор `.s`, расписание в номерах строк, замечания, F5 — прогнать | [`docs/CODE_MODE.md`](docs/CODE_MODE.md) |
-| **РАЗБОР** (2) | решётка тактов × каналов и панели про клетку под курсором | [`docs/LAB_MODE.md`](docs/LAB_MODE.md) |
-| **АГЕНТ** (3) | вопрос обычным языком, ответ по уже посчитанным числам | [`docs/AGENT_PROMPTS.md`](docs/AGENT_PROMPTS.md) |
-| **ЯДРО** (4) | интерпретатор: из вычислений строится граф | [`docs/CORE_MODE.md`](docs/CORE_MODE.md) |
+| **CODE** (1) | `.s` editor, bundle schedule mapped to source lines, diagnostics, `F5` to run | [`docs/CODE_MODE.md`](docs/CODE_MODE.md) |
+| **LAB** (2) | cycles × issue slots grid with synchronized detail panels for the cell under the cursor | [`docs/LAB_MODE.md`](docs/LAB_MODE.md) |
+| **AGENT** (3) | natural-language Q&A grounded in computed schedule metrics | [`docs/AGENT_PROMPTS.md`](docs/AGENT_PROMPTS.md) |
+| **CORE** (4) | interpreter: constructs a data-dependency graph directly from expressions | [`docs/CORE_MODE.md`](docs/CORE_MODE.md) |
 
-## Быстрый старт
+## Quick Start
 
 ```bash
 git clone https://github.com/smworklair/NEX-CLI-x-Elbrus
 cd NEX-CLI-x-Elbrus
-pip install -e ".[tui]"              # ядро работает и без этого; для полноэкранных режимов нужны rich и textual
-python -m vliw                       # экран выбора режимов
-python -m vliw run slotclash         # сразу на примере
-python -m vliw all                   # все 17 сценариев текстом
+pip install -e ".[tui]"              # core works without this; rich and textual are needed for fullscreen modes
+python -m vliw                       # mode selection screen
+python -m vliw run slotclash         # run immediately on an example
+python -m vliw all                   # all 17 scenarios in plain text
 python -m unittest discover -s tests
 ```
 
-Нужен только Python 3.10+. `lcc` и железо не требуются. На Windows — [`docs/WINDOWS.md`](docs/WINDOWS.md).
+Requires only Python 3.10+. Neither `lcc` nor Elbrus hardware is required. For Windows, see [`docs/WINDOWS.md`](docs/WINDOWS.md).
 
-## С чего начать
+## Where to Start
 
-- **Понять, о чём проект** — этого README достаточно. Запускать ничего не обязательно.
-- **Запустить** — [`QUICKSTART.md`](QUICKSTART.md), затем [`docs/CLI.md`](docs/CLI.md): около 15 минут.
-- **Разобраться** — [`docs/README.md`](docs/README.md): этапы 3–13, открывать по потребности, не подряд.
+- **Understand what the project does** — this README is enough. No installation needed.
+- **Run it** — [`QUICKSTART.md`](QUICKSTART.md), then [`docs/CLI.md`](docs/CLI.md): about 15 minutes.
+- **Dive deeper** — [`docs/README.md`](docs/README.md): stages 3–13, intended as reference rather than front-to-back reading.
 
-Быстрая проверка, что всё на месте: `python -m vliw`.
+Quick sanity check that everything is wired up: `python -m vliw`.
 
-## Что внутри
+## What's Inside
 
-- **Жадный планировщик и точный поиск** — `vliw/core/`. Модель машины e2k-v6 измерена; у каждого числа указан источник.
-- **TINY AI** — `vliw/tiny/`. Маленькие сети подсказывают порядок, отсрочки и «придержать»; расписание строит обычный код,
-  поэтому оно законно по построению. Цифры и переобучение: [`docs/TINY.md`](docs/TINY.md).
-- **NNL-ядро (рабочее)** — `nex_core/`. Упаковывает TINY AI в NNL-блок «планировщик»: паспорт,
-  веса, sha256. Через него TINY AI отвечает панели НЕЙРОСЕТИ и агенту. Ещё один NNL-блок,
-  «Помощь_ассистент», отвечает на вопросы экрана-помощника.
-- **Эксперименты NNL** — `nnl_vliw/`, `nnl_isa/`. Ядра выбирают группу портфеля и угадывают класс
-  мнемоники. Технически работают, но выигрыша на настоящем коде не дают и в CLI не включены:
-  [`nnl_vliw/README.md`](nnl_vliw/README.md), [`nnl_isa/README.md`](nnl_isa/README.md).
-- **Агент** — `vliw/agent/`. 17 провайдеров, ключ только в памяти сессии, каждый шаг можно повторить командой.
+- **Greedy list scheduler and exact solver** — `vliw/core/`. Empirically calibrated `e2k-v6` machine model; every parameter cites its measurement source.
+- **TINY AI** — `vliw/tiny/`. Small neural networks advise priority ordering, defers, and holds; deterministic list-scheduling code emits the final VLIW bundles, so schedules are legal by construction. Numbers and retraining: [`docs/TINY.md`](docs/TINY.md).
+- **NNL core (active)** — `nex_core/`. Packages TINY AI as a self-verifying scheduler NNL block (passport, weights, SHA-256). Through it, TINY AI drives both the NEURAL NETS panel and the agent. A second NNL block handles setup-assistant queries.
+- **NNL experiments** — `nnl_vliw/`, `nnl_isa/`. Experimental cores for portfolio-group selection and mnemonic classification. Functional, but they yield no gain on real code and are not wired into the CLI: [`nnl_vliw/README.md`](nnl_vliw/README.md), [`nnl_isa/README.md`](nnl_isa/README.md).
+- **Agent** — `vliw/agent/`. 17 providers, API keys held strictly in session memory, every step reproducible via a CLI command.
 
-## Честные границы
+## Honest Boundaries
 
-- Такты модельные: на живом Эльбрусе не проверены. Каналы сняты у ассемблера, латентности —
-  с поведения `lcc`.
-- Обученная языковая модель (Qwen2.5-3B + LoRA) не обошла случайный перебор ни на одном из 13 настоящих графов:
-  [отчёт](real_candidates_100_400/model_eval/REPORT.md). Gemma и Phi эффекта тоже не дали. Поэтому в проекте работают маленькие сети.
-- Первая версия модели машины была неверна («разрыв 18%» оказался 3%); профиль оставлен как `e2k-v6-firstprobe`,
-  разбор — в [архиве исследований](docs/archive/FULL_README.md).
-- Экспериментальные NNL-ядра выбора группы портфеля на настоящем коде почти не лучше случайного отказа.
+- Cycle counts are model-based and have not been validated on physical Elbrus silicon. Issue-slot legality was probed via the assembler; latencies were inferred from `lcc` scheduling behavior.
+- A fine-tuned LLM (Qwen2.5-3B + LoRA) failed to beat random search on any of the 13 real graphs: [report](real_candidates_100_400/model_eval/REPORT.md). Gemma and Phi showed no benefit either. That negative result is why the project uses compact MLPs instead.
+- The first version of the machine model was wrong (the apparent "18% gap" collapsed to 3%); that profile is preserved as `e2k-v6-firstprobe`, with a postmortem in the [research archive](docs/archive/FULL_README.md).
+- Experimental NNL cores for portfolio-group selection perform barely better than random abstention on real code.
 
-## Для специалиста по Эльбрусу
+## For Elbrus Specialists
 
-Если вы работали с `lcc` и широкой командой, коротко о том, что здесь есть и чего нет.
+If you have worked with `lcc` and Elbrus VLIW bundles, here is a concise summary of what this model captures and what it omits.
 
-- **Считаются такты модели, не железа.** Профиль `e2k-v6-measured`: 24 класса, 160 мнемоник.
-- **Каналы** `ALC0…ALC5` сняты вопросом к ассемблеру: неположенный канал отвергается.
-- **Латентности** — по шагу цепочки зависимых в `lcc -O3`; измерены у 11 классов из 24,
-  у остальных 13 стоит допущение 1.
-- **Сверка с руководством МЦСТ** (выпуск 1.2, 2024-02-28): 10 классов из 13 сопоставимых
-  совпало; `LOAD` 5 против 3 — разница поколений Е4С/Е8С и e2k-v6.
-- **На настоящем выводе `lcc`** 37% операций попадают в `UNKNOWN`: структура графа верна,
-  времена — нет.
-- **Сравнение** — жадный, TINY AI и точный оптимум внутри одной модели; расписание самого
-  `lcc` отдельным baseline не оценивается.
-- **Живое железо не использовалось.** `loop_mode`, межкластерные задержки и `fp→int +2`
-  не моделируются.
+- **Counts are model cycles, not hardware cycles.** Profile `e2k-v6-measured`: 24 operation classes, 160 mnemonics.
+- **Issue slots (channels)** `ALC0…ALC5` (`,0`..`,5`) were probed directly against the assembler: illegal slot assignments are rejected.
+- **Latencies** were inferred from dependent-chain bundle spacing in `lcc -O3`; measured for 11 of 24 classes, defaulting to 1 cycle for the remaining 13.
+- **Cross-check against the MCST manual** (release 1.2, 2024-02-28): 10 of 13 comparable classes matched; `LOAD` 5 vs. 3 reflects the generational difference between E4C/E8C and `e2k-v6`.
+- **On real `lcc` output**, 37% of operations fall into `UNKNOWN`: DAG topology is preserved, but timings are not.
+- **Comparison** evaluates the greedy list scheduler, TINY AI, and the exact solver within the same machine model; `lcc`'s own schedule is not benchmarked as a separate baseline.
+- **No physical hardware was used.** `loop_mode` (software-pipelined loops), inter-cluster delays, and `fp→int +2` cross-domain penalties are not modeled.
 
-Подробно: [`docs/METHOD.md`](docs/METHOD.md). Проект не связан с АО «МЦСТ»; `lcc`
-не модифицировался, используется публичный тулчейн.
+Details: [`docs/METHOD.md`](docs/METHOD.md). This project is not affiliated with MCST; `lcc` was not modified and only the public toolchain is used.
 
-## Документация
+## Documentation
 
-Полный маршрут чтения — [`docs/README.md`](docs/README.md). Коротко:
+Full reading path: [`docs/README.md`](docs/README.md). Overview:
 
-| документ | о чём |
+| document | topic |
 |---|---|
-| [`docs/README.md`](docs/README.md) | маршрут по всем документам, этапы 0–12 |
-| [`QUICKSTART.md`](QUICKSTART.md) | этап 1: запуск за пару минут |
-| [`docs/CLI.md`](docs/CLI.md) | этап 2: установка, все команды, коды возврата |
-| [`docs/METHOD.md`](docs/METHOD.md) | этап 3: откуда числа и где границы модели |
-| [`docs/ISA.md`](docs/ISA.md) | этап 10: модель машины e2k-v6 |
-| [`docs/ENTHUSIAST.md`](docs/ENTHUSIAST.md) | этап 13: что менять, как обучить свою модель |
-| [`CHANGELOG.md`](CHANGELOG.md) | история версий |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | правила для контрибьюторов |
+| [`docs/README.md`](docs/README.md) | reading roadmap across all docs, stages 0–12 |
+| [`QUICKSTART.md`](QUICKSTART.md) | stage 1: up and running in a couple of minutes |
+| [`docs/CLI.md`](docs/CLI.md) | stage 2: installation, all commands, exit codes |
+| [`docs/METHOD.md`](docs/METHOD.md) | stage 3: where the numbers come from and model boundaries |
+| [`docs/ISA.md`](docs/ISA.md) | stage 10: `e2k-v6` machine model |
+| [`docs/ENTHUSIAST.md`](docs/ENTHUSIAST.md) | stage 13: what to modify and how to train your own model |
+| [`CHANGELOG.md`](CHANGELOG.md) | version history |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | contributor guidelines |
 
-Исторические заметки и отрицательные результаты — в [`docs/archive/`](docs/archive/).
+Historical notes and negative results live in [`docs/archive/`](docs/archive/).
 
-## Поддержать
+## Support
 
-Проект делается одним человеком в свободное время и отдаётся как есть, вместе с отрицательными результатами.
-Если пригодился: **https://pay.cloudtips.ru/p/7809ff65**. Донат не покупает поддержку или приоритет правок.
+This project is built by one person in their spare time and shared as-is, negative results included.
+If you find it useful: **https://pay.cloudtips.ru/p/7809ff65**. Donations do not buy support or priority fixes.
 
-## Лицензия
+## License
 
-Исходники открыты, но это **не open-source**: бесплатно — только для обучения и личного
-использования. Коммерческое или корпоративное использование — по отдельному платному
-соглашению с правообладателем. Полные условия — [LICENSE](LICENSE).
+The source code is visible, but this is **not open-source**: free use is permitted for educational and personal purposes only. Commercial or corporate use requires a separate paid agreement with the copyright holder. Full terms: [LICENSE](LICENSE).
 
-Связь по лицензии: **smworklair@gmail.com**, Telegram **@smworklair**.
+Licensing inquiries: **smworklair@gmail.com**, Telegram **@smworklair**.

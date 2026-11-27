@@ -1,5 +1,5 @@
-/* Латентность загрузки, когда результат потребляется КАК ДАННЫЕ (не как адрес).
-   Пара к load_latency.c, где та же загрузка потребляется как адрес. */
+/* Load latency when the result is consumed AS DATA (not as an address).
+   Counterpart to load_latency.c, where the same load is consumed as an address. */
 volatile long v[8] = {1,2,3,4,5,6,7,8};
 volatile long out;
 int main(void) {

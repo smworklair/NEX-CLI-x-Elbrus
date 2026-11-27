@@ -1,5 +1,5 @@
-/* Настоящее вычислительное ядро: смесь арифметики, памяти и деления —
-   то, на чём планировщик компилятора реально работает. */
+/* Real compute kernel: mix of arithmetic, memory, and division —
+   the kind of workload the compiler scheduler actually operates on. */
 #define N 16
 double a[N], b[N], c[N], d[N];
 

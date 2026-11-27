@@ -1,77 +1,61 @@
-# Методика и границы
+# Methodology and Boundaries
 
-> Этап 3 из 13 · [← CLI](CLI.md) · [Маршрут](README.md) · [Режим КОД →](CODE_MODE.md)
+> Stage 3 of 13 · [← CLI](CLI.md) · [Roadmap](README.md) · [CODE Mode →](CODE_MODE.md)
 
-Одна страница о том, откуда взялись числа и где им нельзя верить. Если вы работали
-с `lcc` и широкой командой, этого достаточно, чтобы решить, интересен проект или нет.
+One page on where the numbers come from and where they should not be trusted. If you have worked with `lcc` and Elbrus VLIW bundles, this is enough to decide whether the model fits your needs.
 
-## Что считается
+## What Is Computed
 
-Такты в модели машины `e2k-v6-measured`, а не на железе. В модели 24 класса операций,
-160 размеченных мнемоник и шесть каналов `ALC0…ALC5`.
+Cycle counts in the `e2k-v6-measured` machine model, not physical hardware measurements. The model defines 24 operation classes, 160 annotated mnemonics, and six issue slots (`ALC0…ALC5`, assembly syntax `,0`..`,5`).
 
-Для каждой операции известны три вещи:
+Three scheduling parameters are defined per operation:
 
-- **каналы** — где она кодируется;
-- **латентность** — через сколько тактов результат виден потребителю;
-- **занятие** — сколько тактов канал занят.
+- **issue slots (channels)** — which functional units (`ALC0…ALC5`) can encode and execute it;
+- **latency** — cycles until the result is ready for a consumer without a RAW (read-after-write) latency hazard;
+- **occupancy** — cycles the functional unit remains reserved (initiation interval).
 
-## Откуда числа
+## Where the Numbers Come From
 
-| что | как получено | надёжность |
+| property | how obtained | reliability |
 |---|---|---|
-| каналы | вопрос ассемблеру `lcc`: неположенный канал отвергается | измерено у всех классов |
-| латентность | шаг между bundle в цепочке зависимых, `lcc -O3` | 11 классов из 24 |
-| занятие | шаг выдачи в потоке независимых | часть классов, остальное — допущение |
-| запреты пар | перебор 119 пар у ассемблера | 2 запрета: `(2,3)` и `(5,0)` |
+| issue slots (channels) | queried from the `lcc` assembler: illegal slot assignments are rejected | measured for all classes |
+| latency | VLIW bundle spacing in dependent chains, `lcc -O3` | 11 of 24 classes |
+| occupancy | issue spacing in independent streams | some classes; remainder assumed |
+| pair prohibitions | exhaustive probe of 119 pairs against the assembler | 2 prohibitions: `(2,3)` and `(5,0)` |
 
-У остальных 13 классов латентность равна 1 как допущение — в [`ISA.md`](ISA.md) они
-помечены явно.
+For the remaining 13 classes, latency defaults to 1 cycle as an explicit assumption — each is flagged in [`ISA.md`](ISA.md).
 
-Важная деталь: по листингу видно, что компилятор **захотел** сделать, а не что железо
-**может**. Поэтому матрица каналов снята у ассемблера, а не у вывода компилятора.
+One key distinction: a compiler listing shows what the compiler **chose** to schedule, not what the hardware **can** issue. That is why the issue-slot matrix was probed directly from the assembler rather than inferred from compiler output.
 
-## Сверка с руководством МЦСТ
+## Cross-Check Against the MCST Guide
 
-Источник: «Руководство по эффективному программированию на платформе Эльбрус», выпуск 1.2
-(2024-02-28), раздел 6.1 — [mcst.ru/elbrus_prog](http://www.mcst.ru/elbrus_prog).
-Документ описывает Е4С/Е8С, модель — e2k-v6, поэтому числа оттуда не подставляются:
-это сверка, а не источник.
+Source: "Guide to Efficient Programming on the Elbrus Platform", release 1.2 (2024-02-28), Section 6.1 — [mcst.ru/elbrus_prog](http://www.mcst.ru/elbrus_prog). The guide covers E4C/E8C while the model targets `e2k-v6`, so its numbers are not substituted into the model: this is an independent cross-check, not a data source.
 
-- Совпало **10 классов из 13** сопоставимых.
-- Расхождения: `LOAD` — 5 против 3 (разница поколений, подтверждена двумя пробами),
-  `COMBO` — 1 против 2, `PRED` — 1 против 0.5…3.
+- Matched on **10 of 13** comparable classes.
+- Divergences: `LOAD` — 5 vs. 3 (generational difference, confirmed by two independent probes), `COMBO` — 1 vs. 2, `PRED` — 1 vs. 0.5…3.
 
-## Чего в модели нет
+## What Is Not Modeled
 
-- **Живого железа.** Латентности сняты с поведения `lcc`, а не со счётчиков процессора.
-- **`loop_mode`.** Циклы не моделируются.
-- **Межкластерных задержек** (1 / 2 / 3–4 такта) и штрафа `fp→int +2`: они зависят от пары
-  «источник–потребитель», а в модели одно число на операцию.
-- **Запретов пар `(2,3)` и `(5,0)`.** Они измерены (см. `vliw/core/isa.py`), но в планировщик
-  намеренно не заведены: это сменило бы модель мира и обесценило замеры.
+- **Physical hardware.** Latencies were inferred from `lcc` scheduling behavior, not hardware performance counters.
+- **`loop_mode`.** Software-pipelined loops are not modeled.
+- **Inter-cluster delays** (1 / 2 / 3–4 cycles) and the `fp→int +2` cross-domain penalty: these depend on producer–consumer pairs, whereas the model stores a single scalar latency per operation.
+- **Pair prohibitions `(2,3)` and `(5,0)`.** They are measured (see `vliw/core/isa.py`), but intentionally not enforced in the scheduler: turning them on would alter the machine model and invalidate prior benchmark comparisons.
 
-## Что это значит для цифр
+## What This Means for the Numbers
 
-На настоящем выводе `lcc` **37% операций** попадают в `UNKNOWN`: мнемоники нет в словаре,
-латентность 1, любой канал. Для таких блоков верна структура графа, но не времена.
-Формулировка из [`REAL_VS_SYNTH.md`](REAL_VS_SYNTH.md): «структура графа — примерно,
-времена — нет».
+On real `lcc` output, **37% of operations** land in `UNKNOWN`: the mnemonic is absent from the dictionary, so it defaults to 1-cycle latency on any issue slot. For those basic blocks, DAG topology is intact, but cycle counts are not. As noted in [`REAL_VS_SYNTH.md`](REAL_VS_SYNTH.md): "graph structure — roughly right; timings — no".
 
-Сравнение идёт между жадным, TINY AI и точным оптимумом **внутри одной модели**. Фактическое
-расписание, которое построил `lcc`, отдельным baseline не оценивается.
+Comparisons evaluate the greedy list scheduler, TINY AI, and the exact branch-and-bound oracle **within the same machine model**. The schedule emitted by `lcc` itself is not benchmarked as a separate baseline.
 
-## Проверить самому
+## Verify Locally
 
 ```bash
-python -m vliw isa --out docs/ISA.md     # пересобрать таблицу
-python -m vliw run slotclash             # один сценарий
-python -m vliw all                       # все 17 сценариев
-python3 tools/check_real_vs_synth.py     # настоящее против синтетики
+python -m vliw isa --out docs/ISA.md     # regenerate the ISA table
+python -m vliw run slotclash             # run a single scenario
+python -m vliw all                       # run all 17 scenarios
+python3 tools/check_real_vs_synth.py     # real code vs. synthetic
 ```
 
-Пробы и их описание — `examples/probes/`.
+Probes and their descriptions live in `examples/probes/`.
 
-Проект не связан с АО «МЦСТ». `lcc` не модифицировался, используется публичный тулчейн;
-код проекта — source-available: обучение и личное использование бесплатно, коммерческое —
-по отдельному соглашению (см. [`../LICENSE`](../LICENSE)).
+This project is not affiliated with MCST. `lcc` was not modified and only the public toolchain is used; the codebase is source-available: free for educational and personal use, with commercial use requiring a separate agreement (see [`../LICENSE`](../LICENSE)).

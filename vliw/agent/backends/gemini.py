@@ -8,7 +8,7 @@ _DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def _schema_for_gemini(schema: dict) -> dict:
-    """Gemini ждёт типы заглавными (OBJECT/STRING/ARRAY/INTEGER)."""
+    """Gemini expects uppercase schema types (OBJECT/STRING/ARRAY/INTEGER)."""
     out = {}
     for k, v in schema.items():
         if k == "type" and isinstance(v, str):
@@ -25,12 +25,12 @@ def _schema_for_gemini(schema: dict) -> dict:
 def _text_of(data: dict) -> tuple[str, int]:
     cands = data.get("candidates") or []
     if not cands:
-        raise LLMError("модель не вернула ответ")
+        raise LLMError("model returned no response")
     parts = cands[0].get("content", {}).get("parts", [])
     text = "".join(p.get("text", "") for p in parts).strip()
     used = int(data.get("usageMetadata", {}).get("candidatesTokenCount", 0) or 0)
     if not text:
-        raise LLMError(f"пустой ответ (finishReason={cands[0].get('finishReason')})")
+        raise LLMError(f"empty response (finishReason={cands[0].get('finishReason')})")
     return text, used
 
 
@@ -40,8 +40,8 @@ class GeminiBackend(Backend):
     def __init__(self, api_key: str, model: str | None = None,
                  timeout: float = TIMEOUT):
         if not api_key:
-            raise LLMError("ключ не задан для gemini: задайте GEMINI_API_KEY, "
-                           "NEX_API_KEY или ~/.config/nex/key")
+            raise LLMError("API key not set for gemini: set GEMINI_API_KEY, "
+                           "NEX_API_KEY, or ~/.config/nex/key")
         self._key = api_key
         self._model = model or _DEFAULT_MODEL
         self._timeout = timeout

@@ -44,7 +44,7 @@
 <line x1="0" y1="320" x2="1280" y2="320" stroke="#ffffff" stroke-opacity="0.035"/>
 <line x1="0" y1="360" x2="1280" y2="360" stroke="#ffffff" stroke-opacity="0.035"/>
 <line x1="0" y1="400" x2="1280" y2="400" stroke="#ffffff" stroke-opacity="0.035"/>
-<text x="60" y="48" font-family="monospace" font-size="13" fill="#7c8aa5">{ ALC0 … ALC5 }  один такт = одна широкая команда</text>
+<text x="60" y="48" font-family="monospace" font-size="13" fill="#7c8aa5">{ ALC0 … ALC5 }  one cycle = one wide instruction</text>
 <text x="30" y="90" font-family="monospace" font-size="12" fill="#5b6a85">0</text>
 <rect x="60" y="70" width="44" height="30" rx="6" fill="#22d3ee" fill-opacity="0.85"/>
 <rect x="112" y="70" width="44" height="30" rx="6" fill="#38bdf8" fill-opacity="0.85"/>
@@ -94,7 +94,7 @@
 <rect x="320" y="260" width="44" height="30" rx="6" fill="#34d399" fill-opacity="0.85"/>
 <rect x="372" y="260" width="44" height="30" rx="6" fill="#fbbf24" fill-opacity="0.85"/>
 <line x1="470" y1="70" x2="470" y2="350" stroke="url(#ac)" stroke-width="3" stroke-opacity="0.7"/>
-<text x="456" y="360" font-family="monospace" font-size="12" fill="#7c8aa5" text-anchor="middle">шина</text>
+<text x="456" y="360" font-family="monospace" font-size="12" fill="#7c8aa5" text-anchor="middle">bus</text>
 <rect x="494" y="78" width="86" height="52" rx="8" fill="#22d3ee" fill-opacity="0.18" stroke="#22d3ee" stroke-width="2"/>
 <circle cx="514" cy="86" r="4.5" fill="#22d3ee"/>
 <circle cx="536" cy="86" r="4.5" fill="#22d3ee"/>
@@ -118,8 +118,8 @@
 <text x="640" y="190" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="68" font-weight="800" fill="#f4f7ff">NEX CLI</text>
 <text x="940" y="190" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="68" font-weight="300" fill="#7c8aa5">×</text>
 <text x="1000" y="190" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="68" font-weight="800" fill="url(#ac)">NNL AI</text>
-<text x="640" y="238" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="24" fill="#c7d2e8">Планировщик широких команд для Эльбруса e2k</text>
-<text x="640" y="274" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="17" fill="#8fa0bf">точный расчёт · крошки 30K · модульные блоки Neural Network Lego</text>
+<text x="640" y="238" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="24" fill="#c7d2e8">Wide-instruction scheduler for Elbrus e2k</text>
+<text x="640" y="274" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="17" fill="#8fa0bf">exact solver · TINY AI 30K · modular Neural Network Lego blocks</text>
 <rect x="640" y="304" width="150" height="34" rx="17" fill="none" stroke="#22d3ee" stroke-opacity="0.7"/>
 <text x="715" y="327" font-family="monospace" font-size="15" fill="#22d3ee" text-anchor="middle">1.2 beta</text>
 </svg>

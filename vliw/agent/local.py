@@ -1,99 +1,85 @@
-"""Агент на модели с этой машины: тот же llama-server, что и у планировщика.
+"""On-device local agent: shares the same llama-server as the scheduler.
 
-ЗАЧЕМ. Раньше у агента был единственный путь — чужой сервер по HTTP (Le Chat
-или Gemini). Значит: нужен ключ, нужна сеть, чужая квота может кончиться, и
-вопрос про твой код уезжает наружу. При этом в инструменте УЖЕ крутится
-языковая модель — та, что планирует расписание. Странно спрашивать интернет,
-когда модель стоит рядом.
+WHY. Previously the agent had only one path — a remote HTTP server (Mistral
+or Gemini). That meant needing an API key, internet access, quota limits, and
+sending questions about your code externally. Meanwhile a local LLM is already
+available right next to the scheduler.
 
-ЧТО ИМЕННО ОТВЕЧАЕТ. Голая база Phi-4-mini, БЕЗ обученных адаптеров.
-Адаптеры проекта (qwen-vliw-lora и др.) учат модель ровно одному — писать
-строки `0: такт=0 канал=1`; спроси их «почему медленно», и получишь
-расписание вместо ответа. К тому же они обучены ПОД Qwen и на чужой базе
-сервер не стартует вовсе (см. `runtime.shared_server`). Поэтому разговор
-идёт на голой базе, а планирование — на крошках из `vliw/tiny/`, процесс
-при этом один и тот же.
+WHAT ANSWERS. Raw base Phi-4-mini WITHOUT trained scheduling adapters.
+Project adapters (qwen-vliw-lora, etc.) are trained solely to emit lines like
+`0: cycle=0 channel=1`; asking them "why is this slow?" produces a schedule
+instead of prose. Moreover they target Qwen and won't load on another base
+(see `runtime.shared_server`). So conversation runs on the base model while
+scheduling uses TINY AI from `vliw/tiny/`, sharing the same process.
 
-ИСТОРИЯ: раньше базой был Qwen2.5-3B-Instruct (2.1 ГБ), затем Gemma 4 E4B
-(4.6 ГБ — точная, но медленная на CPU: ~5 т/с декод, плюс hybrid-thinking
-съедал бюджет токенов в пустоту). С 13.09.2026 — Phi-4-mini (2.4 ГБ, MIT,
-без thinking, русский поддерживается): та же работа формулировщика, вдвое
-быстрее. Старые базы лежат в `vendor/models/_retired/`.
+HISTORY: earlier bases were Qwen2.5-3B-Instruct (2.1 GB), then Gemma 4 E4B
+(4.6 GB — accurate but slow on CPU at ~5 tok/s, plus hybrid thinking consumed
+token budget). Since 2026-09-13: Phi-4-mini (2.4 GB, MIT, no thinking overhead),
+twice as fast for the same phrasing task. Older bases live in `vendor/models/_retired/`.
 
-ЧЕСТНО ПРО КАЧЕСТВО. 4B в 4 битах формулирует заметно беднее, чем облачная
-модель, и рассуждает мельче. Это терпимо ровно потому, что агент устроен так,
-как устроен: файлы грузит парсер, расписание считает точный поиск, потери
-находит `core.doctor`, — а языковая модель отвечает только за формулировку
-поверх готовых чисел (см. шапку `agent.py`). Числа от смены модели не меняются.
-Если нужен разбор получше — `NEX_PROVIDER=mistral` и ключ.
-
-ЧЕСТНО ПРО КАЧЕСТВО. 3B в 4 битах формулирует заметно беднее, чем облачная
-модель, и рассуждает мельче. Это терпимо ровно потому, что агент устроен так,
-как устроен: файлы грузит парсер, расписание считает точный поиск, потери
-находит `core.doctor`, — а языковая модель отвечает только за формулировку
-поверх готовых чисел (см. шапку `agent.py`). Числа от смены модели не меняются.
-Если нужен разбор получше — `NEX_PROVIDER=mistral` и ключ.
+HONEST QUALITY NOTE. A 4-bit 4B model phrases more plainly than a cloud LLM
+and reasons more shallowly. This is acceptable because of the agent's design:
+the parser loads files, exact search computes schedules, and `core.doctor`
+identifies losses — the LLM only writes prose over verified numbers (see
+`agent.py`). Numbers never change when switching models. For richer analysis,
+set `NEX_PROVIDER=mistral` (or another cloud provider) with a key.
 """
 
 from __future__ import annotations
 
 import json
 
-# Сколько ждём ответа в разговоре. Не как у планировщика (там минуты на граф):
-# в диалоге человек сидит и смотрит, и молчание дольше полуминуты — это уже
-# «повисло», а не «думает».
+# Response timeout for interactive chat. Shorter expectations than batch
+# scheduling: a human is watching the screen.
 CHAT_TIMEOUT_S = 180
 CHAT_MAX_TOKENS = 350
-"""Потолок ответа: nudge велит 2–4 предложения + строка «Дальше:», это
-~100 токенов. 700 давали худшему случаю 140 с декода на E4B (5 т/с на CPU)
-без пользы — длинные ответы агент всё равно режет фактами, а не красноречием.
+"""Response ceiling: the nudge asks for 2-4 sentences + a 'Next:' line (~100
+tokens). Higher limits caused multi-minute CPU decodes with no extra value.
 """
 
 
-# Состояние прогрева. Первый вопрос в сессии дорогой не из-за генерации, а
-# из-за двух разовых вещей: поднять сервер (~7 с) и посчитать системный
-# промпт агента — 1451 токен на CPU. Обе делаются ОДИН раз и обе можно
-# сделать заранее, пока человек читает экран и набирает вопрос.
+# Warmup state. The first question in a session is slow due to two one-time
+# costs: starting llama-server (~7s) and evaluating the system prompt (~1451
+# tokens on CPU). Both are done once in the background while the user reads.
 _WARM = {"state": "cold", "note": ""}
-"""cold | warming | ready | failed — что показывать в интерфейсе."""
+"""cold | warming | ready | failed — displayed in the UI."""
 
 
 def warm_state() -> tuple[str, str]:
-    """(состояние, пояснение) — для честной подписи в интерфейсе."""
+    """Return (state, note) for honest UI status reporting."""
     return _WARM["state"], _WARM["note"]
 
 
 def warmup(system: str | None = None) -> None:
-    """Поднять сервер и, если дан промпт, набить им кэш.
+    """Start the local server and optionally prefill the prompt cache.
 
-    Вызывается в фоновом потоке при входе в режим. Ничего не возвращает:
-    если не получилось, первый вопрос просто пойдёт обычным путём и покажет
-    настоящую ошибку — прятать её здесь нельзя.
+    Called from a background thread on entering AGENT mode. Returns nothing:
+    if warmup fails, the first real question takes the normal path and shows
+    the actual error.
 
-    Промпт прогревается запросом на ОДИН токен: считать надо префикс, а не
-    ответ. Дальше `cache_prompt` переиспользует посчитанное, и настоящий
-    вопрос платит только за свои несколько слов.
+    Prompt prefill requests ONE token so only the prefix is evaluated; later
+    calls reuse the KV cache via `cache_prompt`.
     """
     if _WARM["state"] in ("warming", "ready"):
         return
-    _WARM["state"], _WARM["note"] = "warming", "поднимаю модель"
+    _WARM["state"], _WARM["note"] = "warming", "starting model"
     try:
         from ..learned import runtime
 
         server = runtime.shared_server()
         if system is not None:
-            _WARM["note"] = "грею контекст"
+            _WARM["note"] = "warming context"
             list(server.chat([{"role": "system", "content": system + SMALL_MODEL_NUDGE},
                               {"role": "user", "content": "."}],
                              temperature=0, max_tokens=1, timeout=CHAT_TIMEOUT_S))
         _WARM["state"], _WARM["note"] = "ready", ""
-    except Exception as e:                # прогрев не имеет права ронять интерфейс
+    except Exception as e:                # warmup must never crash the UI
         _WARM["state"] = "failed"
         _WARM["note"] = str(e)[:120]
 
 
 def ready() -> bool:
-    """Есть ли на машине всё для локального ответа: бинарник и база."""
+    """Whether both the llama-server binary and base GGUF model are present."""
     try:
         from ..learned import runtime
     except Exception:
@@ -110,23 +96,16 @@ def model_label() -> str:
 
 
 SMALL_MODEL_NUDGE = (
-    "\n\nВАЖНО ДЛЯ ЭТОГО ОТВЕТА: сначала напиши 2–4 предложения по существу "
-    "вопроса, опираясь на числа из ФАКТОВ. Пиши только по-русски, без "
-    "английских вставок. Строку «Дальше:» добавляй ТОЛЬКО "
-    "после этих предложений. Ответ, состоящий из одной строки «Дальше:», "
-    "недопустим."
+    "\n\nIMPORTANT FOR THIS REPLY: first write 2–4 concise sentences directly "
+    "answering the question using numbers from FACTS. Write in clear English. "
+    "Add a 'Next:' line ONLY after those sentences. A reply consisting solely "
+    "of a 'Next:' line is not allowed."
 )
-"""Добавка к системному промпту — только для локальной модели.
+"""System prompt addendum — applied only to the local small model.
 
-Не косметика. Системный промпт агента кончается правилом «если уместно,
-заканчивай строкой Дальше: с командой», и малая модель хватается за последнюю
-конкретную инструкцию вместо ответа. Замерено на одном и том же вопросе
-(«почему этот участок медленный?») и одних и тех же фактах:
-
-    без добавки    18 символов:  «Дальше: /explain 22»
-    с добавкой    268 символов:  разбор монополии порта ,5 с тактами
-
-Облачной модели добавка не нужна и не достаётся: там правил хватает.
+Small models otherwise latch onto the final instruction ('end with Next: <cmd>')
+and emit only a command line without an explanation. Cloud models don't need
+this nudge and don't receive it.
 """
 
 
@@ -146,16 +125,11 @@ def _messages(system: str, question: str,
 def stream(system: str, question: str,
            history: list[tuple[str, str]] | None = None,
            temperature: float = 0.3, nudge: bool = True):
-    """Ответ по частям. Ошибки сервера — как `LLMError`, чтобы агент их ловил.
+    """Stream response chunks. Server errors are wrapped as `LLMError`.
 
-    `nudge=False` — для реплик не по делу («привет», «спасибо»): добавка
-    прямым текстом велит модели тащить числа из ФАКТОВ в любой ответ, а
-    ФАКТЫ есть всегда, даже когда расписание ещё не считалось. На малой модели
-    это значило не «ответь короче», а «сочини технический разбор из ближайших
-    похожих слов» — проверено вживую: вопрос «привет» с добавкой дал
-    выдуманные «11 тактов» (это была latency DIV, а не длина расписания) и
-    перевранный смысл заметки об участке; без добавки — «Привет. Дальше:
-    /run» за 1.4 с вместо 58.
+    `nudge=False` is used for small-talk turns ('hi', 'thanks'): the nudge
+    forces numbers from FACTS into every reply, which causes small models to
+    hallucinate technical breakdowns on a simple greeting.
     """
     from ..learned import runtime, server as srv
 
@@ -168,9 +142,9 @@ def stream(system: str, question: str,
             timeout=CHAT_TIMEOUT_S)
         yield from pump
     except srv.ServerError as e:
-        raise LLMError(f"локальная модель: {e}") from e
+        raise LLMError(f"local model: {e}") from e
     except OSError as e:
-        raise LLMError(f"локальная модель недоступна: {e}") from e
+        raise LLMError(f"local model unavailable: {e}") from e
 
 
 def complete(system: str, question: str,
@@ -181,15 +155,10 @@ def complete(system: str, question: str,
 
 def structured(system: str, question: str, schema: dict,
                temperature: float = 0.1) -> tuple[str, int]:
-    """Ответ строго по схеме — через грамматику llama.cpp.
+    """Schema-constrained JSON output via llama.cpp grammar.
 
-    llama.cpp умеет ограничивать вывод JSON-схемой, поэтому просить модель
-    «ответь JSON-ом» и надеяться не приходится: несоответствующий текст она
-    физически не сможет сгенерировать.
-
-    Если сервер этого не поддерживает, поднимается `LLMError` — и вызывающий
-    (`analyst.py`) честно падает на детерминированный разбор, а не выдаёт
-    выдумку за анализ.
+    If the server does not support it, raises `LLMError` so `analyst.py`
+    falls back cleanly to deterministic diagnostics.
     """
     from ..learned import runtime, server as srv
 
@@ -207,21 +176,21 @@ def structured(system: str, question: str, schema: dict,
                  **server._chat_kwargs()},
                 timeout=CHAT_TIMEOUT_S)
         if status != 200:
-            raise LLMError(f"локальная модель, схема: ответ {status}")
+            raise LLMError(f"local model schema request: HTTP {status}")
         data = json.loads(body)
         text = data["choices"][0]["message"]["content"]
         used = int((data.get("usage") or {}).get("completion_tokens", 0))
         return text, used
     except (srv.ServerError, OSError, KeyError, ValueError) as e:
-        raise LLMError(f"локальная модель не дала ответ по схеме: {e}") from e
+        raise LLMError(f"local model failed structured output: {e}") from e
 
 
 def check() -> tuple[bool, str]:
-    """Быстрая проверка для `/ai`: поднять сервер и получить одно слово."""
+    """Quick health check for `/ai`: start server and get a single word."""
     from .llm import LLMError, describe
 
     try:
-        txt = complete("Отвечай одним словом.", "Скажи «готово».",
+        txt = complete("Reply with one word only.", 'Say "ready".',
                        temperature=0.0)
     except LLMError as e:
         return False, str(e)

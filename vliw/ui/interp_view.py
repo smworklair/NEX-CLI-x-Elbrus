@@ -1,4 +1,4 @@
-"""Вывод интерпретатора: сначала число, потом имена."""
+"""Interpreter output: result value first, then bindings."""
 
 from __future__ import annotations
 
@@ -9,24 +9,24 @@ from .render import Style, paint, wrap
 def render_welcome(width: int = 72) -> list[str]:
     w = max(20, width)
     out = [
-        paint("accent", "NEX CLI") + Style.dim("  ·  интерпретатор"),
-        Style.dim("считает здесь. память с начала: 1 2 3 4 …"),
+        paint("accent", "NEX CLI") + Style.dim("  ·  interpreter"),
+        Style.dim("evaluates locally. initial memory: 1 2 3 4 …"),
         "",
-        paint("accent", "считайте"),
+        paint("accent", "compute"),
         Style.dim("  2+2"),
         Style.dim("  a=10"),
         Style.dim("  b=3"),
         Style.dim("  a*b+1"),
         "",
-        paint("accent", "память"),
-        Style.dim("  x=load 0          взять mem[0]"),
+        paint("accent", "memory"),
+        Style.dim("  x=load 0          read mem[0]"),
         Style.dim("  store a 3         mem[3]=a"),
-        Style.dim("  mem 10 20 30      заполнить с нуля"),
+        Style.dim("  mem 10 20 30      fill from index 0"),
         "",
-        paint("accent", "ядра") + Style.dim("   sum 8   dot 4   saxpy 8   fir 8"),
-        Style.dim("  считают по памяти, печатают число"),
+        paint("accent", "kernels") + Style.dim("  sum 8   dot 4   saxpy 8   fir 8"),
+        Style.dim("  operate on memory and print the result"),
         "",
-        paint("accent", "ещё") + Style.dim("   names   mem   reset   go"),
+        paint("accent", "more") + Style.dim("     names   mem   reset   go"),
     ]
     _ = w
     return out
@@ -37,14 +37,14 @@ def render_result(ws, result, width: int = 72) -> list[str]:
     out: list[str] = []
 
     if result.kind == "reset":
-        out.append(Style.dim(result.message or "сброс"))
+        out.append(Style.dim(result.message or "reset"))
         return out
 
     if result.kind == "env":
         if not ws.regs:
-            out.append(Style.dim("имён нет"))
+            out.append(Style.dim("no bindings"))
             return out
-        out.append(paint("accent", "имена"))
+        out.append(paint("accent", "names"))
         for n, v in ws.regs.items():
             out.append(f"  {paint('title', n):<16} {paint('accent', str(v))}")
         return out
@@ -56,7 +56,7 @@ def render_result(ws, result, width: int = 72) -> list[str]:
         return out
 
     if result.kind == "go":
-        out.append(paint("accent2", "go") + Style.dim("  → разбор"))
+        out.append(paint("accent2", "go") + Style.dim("  → lab"))
         if result.value is not None:
             out.append(paint("accent", f"= {result.value}"))
         return out
@@ -73,7 +73,7 @@ def render_result(ws, result, width: int = 72) -> list[str]:
             out.append(paint("accent", f"mem[{result.message}]")
                        + f"  = {result.value}")
         elif result.kind == "kernel":
-            out.append(paint("accent", result.name or "ядро")
+            out.append(paint("accent", result.name or "kernel")
                        + Style.dim(f"  {result.message}"))
             out.append(paint("title", f"= {result.value}"))
         else:
@@ -84,7 +84,7 @@ def render_result(ws, result, width: int = 72) -> list[str]:
 
 
 def _mem(ws, width: int) -> list[str]:
-    out = [paint("accent", "mem") + Style.dim(f"  {len(ws.mem)} ячеек, с 1")]
+    out = [paint("accent", "mem") + Style.dim(f"  {len(ws.mem)} cells, starting from 1")]
     row: list[str] = []
     line_w = 0
     for i, v in enumerate(ws.mem[:32]):
@@ -102,8 +102,8 @@ def _mem(ws, width: int) -> list[str]:
 def _listing(ws) -> list[str]:
     dag = ws.snapshot()
     if not dag.instrs:
-        return [Style.dim("графа нет — считали без записи в программу")]
-    out = [paint("accent", "граф") + Style.dim(f"   {len(dag)} оп.")]
+        return [Style.dim("no graph — evaluated without recording instructions")]
+    out = [paint("accent", "graph") + Style.dim(f"   {len(dag)} ops")]
     for ins in dag:
         out.append(f"  {paint('title', f'{ins.name:<8}')} "
                    + Style.dim(ins.text))

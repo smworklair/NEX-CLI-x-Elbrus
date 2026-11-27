@@ -1,34 +1,35 @@
-"""Штаб: фоновые агенты на проверенных подключениях.
+"""HQ: background agents running on verified connections.
 
-Обычный диалог — один разговор с активной моделью. Штаб — способ послать
-несколько агентов на разную работу одновременно: у каждого своё подключение
-(снимок backend из каталога МОДЕЛИ), свой участок работы и свой скрипт.
+Standard chat is a single conversation with the active model. HQ lets you
+dispatch several agents on different tasks in parallel: each has its own
+connection (a backend snapshot from the MODELS catalog), its own focus area,
+and its own mission script.
 
-Правила честной игры, те же что у диалога:
-  * агент только ЧИТАЕТ состояние (факты, расписание, диагностику) — сессию
-    не переключает, файлы не грузит, ничего не пишет;
-  * числа берёт из того же `agent.context`, что и диалог, — ответ
-    перепроверяется теми же командами;
-  * скрипт — это дописка к системному промпту, её можно менять на ходу и
-    слать задачу заново: агент без скрипта работает «вольно», со скриптом —
-    строго по нему.
+Fair-play rules (same as chat):
+  * an agent only READS state (facts, schedule, diagnostics) — it never
+    switches the session, loads files, or writes anything;
+  * numbers come from the same `agent.context` as chat, so every answer
+    can be cross-checked with the same commands;
+  * the script is appended to the system prompt and can be edited on the fly
+    for re-runs: without a script the agent works freely, with one it follows
+    the script strictly.
 
-Здесь только чистая логика (области, сборка промпта, вызов backend).
-Потоки и виджеты — на экране (`AgentScreen`), хранилище задач — там же:
-штаб живёт одну сессию, как и ключи.
+Pure logic only (areas, prompt assembly, backend call). Threads and widgets
+live in `AgentScreen`; task storage lives there too (HQ lasts one session,
+just like keys).
 """
 
 from __future__ import annotations
 
 AREAS: tuple[tuple[str, str, str], ...] = (
-    ("doctor", "потери", "где теряются такты и что менять?"),
-    ("compare", "сравнение", "сравни baseline с точным поиском"),
-    ("bounds", "предел", "какой предел у этого участка и почему быстрее нельзя?"),
-    ("layout", "раскладка", "разложи расписание по тактам и портам"),
-    ("free", "свой вопрос", ""),
+    ("doctor", "losses", "where are cycles lost and what should change?"),
+    ("compare", "compare", "compare baseline against the exact oracle search"),
+    ("bounds", "lower bound", "what is the lower bound of this block and why can't it go faster?"),
+    ("layout", "layout", "break down the schedule by cycles and ports"),
+    ("free", "custom question", ""),
 )
-"""(id, подпись, вопрос по умолчанию). Пустой вопрос — только у «своего»:
-там текст берёт поле задачи."""
+"""(id, label, default question). Only 'free' has an empty default question,
+taking its text from the task input field."""
 
 AREA_LABEL = {aid: label for aid, label, _ in AREAS}
 AREA_QUESTION = {aid: q for aid, _, q in AREAS}
@@ -39,12 +40,12 @@ def mission_system(session, area: str, script: str) -> str:
 
     system = context.system_prompt(session, include_layout=True)
     label = AREA_LABEL.get(area, area)
-    system += (f"\n\nУЧАСТОК РАБОТЫ: {label}. Отвечай только про него, "
-               "остальное не пересказывай.")
+    system += (f"\n\nFOCUS AREA: {label}. Answer only about this area; "
+               "do not summarize unrelated topics.")
     script = (script or "").strip()
     if script:
-        system += ("\n\nСКРИПТ МИССИИ (инструкции на этот запуск, "
-                   "важнее общих правил формы):\n" + script)
+        system += ("\n\nMISSION SCRIPT (instructions for this run, "
+                   "takes priority over general formatting rules):\n" + script)
     return system
 
 

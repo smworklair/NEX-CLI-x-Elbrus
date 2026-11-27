@@ -1,15 +1,15 @@
-! ПРЕДЕЛ ЦЕПОЧКИ — резерва нет, и это верный ответ
+! DEPENDENCY CHAIN LIMIT — zero headroom, and that is the right answer
 ! nex: src=12 orc=12 err=0
 !
-! Три умножения подряд, каждое ждёт результат предыдущего.
-! Латентность умножения — 4 такта (измерено по цепочке
-! зависимых операций), значит 4+4+4 = 12 тактов, и
-! переставить их некуда: очередь задана самим кодом.
+! Three multiplications in a row, each waiting on the previous result.
+! Multiplication latency is 4 cycles (measured along a chain of
+! dependent operations), so 4+4+4 = 12 cycles, and
+! there is nowhere to reorder them: the order is fixed by the code.
 !
-! Инструмент это и говорит: «резерва нет». Простой не
-! всегда ошибка компилятора — иногда это длина
-! зависимостей, и тогда менять надо алгоритм, а не
-! расписание.
+! That is what the tool reports: "no headroom". Idle cycles are not
+! always a compiler flaw — sometimes they are the dependency
+! chain length, in which case you must change the algorithm, not
+! the schedule.
 {
   muls,0 %r1, %r2, %r3
 }

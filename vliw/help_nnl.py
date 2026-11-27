@@ -1,16 +1,20 @@
-"""NNL-блок помощи: вопрос обычными словами → тема ответа.
+"""NNL help block: natural-language question -> answer topic.
 
-Сам блок лежит в `nnl_vliw/блоки_помощь/Помощь_ассистент/` — паспорт и
-`веса.npz`, как у остальных блоков NNL. Архитектура — та же `мешок_шина`:
-вопрос переводится в мешок токенов, вектор — среднее строк таблицы E по
-корзинам crc32, счёты тем — линейный слой `h·U + b`.
+The canonical block lives in `nnl_vliw/блоки_помощь/Помощь_ассистент/` —
+a passport JSON and `веса.npz`, just like other NNL blocks. Architecture:
+`мешок_шина` (bag-of-tokens): the question is split into words and character
+n-grams, hashed via crc32 into rows of embedding table E, averaged into h,
+and scored by a linear layer `h·U + b`.
 
-Почему две копии весов:
-  · `веса.npz` — канонический блок NNL (numpy, как весь `nnl_vliw`);
-  · `vliw/help_weights.json` — те же числа для чистого Python.
-Экран установки показывается как раз на машине, где numpy может быть ещё
-не установлен, поэтому помощник обязан работать без единой библиотеки.
-Числа в обеих копиях одинаковые — это проверяет тест.
+Why two copies of the weights exist:
+  · `веса.npz` — canonical NNL block (numpy, matching the rest of `nnl_vliw`);
+  · `vliw/help_weights.json` — identical numbers for pure Python.
+The setup screen runs on machines where numpy may not be installed yet, so the
+assistant must work with zero external dependencies.
+
+Because `help_weights.json` was trained on Russian phrasings, this module also
+includes an English keyword/stem fallback matcher so English questions route
+accurately to the corresponding topics in `vliw/help_answers.py`.
 """
 
 from __future__ import annotations
@@ -26,62 +30,129 @@ from pathlib import Path
 ЛЁГКИЕ = Path(__file__).resolve().parent / "help_weights.json"
 
 СЛОВО = re.compile(r"[a-zа-я0-9]+")
-НЕ_ТЕМА = "не_тема"   # класс «вопрос не про NEX CLI», ему блок тоже обучен
-БЕСЕДА = "беседа"     # приветствия и благодарности
-ПОРОГ = 0.35          # ниже — «не понял вопрос»
-ЗАЗОР = 0.08          # разница между первой и второй темой
+_CYRILLIC = re.compile(r"[а-яё]")
+НЕ_ТЕМА = "не_тема"   # class "off-topic / not about NEX CLI", also trained
+БЕСЕДА = "беседа"     # greetings and thanks
+ПОРОГ = 0.35          # below this -> "didn't understand"
+ЗАЗОР = 0.08          # minimum margin between 1st and 2nd topic
 
-# Однозначные слова и названия команд. Блок обучен на живых формулировках, но
-# точные имена (`textual`, `venv`, `slotclash`, …) надёжнее узнавать по ним:
-# одна опечатка в остальном вопросе не должна уводить ответ в соседнюю тему.
-# Сильные подсказки перебивают блок, слабые — только если блок не уверен.
+# Unambiguous keywords and command names. The NNL block is trained on natural
+# Russian phrasings, while exact names (`textual`, `venv`, `slotclash`, ...)
+# and English stems are matched deterministically so a single typo doesn't
+# misroute the answer. Strong hints override the NNL block; weak hints apply
+# when the block is unsure (or for pure-English queries where Russian weights
+# do not apply).
 _СИЛЬНЫЕ: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("удаление", ("удал", "снести", "деинстал", "uninstall", "стереть установку")),
-    ("обновление", ("обнов", "upgrade", "git pull", "новая версия", "свежую версию")),
-    ("nnl", ("nnl", "нейросет", "нейрон", "обучил", "обучал", "обучен",
-             "трениров", "мешок слов", "мешок токенов", "понимает контекст")),
-    ("textual", ("textual", "rich", "текстуал", "рич", "панели")),
-    ("venv", ("venv", "виртуал", "ensurepip", "pip не найден", "нет pip")),
-    ("агент", ("агент", "api", "ключ", "llm", "openai", "anthropic",
-               "ollama", "провайдер")),
-    ("данные", ("slotclash", "сценар", "датасет", "eval_real", "eval real", "граф")),
-    ("проверка", ("doctor", "selfcheck", "unittest", "тест")),
-    ("система", ("windows", "linux", "ubuntu", "debian", "fedora", "macos", "мак",
-                 "винде", "powershell", "cmd", "microsoft store")),
-    ("требования", ("требован", "памят", "gpu", "видеокарт", "версия python",
-                    "версия питона", "какой python", "диска", "интернет")),
+    ("удаление", (
+        "удал", "снести", "деинстал", "стереть установку",
+        "uninstall", "remove nex", "delete nex", "remove package", "clean up",
+    )),
+    ("обновление", (
+        "обнов", "новая версия", "свежую версию",
+        "upgrade", "update", "git pull", "new version", "latest version",
+    )),
+    ("nnl", (
+        "nnl", "нейросет", "нейрон", "обучил", "обучал", "обучен",
+        "трениров", "мешок слов", "мешок токенов", "понимает контекст",
+        "neural", "bag of words", "classifier", "weights", "how do you understand",
+    )),
+    ("textual", (
+        "textual", "rich", "текстуал", "рич", "панели",
+        "fullscreen", "full screen", "full-screen", "tui",
+    )),
+    ("venv", (
+        "venv", "виртуал", "ensurepip", "pip не найден", "нет pip",
+        "virtual env", "virtualenv", "pip not found", "no pip",
+    )),
+    ("агент", (
+        "агент", "api", "ключ", "llm", "openai", "anthropic",
+        "ollama", "провайдер",
+        "agent", "api key", "gemini", "mistral", "yandex", "provider", "vllm",
+    )),
+    ("данные", (
+        "slotclash", "сценар", "датасет", "eval_real", "eval real", "граф",
+        "scenario", "dataset", "benchmark", "examples", "probe.s", "sample",
+    )),
+    ("проверка", (
+        "doctor", "selfcheck", "unittest", "тест",
+        "verify", "test suite", "run tests", "diagnostics",
+    )),
+    ("система", (
+        "windows", "linux", "ubuntu", "debian", "fedora", "macos", "мак",
+        "винде", "powershell", "cmd", "microsoft store",
+        "mac os", "osx", "arch", "chcp", "executionpolicy",
+    )),
+    ("требования", (
+        "требован", "памят", "gpu", "видеокарт", "версия python",
+        "версия питона", "какой python", "диска", "интернет",
+        "require", "system req", "python version", "which python",
+        "disk space", "cuda", "hardware", "offline", "internet",
+    )),
 )
 
 _СЛАБЫЕ: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("проблема", ("не работает", "не запускается", "не открывается", "ошибк",
-                  "падает", "traceback", "черный экран", "зависает",
-                  "не найдена", "не найден")),
-    ("запуск", ("запуст", "старт", "python -m vliw", "открыть программу",
-                "открыть интерфейс", "открыть меню")),
-    ("установка", ("установ", "поставить", "pip install", "скачать")),
-    ("проверка", ("провер",)),
-    ("зачем", ("зачем", "для чего", "что такое", "что это", "чем полез",
-               "польза", "назначение")),
+    ("проблема", (
+        "не работает", "не запускается", "не открывается", "ошибк",
+        "падает", "traceback", "черный экран", "зависает",
+        "не найдена", "не найден",
+        "not working", "doesn t work", "doesnt work", "won t start", "wont start",
+        "won t open", "wont open", "won t it open", "won t it start",
+        "doesn t open", "doesnt open", "can t open", "cant open", "can t start",
+        "error", "crash", "fail", "broken", "problem", "issue", "troubleshoot",
+        "black screen", "freeze", "hang", "not found", "missing", "bug",
+    )),
+    ("запуск", (
+        "запуст", "старт", "python -m vliw", "открыть программу",
+        "открыть интерфейс", "открыть меню",
+        "launch", "start", "run nex", "run vliw", "how to run", "open ui",
+        "plain mode", "cli mode",
+    )),
+    ("установка", (
+        "установ", "поставить", "pip install", "скачать",
+        "install", "setup", "set up", "download", "getting started",
+    )),
+    ("проверка", (
+        "провер", "check", "test", "tty", "isatty",
+    )),
+    ("удаление", (
+        "remove", "delete",
+    )),
+    ("зачем", (
+        "зачем", "для чего", "что такое", "что это", "чем полез",
+        "польза", "назначение",
+        "what is nex", "what is this", "what is vliw", "what is the scheduler",
+        "what does nex", "what does it do", "what does this", "why use",
+        "why do i need", "purpose", "about nex", "overview", "explain nex",
+        "elbrus", "vliw", "scheduler",
+    )),
 )
 
-_ПРИВЕТ = {"привет", "приветик", "прив", "здравствуйте", "здравствуй", "добрый день",
-           "добрый вечер", "доброе утро", "доброго дня", "доброго времени суток",
-           "как дела", "как ты", "ты кто", "кто ты", "кто ты такой",
-           "что ты умеешь", "чем можешь помочь", "помоги мне", "мне нужна помощь",
-           "ты бот", "ты человек", "как тебя зовут", "что нового",
-           # Разговорные приветствия: люди пишут и так, и это не оффтоп.
-           "йоу", "йо", "хай", "хеллоу", "ку", "здарова", "здорово", "салют",
-           "hello", "hi", "hey"}
-_ПОКА = {"пока", "до свидания", "до встречи", "хорошего дня"}
+_ПРИВЕТ = {
+    "привет", "приветик", "прив", "здравствуйте", "здравствуй", "добрый день",
+    "добрый вечер", "доброе утро", "доброго дня", "доброго времени суток",
+    "как дела", "как ты", "ты кто", "кто ты", "кто ты такой",
+    "что ты умеешь", "чем можешь помочь", "помоги мне", "мне нужна помощь",
+    "ты бот", "ты человек", "как тебя зовут", "что нового",
+    # Informal greetings
+    "йоу", "йо", "хай", "хеллоу", "ку", "здарова", "здорово", "салют",
+    "hello", "hello there", "hi", "hi there", "hey", "hey there",
+    "good morning", "good afternoon", "good evening",
+    "how are you", "who are you", "what can you do", "help", "help me",
+    "i need help", "are you a bot", "what is your name", "whats up",
+}
+_ПОКА = {
+    "пока", "до свидания", "до встречи", "хорошего дня",
+    "bye", "goodbye", "see you", "have a nice day",
+}
 
 _кэш: dict = {}
 
 
 def токены(текст: str) -> list[str]:
-    """Слова и символьные n-граммы: русская морфология без стеммера.
+    """Words and character n-grams: handles inflection without a stemmer.
 
-    «установить», «установка», «установил» дают общие куски «уст», «ста»,
-    «тан» — линейная модель уверенно переносит вопрос на ту же тему.
+    Related inflections share 3- and 4-character substrings so the linear model
+    generalizes across word forms.
     """
     low = (текст or "").lower().replace("ё", "е")
     out: list[str] = []
@@ -112,7 +183,7 @@ def _из_json() -> dict | None:
 
 
 def _из_npz() -> dict | None:
-    """Канонические веса блока через numpy; нет numpy — не страшно."""
+    """Canonical block weights via numpy; missing numpy is handled gracefully."""
     if "npz" in _кэш:
         return _кэш["npz"]
     data = None
@@ -141,18 +212,18 @@ def доступно() -> bool:
 
 
 def темы() -> list[str]:
-    """Темы, на которые ассистент отвечает (служебный класс «не_тема» скрыт)."""
+    """Topics the assistant can answer (internal off-topic class is hidden)."""
     w = _из_json() or _из_npz()
     return [a for a in w["ответы"] if a != НЕ_ТЕМА] if w else []
 
 
 def сведения() -> str:
-    """Строка для приветствия: чем именно отвечает блок."""
+    """Status line for the greeting banner describing the loaded help block."""
     w = _из_json() or _из_npz()
     if not w:
-        return "блок помощи не найден"
-    return (f"блок NNL «Помощь_ассистент» · {w['корзины']} корзин · "
-            f"{w['размер']} признаков · {len(темы())} тем")
+        return "help block not found"
+    return (f"NNL block 'Help_assistant' · {w['корзины']} buckets · "
+            f"{w['размер']} features · {len(темы())} topics")
 
 
 def _h(ток: list[str], w: dict) -> list[float]:
@@ -167,7 +238,7 @@ def _h(ток: list[str], w: dict) -> list[float]:
 
 
 def оценки(вопрос: str) -> dict[str, float]:
-    """Сырые счёты тем (логарифмы шансов до softmax)."""
+    """Raw topic scores (logits before softmax)."""
     tok = токены(вопрос)
     npz = _из_npz()
     if npz is not None:
@@ -210,11 +281,12 @@ def _чисто(текст: str) -> str:
 
 
 def _подсказка(вопрос: str) -> tuple[str, bool] | None:
-    """Тема по слову и признак «слово однозначное»."""
+    """Return (topic, is_strong) from deterministic keyword/stem matching."""
     ч = _чисто(вопрос)
     if not ч:
         return None
-    if ч in _ПРИВЕТ or ч in _ПОКА or ч.startswith(("спасибо", "благодар")):
+    if (ч in _ПРИВЕТ or ч in _ПОКА
+            or ч.startswith(("спасибо", "благодар", "thank", "thx"))):
         return БЕСЕДА, True
     for тема, слова in _СИЛЬНЫЕ:
         for слово in слова:
@@ -228,10 +300,17 @@ def _подсказка(вопрос: str) -> tuple[str, bool] | None:
 
 
 def спросить(вопрос: str) -> tuple[str, float] | None:
-    """Тема и уверенность. None — вопрос не про установку/работу NEX CLI."""
+    """Return (topic, confidence), or None if the question is off-topic."""
     подсказка = _подсказка(вопрос)
     if подсказка is not None and подсказка[1]:
         return подсказка[0], 1.0
+    # For pure-English queries (no Cyrillic), trust the English keyword/stem
+    # matcher directly because help_weights.json was trained on Russian tokens.
+    ч = _чисто(вопрос)
+    if ч and not _CYRILLIC.search(ч):
+        if подсказка is not None:
+            return подсказка[0], 0.85
+        return None
     p = вероятности(вопрос)
     if p:
         ranked = sorted(p.items(), key=lambda kv: kv[1], reverse=True)

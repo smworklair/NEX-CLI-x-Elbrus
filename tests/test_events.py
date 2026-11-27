@@ -1,16 +1,10 @@
-"""Поток событий планировщика: `vliw.core.api.stream()`.
+"""Scheduler event stream tests: `vliw.core.api.stream()`.
 
-Главное, что здесь проверяется, — обещание совместимости. Докстринг
-`vliw/core/api.py` и README говорят стороннему автору: заверни свой
-планировщик в класс с одним методом `schedule()` — и весь остальной код
-(валидация, метрики, объяснения, CLI, отрисовка) заработает без правок.
-Поток событий появился ПОСЛЕ этого обещания, поэтому первым делом проверяется,
-что планировщик по старому контракту через него проходит целиком.
-
-Второе — отмена. Она не отдельный протокол, а свойство генератора: `close()`
-бросает `GeneratorExit` в точке `yield`, и планировщик доводит свой `finally`.
-У обученной модели в этом `finally` убивается подпроцесс llama.cpp, поэтому
-тест на «finally отработал» — не формальность.
+Verifies two core contracts:
+1. Backwards compatibility: any scheduler implementing only `schedule()`
+   streams cleanly via replay without needing `schedule_events()`.
+2. Cancellation safety: calling `close()` raises `GeneratorExit` at `yield`
+   and runs the scheduler's `finally` block (critical for killing llama.cpp).
 """
 
 from __future__ import annotations
@@ -39,9 +33,9 @@ M = get_profile("e2k-v6-measured")
 
 
 class OldContractScheduler:
-    """Планировщик ровно по старому контракту: ни событий, ни трассы."""
+    """Legacy-contract scheduler: implements only `schedule()`, no events or trace."""
 
-    name = "старый контракт"
+    name = "legacy contract"
     kind = "heuristic"
     short = "old"
 
@@ -53,7 +47,7 @@ class OldContractScheduler:
 
 
 class StreamAdapterTest(unittest.TestCase):
-    """Планировщик без `schedule_events()` — через переигровку результата."""
+    """Scheduler without `schedule_events()` streams via result replay."""
 
     def setUp(self) -> None:
         self.dag = get_scenario("slotclash")
@@ -62,7 +56,7 @@ class StreamAdapterTest(unittest.TestCase):
         return list(stream(scheduler, self.dag, M))
 
     def test_old_contract_scheduler_works_untouched(self) -> None:
-        """Класс с одним `schedule()` даёт полноценный поток — обещание в силе."""
+        """A single-method `schedule()` class still produces a complete event stream."""
         evs = self._events(OldContractScheduler())
         self.assertIsInstance(evs[0], Started)
         self.assertIsInstance(evs[-1], Done)
@@ -70,22 +64,13 @@ class StreamAdapterTest(unittest.TestCase):
         self.assertEqual(len(placed), len(self.dag))
 
     def test_no_trace_still_places_everything(self) -> None:
-        """Трасса не обязательна — но решётка обязана получить все размещения.
-
-        `OldContractScheduler` не заполняет `trace` вовсе. Если бы события
-        `Placed` брались только из трассы, решётка осталась бы пустой.
-        """
+        """Even without a trace, every placement must still be emitted as a `Placed` event."""
         evs = self._events(OldContractScheduler())
         got = {e.placement.instr for e in evs if isinstance(e, Placed)}
         self.assertEqual(got, set(range(len(self.dag))))
 
     def test_every_instruction_placed_exactly_once(self) -> None:
-        """Ни одна инструкция не заливается в решётку дважды.
-
-        В переигровке размещения берутся сперва из трассы, потом из остатка
-        расписания. Пересечение этих двух источников — самая правдоподобная
-        ошибка здесь, и она даёт мигающую ячейку в интерфейсе.
-        """
+        """No instruction may be emitted twice when combining trace and schedule placements."""
         for scheduler in (GreedyListScheduler(),
                           OracleScheduler(budget_s=5.0, portfolio_s=1.0)):
             with self.subTest(scheduler=scheduler.short):
@@ -95,24 +80,20 @@ class StreamAdapterTest(unittest.TestCase):
                 self.assertEqual(set(placed), set(range(len(self.dag))))
 
     def test_exactly_one_terminal_event_and_it_is_last(self) -> None:
-        """Потребителю нужно знать, что поток кончился, ровно один раз."""
+        """Exactly one terminal `Done` event is emitted at the end of the stream."""
         evs = self._events(GreedyListScheduler())
         terminals = [e for e in evs if isinstance(e, TERMINAL)]
         self.assertEqual(len(terminals), 1)
         self.assertIs(terminals[0], evs[-1])
 
     def test_replay_is_marked_not_live(self) -> None:
-        """Переигровка обязана быть подписана как переигровка.
-
-        Иначе интерфейс однажды покажет мгновенный baseline как «смотрим, как
-        оно думает». Флаг едет в событии именно чтобы это было невозможно.
-        """
+        """Replay streams must set `replay=True` on `Started` so the UI knows it is not live."""
         evs = self._events(GreedyListScheduler())
         marks = {e.live for e in evs if isinstance(e, (Step, Placed))}
         self.assertEqual(marks, {False})
 
     def test_terminal_result_is_the_schedulers_own(self) -> None:
-        """`Done.result` — тот же объект, что вернул планировщик, без копий."""
+        """`Done.result` must be the exact ScheduleResult object returned by `schedule()`."""
         scheduler = GreedyListScheduler()
         direct = scheduler.schedule(self.dag, M)
         evs = self._events(scheduler)
@@ -121,13 +102,9 @@ class StreamAdapterTest(unittest.TestCase):
 
 
 class EventfulScheduler:
-    """Планировщик, который рассказывает о себе сам, и делает это ПРАВИЛЬНО.
+    """Event-native scheduler that places `try:` BEFORE its first `yield`."""
 
-    Правильно — значит `try` начинается ДО первого `yield`, а не после. См.
-    `LeakyScheduler` ниже: там показано, что бывает иначе.
-    """
-
-    name = "событийный"
+    name = "event-native"
     kind = "learned"
     short = "ev"
 
@@ -138,27 +115,21 @@ class EventfulScheduler:
     def schedule_events(self, dag: DAG, model):
         try:
             yield Started(self.short)
-            while True:                     # бесконечный — как генерация модели
+            while True:                     # infinite stream, like LLM generation
                 self.emitted += 1
                 yield Token("x")
         finally:
-            # У обученной модели здесь убивается подпроцесс llama.cpp.
+            # In the learned scheduler, this terminates the llama.cpp subprocess.
             self.cleaned = True
 
     def schedule(self, dag: DAG, model) -> SchedulingResult:
-        raise AssertionError("при наличии schedule_events() не должен вызываться")
+        raise AssertionError("schedule() must not be called when schedule_events() exists")
 
 
 class LeakyScheduler:
-    """Тот же планировщик, но `try` начинается ПОСЛЕ первого `yield`.
+    """Anti-pattern fixture: `try:` placed AFTER the first `yield` leaks on immediate close()."""
 
-    Существует только затем, чтобы приколотить правило контракта тестом.
-    Отмена ровно на первом событии бросает `GeneratorExit` мимо `try`, и
-    `finally` не отрабатывает. Для обученной модели это означало бы
-    осиротевший процесс llama.cpp, который держит гигабайты и порт.
-    """
-
-    name = "дырявый"
+    name = "leaky"
     kind = "learned"
     short = "leak"
 
@@ -166,7 +137,7 @@ class LeakyScheduler:
         self.cleaned = False
 
     def schedule_events(self, dag: DAG, model):
-        yield Started(self.short)           # ← вне try: здесь и течёт
+        yield Started(self.short)           # outside try: leaks if closed here
         try:
             while True:
                 yield Token("x")
@@ -180,7 +151,7 @@ class EventfulPathTest(unittest.TestCase):
         self.dag = get_scenario("simple4")
 
     def test_schedule_events_wins_over_schedule(self) -> None:
-        """Есть `schedule_events()` — переигровка не используется."""
+        """When `schedule_events()` is present, live streaming is used instead of replay."""
         sch = EventfulScheduler()
         gen = stream(sch, self.dag, M)
         self.assertIsInstance(next(gen), Started)
@@ -188,7 +159,7 @@ class EventfulPathTest(unittest.TestCase):
         gen.close()
 
     def test_close_runs_scheduler_cleanup(self) -> None:
-        """Отмена доводит `finally` планировщика — процесс модели не осиротеет."""
+        """Closing the generator mid-stream triggers `finally` cleanup."""
         sch = EventfulScheduler()
         gen = stream(sch, self.dag, M)
         for _ in range(4):
@@ -198,11 +169,7 @@ class EventfulPathTest(unittest.TestCase):
         self.assertTrue(sch.cleaned)
 
     def test_cancel_on_the_very_first_event_still_cleans_up(self) -> None:
-        """Отмена на первом же событии — тоже отмена, и убирать за собой надо.
-
-        Самый вероятный сценарий в жизни: человек запустил модель, сразу
-        передумал и нажал Esc. К этому моменту поток отдал ровно `Started`.
-        """
+        """Cancelling immediately after `Started` must still execute `finally` cleanup."""
         sch = EventfulScheduler()
         gen = stream(sch, self.dag, M)
         next(gen)
@@ -211,35 +178,30 @@ class EventfulPathTest(unittest.TestCase):
         self.assertEqual(sch.emitted, 0)
 
     def test_try_after_first_yield_leaks_and_that_is_why_the_rule_exists(self) -> None:
-        """Правило «`try` до первого `yield`» — приколочено, а не на словах.
-
-        Это не проверка `stream()`, а фиксация того, ЧТО ИМЕННО ломается при
-        нарушении контракта. Если однажды кто-то напишет планировщик так —
-        пусть провалится здесь, а не осиротевшим процессом на чужой машине.
-        """
+        """Documents the Python generator contract: `try:` after first `yield` misses `finally`."""
         sch = LeakyScheduler()
         gen = stream(sch, self.dag, M)
-        next(gen)                            # отдал Started, стоит вне try
+        next(gen)                            # yielded Started outside try
         gen.close()
-        self.assertFalse(sch.cleaned, "поведение Python изменилось — перечитать контракт")
+        self.assertFalse(sch.cleaned, "Python generator close semantics changed — recheck contract")
 
 
 class FailingScheduler:
-    """Ожидаемый отказ: весов нет. Это результат, а не поломка инструмента."""
+    """Expected failure fixture (e.g. missing weights): emits `Failed` cleanly."""
 
-    name = "без весов"
+    name = "no weights"
     kind = "learned"
     short = "nofail"
 
     def schedule_events(self, dag: DAG, model):
         yield Started(self.short)
-        yield Failed("нет весов: адаптер не сконвертирован в GGUF")
+        yield Failed("missing weights: adapter not converted to GGUF")
 
 
 class FailedEventTest(unittest.TestCase):
 
     def test_failed_is_terminal(self) -> None:
-        """`Failed` закрывает поток так же, как `Done` — потребитель один."""
+        """`Failed` terminates the stream cleanly just like `Done`."""
         evs = list(stream(FailingScheduler(), get_scenario("simple4"), M))
         self.assertIsInstance(evs[-1], Failed)
         self.assertEqual(len([e for e in evs if isinstance(e, TERMINAL)]), 1)

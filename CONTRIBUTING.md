@@ -1,8 +1,8 @@
-# Участие в проекте
+# Contributing
 
-Небольшие сфокусированные PR приветствуются.
+Small, focused pull requests are welcome.
 
-## Подготовка
+## Setup
 
 ```bash
 git clone <your-fork-url>
@@ -11,36 +11,32 @@ pip install -e ".[tui]"
 python -m unittest discover -s tests
 ```
 
-## Что важно знать
+## Key Architecture Notes
 
-- Ядро планировщика — `vliw/core/` (`baseline.py`, `oracle.py`, `schedule.py`, `model.py`).
-  У него нет сторонних зависимостей; пожалуйста, не добавляйте их.
-- `vliw/tui/` — необязательный полноэкранный интерфейс. Без `textual` тесты пропускаются.
-- `vliw/learned/` и `training/` — исторический трек обученной LLM. Без `torch` тесты пропускаются.
-- `vliw/tiny/` — рабочий обученный планировщик, лёгкий и основной.
-- Комментарии в коде в основном русские; английские PR и комментарии допустимы.
-- `real_candidates_100_400/asm/*.s` — небольшие фикстуры для тестов. Остальное в этой папке —
-  локальные данные на гигабайты, в git не идут.
+- The scheduler core lives in `vliw/core/` (`baseline.py`, `oracle.py`, `schedule.py`, `model.py`). It has zero third-party dependencies — please do not add any.
+- `vliw/tui/` is an optional fullscreen interface. Without `textual`, its tests are skipped.
+- `vliw/learned/` and `training/` are the historical learned-LLM track. Without `torch`, those tests are skipped.
+- `vliw/tiny/` is the active learned scheduler — lightweight and primary.
+- Code comments are mostly in Russian; English PRs and comments are welcome.
+- `real_candidates_100_400/asm/*.s` are small test fixtures. Everything else in that directory is multi-gigabyte local data excluded from git.
 
-## Проверки
+## Checks
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-Набор должен оставаться зелёным. Пропуски без `torch`/`textual` — ожидаемы, а не ошибки.
-Новое поведение требует регрессионного теста в `tests/`.
+The test suite must stay green. Skips when `torch`/`textual` are absent are expected, not failures.
+New behavior requires a regression test in `tests/`.
 
-Не коммитьте секреты (`.env` в `.gitignore` не просто так), веса (`*.safetensors`) и локальные PDF.
+Do not commit secrets (`.env` is in `.gitignore` for a reason), model weights (`*.safetensors`), or local PDFs.
 
-## Документация
+## Documentation
 
-- Пользовательские гайды — `docs/`.
-- Исторические заметки — `docs/archive/`; их не нужно обновлять при изменении кода.
-- Оглавление — [`docs/README.md`](docs/README.md).
+- User guides live in `docs/`.
+- Historical notes live in `docs/archive/`; they do not need to be updated when code changes.
+- Table of contents: [`docs/README.md`](docs/README.md).
 
-## Лицензия
+## License
 
-Отправляя PR, вы соглашаетесь, что изменения распространяются на тех же условиях, что и проект
-(см. [LICENSE](LICENSE)): бесплатно для обучения и личного использования, коммерческое применение —
-только по отдельному соглашению с правообладателем.
+By submitting a PR, you agree that your contributions are licensed under the same terms as the project (see [LICENSE](LICENSE)): free for educational and personal use, with commercial use requiring a separate agreement with the copyright holder.

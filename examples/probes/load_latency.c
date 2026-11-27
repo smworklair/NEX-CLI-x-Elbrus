@@ -1,4 +1,4 @@
-/* Латентность загрузки: цепочка зависимых обращений (p = *p). */
+/* Load latency: chain of dependent dereferences (p = *p). */
 volatile long chain[8];
 int main(void) {
     volatile long **p = (volatile long **)chain;

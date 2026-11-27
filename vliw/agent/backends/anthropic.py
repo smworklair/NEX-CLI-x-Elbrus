@@ -13,7 +13,7 @@ def _text_of(data: dict) -> tuple[str, int]:
     text = "".join(block.get("text", "") for block in data.get("content", [])
                    if block.get("type") == "text").strip()
     if not text:
-        raise LLMError(f"пустой ответ (stop_reason={data.get('stop_reason')})")
+        raise LLMError(f"empty response (stop_reason={data.get('stop_reason')})")
     return text, int((data.get("usage") or {}).get("output_tokens", 0) or 0)
 
 
@@ -23,7 +23,7 @@ class AnthropicBackend(Backend):
     def __init__(self, api_key: str, base_url: str = "", model: str = "",
                  timeout: float = TIMEOUT):
         if not api_key:
-            raise LLMError("ключ не задан: ANTHROPIC_API_KEY")
+            raise LLMError("API key not set: ANTHROPIC_API_KEY")
         self._key = api_key
         self._base_url = (base_url or "https://api.anthropic.com/v1").rstrip("/")
         self._model = model or _DEFAULT_MODEL

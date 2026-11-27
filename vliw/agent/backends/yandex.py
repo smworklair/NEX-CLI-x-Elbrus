@@ -1,16 +1,16 @@
 """YandexGPT (Yandex Cloud): `foundationModels/v1/completion`.
 
-Два способа аутентификации (хватит одного):
-  * API-ключ:  YANDEX_API_KEY (заголовок `Authorization: Api-Key ...`);
-  * IAM-токен: YANDEX_IAM_TOKEN (заголовок `Authorization: Bearer ...`).
+Two authentication modes (either suffices):
+  * API key:   YANDEX_API_KEY (header `Authorization: Api-Key ...`);
+  * IAM token: YANDEX_IAM_TOKEN (header `Authorization: Bearer ...`).
 
-В обоих случаях нужен каталог:
-  YANDEX_FOLDER_ID — идентификатор каталога в Yandex Cloud.
+Both require a folder ID:
+  YANDEX_FOLDER_ID — Yandex Cloud folder identifier.
 
-Переменные окружения (см. `.env.example`):
+Environment variables (see `.env.example`):
   YANDEX_API_KEY / YANDEX_IAM_TOKEN / YANDEX_FOLDER_ID
-  YANDEX_MODEL — по умолчанию yandexgpt (можно yandexgpt-lite)
-  NEX_MODEL — перебивает YANDEX_MODEL, если задан
+  YANDEX_MODEL — defaults to yandexgpt (or yandexgpt-lite)
+  NEX_MODEL — overrides YANDEX_MODEL if set
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class YandexBackend(Backend):
         key = api_key or env.get("YANDEX_API_KEY", "") or env.get("NEX_API_KEY", "")
         iam = iam_token or env.get("YANDEX_IAM_TOKEN", "")
         folder = folder_id or env.get("YANDEX_FOLDER_ID", "")
-        # NEX_API_KEY вида "iam:..."/"key:..." — на случай одного поля ввода.
+        # NEX_API_KEY of form "iam:..."/"key:..." for single-field input.
         if not iam and key.startswith("iam:"):
             iam, key = key[4:], ""
         if iam and not folder and ":" in iam:
@@ -41,9 +41,9 @@ class YandexBackend(Backend):
             folder = folder or key[len("folder:"):]
             key = ""
         if not (key or iam):
-            raise LLMError("YandexGPT: задайте YANDEX_API_KEY или YANDEX_IAM_TOKEN")
+            raise LLMError("YandexGPT: set YANDEX_API_KEY or YANDEX_IAM_TOKEN")
         if not folder:
-            raise LLMError("YandexGPT: задайте YANDEX_FOLDER_ID (каталог в Yandex Cloud)")
+            raise LLMError("YandexGPT: set YANDEX_FOLDER_ID (Yandex Cloud folder ID)")
         self._key = key.strip()
         self._iam = iam.strip()
         self._folder = folder.strip()
@@ -55,8 +55,8 @@ class YandexBackend(Backend):
         h = {"Content-Type": "application/json"}
         if self._iam:
             h["Authorization"] = f"Bearer {self._iam}"
-            # Каталог дублируем заголовком, как в примерах из документации:
-            # modelUri его уже содержит, но лишний заголовок не вредит.
+            # Duplicate folder ID in header per official docs:
+            # modelUri already includes it, and the extra header is harmless.
             h["x-folder-id"] = self._folder
         else:
             h["Authorization"] = f"Api-Key {self._key}"
@@ -76,21 +76,21 @@ class YandexBackend(Backend):
             "messages": msgs,
         }
         if schema:
-            # У Yandex нет response_format — просим JSON текстом инструкции.
+            # Yandex has no response_format — request JSON via system instruction.
             msgs.append({"role": "system",
-                         "text": "Отвечай СТРОГО валидным JSON без пояснений, "
-                                 "ровно по схеме из задачи."})
+                         "text": "Respond STRICTLY with valid JSON and no extra "
+                                 "commentary, matching the requested schema."})
         return body
 
     def _text_of(self, data: dict) -> tuple[str, int]:
         alts = (data.get("result") or {}).get("alternatives") or []
         if not alts:
-            raise LLMError("модель не вернула ответ")
+            raise LLMError("model returned no response")
         text = ((alts[0].get("message") or {}).get("text") or "").strip()
         used = int((data.get("result") or {}).get("usage", {})
                    .get("completionTokens", 0) or 0)
         if not text:
-            raise LLMError("пустой ответ модели")
+            raise LLMError("empty model response")
         return text, used
 
     def complete(self, system, question, history=None, temperature=0.3) -> str:
@@ -106,7 +106,7 @@ class YandexBackend(Backend):
         return self._text_of(data)
 
     def stream(self, system, question, history=None, temperature=0.3):
-        # Yandex умеет SSE при stream=true, но формат тот же completion-объект
-        # кусками; проще и надёжнее отдать полный ответ одним куском —
-        # интерфейс разницы не заметит, кроме отсутствия побуквенной анимации.
+        # Yandex supports SSE with stream=true, but emits full completion objects
+        # incrementally; yielding the full completion in one chunk is simpler and
+        # more reliable (the UI only skips character-by-character animation).
         yield self.complete(system, question, history, temperature)

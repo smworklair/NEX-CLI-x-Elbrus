@@ -1,41 +1,9 @@
-"""Оракул прототипа: точный поиск оптимума вместо эвристики.
+"""Exact oracle: iterative-deepening branch-and-bound + portfolio fallback.
 
-ВАЖНО про терминологию. Это НЕ «ИИ» и не обученная модель — это точный
-математический поиск (branch-and-bound с итеративным углублением). Он считает
-недостижимый на практике ТЕОРЕТИЧЕСКИЙ ПОТОЛОК: сколько тактов в принципе
-достижимо на данном графе и данной машине. Обученной модели в проекте пока
-физически нет (см. vliw/learned/) — когда она появится, она должна
-ПРИБЛИЖАТЬСЯ к этому потолку, но гарантированного оптимума давать не будет.
-
-Разрыв между baseline и этим потолком и есть бюджет, за который имеет смысл
-бороться обученной моделью. Если разрыва нет — эвристика уже оптимальна,
-и учить на этом графе нечему. Это такой же честный результат, и демо его
-не прячет.
-
-Два движка, в порядке применения:
-
-  1. ТОЧНЫЙ (branch-and-bound с итеративным углублением). Считаем нижнюю
-     границу LB и верхнюю UB (расписание baseline). Для T = LB, LB+1, ...
-     спрашиваем «существует ли расписание длиной ровно T?» поиском в глубину.
-     Первое T с ответом «да» оптимально по построению.
-
-     Отсечения:
-       * дедлайны: инструкцию с остаточным критическим путём height нельзя
-         выдать позже, чем T - height;
-       * прогноз самого раннего старта с учётом и зависимостей, и занятости
-         каналов;
-       * доминирование: неблокирующую операцию нет смысла откладывать, если
-         для неё есть свободный подходящий канал;
-       * симметрия: взаимозаменяемые инструкции и равноправные каналы
-         не порождают разных ветвей;
-       * мемоизация провальных состояний.
-
-  2. ПОРТФЕЛЬНЫЙ (если точный не уложился в бюджет). Прогоняем тот же жадный
-     движок с сотнями разных векторов приоритетов и вариантов придержать
-     деление, берём лучшее найденное. Оптимальность при этом НЕ доказана,
-     и в отчёте это написано прямо. По смыслу это ровно то, чем будет
-     заниматься обученная модель: сэмплировать хорошие порядки вместо
-     единственного жёсткого правила.
+Computes the proven-optimal makespan lower/upper ceiling for a DAG and
+machine model. Uses deadline pruning, earliest-start propagation, dominance,
+symmetry breaking, and memoization, falling back to a randomized priority
+portfolio if the time budget expires.
 """
 
 from __future__ import annotations
@@ -54,32 +22,17 @@ from .schedule import Schedule
 
 @dataclass(frozen=True)
 class Hint:
-    """Подсказка точному поиску: чужое мнение о том, где искать.
+    """External search hint (upper-bound schedule and/or priority vectors).
 
-    Оракул от неё не становится менее точным — она не может изменить, какой
-    ответ он признает оптимальным, и ни один вывод «доказанно недостижимо»
-    от неё не зависит. Меняется только СКОРОСТЬ и то, что он успевает
-    доказать в бюджете:
-
-    * `schedule` — готовое ЗАКОННОЕ расписание как верхняя граница. Если оно
-      короче baseline, углубление кончается раньше; если оно упирается в
-      нижнюю границу, оптимальность доказана вообще без перебора.
-    * `priority` / `defer` — векторы для портфельного движка, который
-      включается, когда точный поиск не уложился в бюджет. Сейчас там
-      случайное дрожание вокруг `height` (см. `_portfolio`), и шапка этого
-      файла с самого начала предполагала, что его место — за обученной
-      моделью.
-
-    Откуда она берётся — оракул не знает и знать не должен: `vliw/learned/
-    seed.py` строит её из ответа модели, но с тем же успехом это может быть
-    расписание другого планировщика или прошлый результат.
+    Cannot affect optimality proofs — only speeds up convergence or narrows
+    the proven interval within budget.
     """
 
     schedule: Schedule | None = None
     priority: tuple[float, ...] | None = None
     defer: dict[int, int] | None = None
-    source: str = "подсказка"
-    """Чья это работа — уезжает в заметки отчёта, чтобы заслуга не терялась."""
+    source: str = "hint"
+    """Provenance label included in report notes."""
 
 
 class _Timeout(Exception):
@@ -105,7 +58,7 @@ class _Ctx:
 
 
 def _channel_classes(model: MachineModel) -> tuple[int, ...]:
-    """Каналы с одинаковым набором умений взаимозаменяемы — метим их классом."""
+    """Group channels with identical capability sets into equivalence classes."""
     sig: dict[tuple[bool, ...], int] = {}
     out = []
     for ch in range(model.width):
@@ -115,16 +68,16 @@ def _channel_classes(model: MachineModel) -> tuple[int, ...]:
 
 
 # --------------------------------------------------------------------------
-# Раскладка выбранных операций по каналам (двудольное паросочетание Куна)
+# Assign selected ops to channels via Kuhn bipartite matching
 # --------------------------------------------------------------------------
 
 
 class _Matcher:
-    """Инкрементальное паросочетание «операция → канал»."""
+    """Incremental op -> channel bipartite matching."""
 
     def __init__(self, free: set[int]):
         self.free = free
-        self.owner: dict[int, int] = {}  # канал -> операция
+        self.owner: dict[int, int] = {}  # channel -> op
         self.allowed: dict[int, tuple[int, ...]] = {}
 
     def copy(self) -> "_Matcher":
@@ -156,7 +109,7 @@ class _Matcher:
 
 
 # --------------------------------------------------------------------------
-# Точный поиск
+# Exact branch-and-bound search
 # --------------------------------------------------------------------------
 
 
@@ -167,7 +120,7 @@ def _earliest_starts(
     free_at: tuple[int, ...],
     t: int,
 ) -> list[int] | None:
-    """Самый ранний реально достижимый старт каждой ещё не выданной инструкции."""
+    """Earliest feasible start cycle for each unscheduled instruction."""
     est = [0] * len(ctx.dag)
     for i in sorted(unscheduled):
         e = max(t, ready_time[i])
@@ -185,7 +138,7 @@ def _earliest_starts(
 def _group_interchangeable(
     ctx: _Ctx, ids: list[int], ready_time: tuple[int, ...]
 ) -> list[list[int]]:
-    """Сгруппировать инструкции, между которыми в этом такте нет разницы."""
+    """Group instructions that are interchangeable in the current cycle."""
     buckets: dict[tuple, list[int]] = {}
     for i in ids:
         key = (
@@ -200,7 +153,7 @@ def _group_interchangeable(
 
 
 def _count_vectors(sizes: list[int], total: int):
-    """Все раскладки `total` штук по группам с ограничением сверху."""
+    """Enumerate distributions of `total` items across bounded groups."""
     def rec(k: int, left: int, acc: list[int]):
         if k == len(sizes):
             if left == 0:
@@ -222,13 +175,7 @@ def _candidate_subsets(
     free: set[int],
     ready_time: tuple[int, ...],
 ) -> list[tuple[int, ...]]:
-    """Какие наборы инструкций имеет смысл выдать в этом такте.
-
-    Рассматриваем только наборы, к которым нельзя добавить ещё одну
-    неблокирующую готовую инструкцию (оставлять подходящий канал пустым
-    без причины никогда не выгодно), и все варианты по блокирующим
-    операциям — их как раз бывает выгодно придержать.
-    """
+    """Enumerate dominant subsets of ready instructions to issue in this cycle."""
     blocking = [i for i in ready if ctx.occ[i] > 1]
     nonblk = [i for i in ready if ctx.occ[i] == 1]
     groups = _group_interchangeable(ctx, nonblk, ready_time)
@@ -246,11 +193,11 @@ def _candidate_subsets(
             probe = base.copy()
             extra = sum(1 for i in nonblk if probe.add(i, ctx.capable[i]))
             for counts in _count_vectors(sizes, extra):
-                # Бюджет обязан ограничивать и этот путь: раньше tick() был
-                # только во внешнем цикле по blocking-комбинациям, и на
-                # реальных графах перечисление векторов (_count_vectors)
-                # крутилось мимо дедлайна — session.results() не возвращался,
-                # фолбэк на портфель не срабатывал.
+                # Check time budget inside vector enumeration so large real DAGs
+                # respect the deadline and fall back cleanly to the portfolio.
+                #
+                #
+                #
                 ctx.tick()
                 sub = list(bs)
                 for g, c in zip(groups, counts):
@@ -342,7 +289,7 @@ def _search(
 
 
 # --------------------------------------------------------------------------
-# Портфельный поиск (запасной движок)
+# Portfolio search (fallback engine)
 # --------------------------------------------------------------------------
 
 
@@ -355,12 +302,7 @@ def _portfolio(
     seed: int = 20260811,
     hint: "Hint | None" = None,
 ) -> tuple[Schedule, int, bool]:
-    """Перебор приоритетов. Третьим возвращается «победила ли подсказка».
-
-    Подсказка пробуется ПЕРВОЙ и в чистом виде, без дрожания: если чужой
-    вектор что-то даёт, это должно быть видно отдельной попыткой, а не
-    растворяться в двадцати тысячах случайных.
-    """
+    """Priority-vector portfolio search; returns `(best_sched, tries, hint_won)`."""
     rnd = random.Random(seed)
     blocking = [i.id for i in dag if model.occupancy(i.op) > 1]
     deadline = time.monotonic() + budget_s
@@ -392,7 +334,7 @@ def _portfolio(
 
 
 class OracleScheduler:
-    name = "Оракул (точный поиск: теоретический потолок оптимизации)"
+    name = "Oracle (exact search: theoretical optimum)"
     kind = "exact"
     short = "oracle"
 
@@ -401,7 +343,7 @@ class OracleScheduler:
         self.budget_s = budget_s
         self.portfolio_s = portfolio_s
         self.hint = hint
-        """Чужая подсказка (см. `Hint`). Точность результата от неё не зависит."""
+        """Optional external `Hint` (never affects optimality guarantees)."""
 
     def schedule(self, dag: DAG, model: MachineModel) -> SchedulingResult:
         metrics = compute_metrics(dag, model)
@@ -410,10 +352,10 @@ class OracleScheduler:
         ub = best.makespan
         lb = metrics.lower_bound
 
-        # Верхняя граница от подсказки. Берём ТОЛЬКО законное и полное
-        # расписание и только если оно строго короче baseline: неполное
-        # расписание границей быть не может, а равное ничего не меняет и
-        # лишь размывает, чья это заслуга.
+        # Accept hint schedule as upper bound ONLY if valid, complete,
+        # and strictly shorter than baseline.
+        #
+        #
         hint = self.hint
         hint_ub = False
         if (hint is not None and hint.schedule is not None
@@ -435,27 +377,27 @@ class OracleScheduler:
         )
 
         notes = [
-            f"Нижняя граница: {lb} тактов (критический путь "
-            f"{metrics.critical_path_bound}, ресурсы {metrics.resource_bound}) — "
-            f"связывает {metrics.binding}.",
-            (f"Верхняя граница на старте — {hint.source}: {ub} тактов "
-             f"(baseline давал {base.schedule.makespan})." if hint_ub else
-             f"Верхняя граница на старте — расписание baseline: {ub} тактов."),
+            f"Lower bound: {lb} cycles (critical path "
+            f"{metrics.critical_path_bound}, resources {metrics.resource_bound}) — "
+            f"bound by {metrics.binding}.",
+            (f"Initial upper bound ({hint.source}): {ub} cycles "
+             f"(baseline: {base.schedule.makespan})." if hint_ub else
+             f"Initial upper bound (baseline): {ub} cycles."),
         ]
         proven: bool | None = None
         timed_out = False
         hint_won = False
         engine = "exact"
         t0 = time.monotonic()
-        proved_impossible = lb  # всё, что строго меньше, доказанно недостижимо
+        proved_impossible = lb  # everything strictly below this is proven infeasible
 
         if lb >= ub:
             proven = True
             notes.append(
-                (f"Расписание от «{hint.source}» уже упирается в нижнюю границу: "
-                 "оптимальность доказана без единого узла перебора." if hint_ub else
-                 "Расписание baseline уже упирается в нижнюю границу: улучшить "
-                 "его невозможно, оптимальность доказана без перебора.")
+                (f"Schedule from '{hint.source}' already hits the lower bound: "
+                 "optimality proven with zero search nodes." if hint_ub else
+                 "Baseline already hits the lower bound: cannot be improved, "
+                 "optimality proven without search.")
             )
         else:
             for target in range(lb, ub):
@@ -480,32 +422,32 @@ class OracleScheduler:
                     errs = s.validate()
                     if errs:
                         raise AssertionError(
-                            "точный поиск выдал некорректное расписание: " + "; ".join(errs)
+                            "exact search produced an invalid schedule: " + "; ".join(errs)
                         )
                     best = s
                     proven = True
                     if target == lb:
                         notes.append(
-                            f"Расписание длиной {target} тактов найдено сразу на "
-                            f"нижней границе — короче не бывает по построению."
+                            f"Schedule of length {target} cycles found right at "
+                            f"the lower bound — optimal by construction."
                         )
                     elif target == lb + 1:
                         notes.append(
-                            f"Найдено расписание длиной {target} тактов; цель {lb} "
-                            f"перебором доказанно недостижима."
+                            f"Found {target}-cycle schedule; target {lb} "
+                            f"proven infeasible by search."
                         )
                     else:
                         notes.append(
-                            f"Найдено расписание длиной {target} тактов; все цели "
-                            f"от {lb} до {target - 1} доказанно недостижимы."
+                            f"Found {target}-cycle schedule; all targets "
+                            f"from {lb} to {target - 1} proven infeasible."
                         )
                     break
                 proved_impossible = target + 1
             else:
                 proven = True
                 notes.append(
-                    f"Все цели от {lb} до {ub - 1} доказанно недостижимы — "
-                    f"значит расписание baseline ({ub}) уже оптимально."
+                    f"All targets from {lb} to {ub - 1} proven infeasible — "
+                    f"baseline schedule ({ub}) is already optimal."
                 )
 
         portfolio_tries = 0
@@ -513,21 +455,21 @@ class OracleScheduler:
             engine = "portfolio"
             proven = False
             notes.append(
-                f"Точный поиск не уложился в бюджет {self.budget_s:g} с "
-                f"(разобрано {ctx.nodes} узлов). Переключаемся на портфельный "
-                f"перебор приоритетов."
+                f"Exact search exceeded {self.budget_s:g} s budget "
+                f"({ctx.nodes} nodes explored). Switching to portfolio "
+                f"priority search."
             )
             best, portfolio_tries, hint_won = _portfolio(
                 dag, model, metrics.height, best, self.portfolio_s, hint=hint
             )
             if hint_won:
                 notes.append(
-                    f"Лучшее в портфеле дал вектор приоритетов от «{hint.source}», "
-                    "а не случайный перебор.")
+                    f"Best portfolio result came from '{hint.source}' priorities "
+                    "rather than random search.")
             notes.append(
-                f"Портфель: {portfolio_tries} прогонов жадного движка с разными "
-                f"приоритетами. Лучшее найденное — {best.makespan} тактов; "
-                f"оптимум доказанно лежит в [{proved_impossible}, {best.makespan}]."
+                f"Portfolio: {portfolio_tries} greedy runs with varied "
+                f"priorities. Best found: {best.makespan} cycles; "
+                f"optimum proven in [{proved_impossible}, {best.makespan}]."
             )
 
         elapsed = time.monotonic() - t0
@@ -556,12 +498,7 @@ class OracleScheduler:
 def _replay_trace(
     sched: Schedule, dag: DAG, model: MachineModel, height: tuple[int, ...]
 ) -> list[DecisionStep]:
-    """Восстановить пошаговый разбор из готового расписания.
-
-    Планировщик с полным просчётом принимает решение не потактно, а сразу
-    целиком, поэтому объяснение строится обратным проходом: в каждом такте
-    видно, что он выдал и какие готовые инструкции сознательно отложил.
-    """
+    """Reconstruct a cycle-by-cycle DecisionStep trace from a completed schedule."""
     n = len(dag)
     if not sched.complete:
         return []
@@ -591,8 +528,8 @@ def _replay_trace(
             blocked=[
                 (p.instr, p.cycle + model.occupancy(dag[p.instr].op)) for p in held
             ],
-            rule="решение принято с учётом всего оставшегося графа "
-            "(просчёт до конца участка, а не по текущему такту)",
+            rule="decision made with full lookahead across the remaining DAG "
+            "(global schedule optimization, not greedy per-cycle)",
         )
         for i in range(n):
             if sched.cycle_of(i) < t or ready_time[i] > t:
@@ -601,35 +538,35 @@ def _replay_trace(
             if i in issued:
                 cand.chosen = True
                 cand.channel = sched.placements[i].channel
-                cand.reason = f"в найденном расписании — именно этот такт (h={height[i]})"
+                cand.reason = f"scheduled in this cycle (h={height[i]})"
                 occ = model.occupancy(dag[i].op)
                 if occ > 1:
-                    cand.reason += f"; займёт канал монопольно до такта {t + occ}"
+                    cand.reason += f"; holds channel exclusively until cycle {t + occ}"
             elif not (set(model.channels_for(dag[i].op)) - used):
-                cand.reason = "все подходящие каналы этого такта уже заняты"
+                cand.reason = "all capable channels occupied in this cycle"
             else:
                 cand.reason = (
-                    f"канал есть, но выдача отложена до такта "
-                    f"{sched.cycle_of(i)} — сознательное решение"
+                    f"channel free, but deferred until cycle "
+                    f"{sched.cycle_of(i)} — deliberate lookahead choice"
                 )
             step.candidates.append(cand)
 
-        # Главное объяснение: где полный просчёт пошёл против жадного правила.
+        # Key insight: where exact search intentionally overrode greedy height.
         chosen_h = [height[i] for i in issued]
         deferred = [c for c in step.candidates if not c.chosen]
         outranked = [c for c in deferred if chosen_h and c.height > max(chosen_h)]
         if outranked:
             names = ", ".join(dag[c.instr].name for c in outranked)
             step.comment = (
-                f"выдал операции с h={max(chosen_h)}, придержав {names} "
-                f"с h={max(c.height for c in outranked)}: жадное правило по "
-                f"критическому пути сделало бы наоборот"
+                f"issued ops with h={max(chosen_h)}, holding {names} "
+                f"with h={max(c.height for c in outranked)}: greedy critical-path "
+                f"would have done the opposite"
             )
         if not step.issued:
-            step.rule = "пауза"
+            step.rule = "pause"
             step.comment = (
-                "в этом расписании такт пуст — все нужные каналы заняты "
-                "ранее выданными операциями"
+                "cycle left empty — all required channels busy with "
+                "previously issued operations"
             )
         trace.append(step)
     return trace

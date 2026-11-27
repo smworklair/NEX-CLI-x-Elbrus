@@ -1,41 +1,39 @@
-# TINY AI: устройство и обучение
+# TINY AI: Architecture and Training
 
-Маленький MLP (~21 тыс. параметров), который даёт планировщику вектор приоритетов и отсрочки.
-Текст модель не генерирует, поэтому галлюцинаций нет как класса. Расписание строит обычный
-детерминированный код, и оно законно по построению.
+A small MLP (~21K parameters) that provides a priority vector and defer hints to a conventional scheduler. The model generates no text, so hallucinations cannot occur as a class. Deterministic code builds the schedule, guaranteeing validity by construction.
 
-Пользовательские цифры и границы — [`docs/TINY.md`](../../docs/TINY.md).
+User-facing numbers and boundaries: [`docs/TINY.md`](../../docs/TINY.md).
 
-## Файлы
+## Files
 
-| файл | роль |
+| file | role |
 |---|---|
-| `features.py` | 18 признаков узла: операция, height/asap, латентность, занятость, каналы, степени |
-| `model.py` | MLP 18→128→64→1, инференс на стандартной библиотеке |
-| `train.py` | обучение клонированием порядка CP-SAT-оракула |
-| `es.py` | Evolution Strategies по награде makespan |
-| `scheduler.py` | `TinyScheduler`: портфель и выбор лучшего makespan |
-| `fast.py` | `TinyFlashScheduler`: тот же результат, но быстрее |
-| `eval.py`, `verify.py` | замеры и проверка законности |
-| `weights.json`, `weights_defer.json`, `weights_hold.json` | обученные головы |
+| `features.py` | 18 node features: op class, height/asap, latency, occupancy, channels, degrees |
+| `model.py` | MLP 18→128→64→1, inference on Python stdlib |
+| `train.py` | behavioral cloning of CP-SAT oracle ordering |
+| `es.py` | Evolution Strategies optimizing makespan reward |
+| `scheduler.py` | `TinyScheduler`: candidate portfolio and best-makespan selection |
+| `fast.py` | `TinyFlashScheduler`: identical result, much faster |
+| `eval.py`, `verify.py` | benchmarks and validity verification |
+| `weights.json`, `weights_defer.json`, `weights_hold.json` | trained heads |
 
-## Портфель
+## Portfolio
 
 ```text
 greedy → prio → prio_defer → prio_hold → rule_hold → rule_hold_far
        → beam_t* → beam_h* → beam_d*
 ```
 
-Побеждает лучший makespan; ничьи отдаются жадному. Поэтому **хуже жадного не бывает**.
-Без `weights.json` остаётся честный фолбэк: веер вокруг height и жадный.
+The shortest makespan wins; ties go to greedy. Thus **it is never worse than greedy**.
+Without `weights.json`, an honest fallback remains: beam around height plus greedy.
 
-- **prio** — порядок из MLP.
-- **defer** — запрет «не раньше» с клипом по жадному makespan.
-- **hold** — держка после asap, отдельная голова.
-- **rule_hold** — ручные держки монопольного порта без ML.
-- **beam** — детерминированный джиттер порядка, K=16 вокруг двух нормализованных центров.
+- **prio** — priority order from MLP.
+- **defer** — "not earlier than" constraint clipped to greedy makespan.
+- **hold** — deliberate delay past ASAP, separate head.
+- **rule_hold** — handcrafted monopoly-port holds without ML.
+- **beam** — deterministic priority jitter, K=16 around two normalized centers.
 
-## Команды
+## Commands
 
 ```bash
 python -m vliw.tiny.train --train train_merged.jsonl \
@@ -49,27 +47,27 @@ python -m vliw.tiny.verify --weights vliw/tiny/weights.json --train-sample 500 -
 python -m unittest tests.test_tiny tests.test_tiny_fast tests.test_tiny_verify
 ```
 
-`numpy` нужен только для обучения. Инференс работает на голой стандартной библиотеке.
+`numpy` is only required for training. Inference runs on the bare standard library.
 
-## Наборы
+## Datasets
 
-| набор | роль | правило |
+| dataset | role | rule |
 |---|---|---|
-| `train_merged.jsonl` | обучение | можно использовать целиком |
-| `eval_hard_dev.jsonl` | отбор конфигурации | решать только по нему |
-| `eval_hard.jsonl` | финальный тест | смотреть один раз |
-| `eval_wide.jsonl` | регресс на лёгких | вровень с жадным |
-| случайные графы | never-worse | 0 ухудшений |
+| `train_merged.jsonl` | training | may be used in full |
+| `eval_hard_dev.jsonl` | config selection | base decisions only on this |
+| `eval_hard.jsonl` | final test | evaluate once |
+| `eval_wide.jsonl` | regression on easy graphs | tie with greedy |
+| random graphs | never-worse check | 0 regressions |
 
-## Результаты
+## Results
 
-- `eval_hard`: 284/300 в оптимуме, разрыв 0,053, законность 100%.
-- Настоящий код: 927/947 оптимальных блоков против 890 у жадного.
-- Ни одного ухудшения на 1 547 проверенных графах.
-- `TinyFlashScheduler`: тот же makespan, 0 расхождений на 3 061 графе; на `eval_real` 0,95 мс/граф.
+- `eval_hard`: 284/300 optimal, gap 0.053, 100% schedule validity.
+- Real code: 927/947 optimal blocks vs. 890 for greedy.
+- Zero regressions across 1,547 tested graphs.
+- `TinyFlashScheduler`: identical makespan, 0 discrepancies across 3,061 graphs; 0.95 ms/graph on `eval_real`.
 
-## Откуда идеи
+## Inspirations
 
-- `google/ml-compiler-opt` — behavioral cloning как warmstart и ES по makespan.
-- `llvm/llvm-project` — AOT-инференс модели без рантайма.
-- `google-research-datasets/tpu_graphs` — дисциплина «граф + конфиг + время».
+- `google/ml-compiler-opt` — behavioral cloning warmstart plus ES on makespan.
+- `llvm/llvm-project` — runtime-free AOT model inference.
+- `google-research-datasets/tpu_graphs` — "graph + config + timing" evaluation discipline.

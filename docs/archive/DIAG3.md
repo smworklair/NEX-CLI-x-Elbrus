@@ -1,74 +1,72 @@
-# Ограниченная генерация на широком эвале: квадрат 2×2
+# Constrained Generation on the Wide Eval: 2×2 Matrix
 
-Снято 30.08.2026 ядром `vliw-diag3-wide`. Весь `eval_wide.jsonl` (300
-примеров, графы 4..24), два адаптера, два режима генерации — одним ядром на
-одних примерах, чтобы разность строк означала ровно то, что на строках
-написано.
+Measured on 30.08.2026 with the `vliw-diag3-wide` kernel. All of `eval_wide.jsonl` (300
+examples, graphs of 4..24), two adapters, two generation modes — in a single kernel on
+the same examples, so that differences between rows mean exactly what the row labels say.
 
-## Результат
+## Result
 
-| адаптер | обычная генерация | ограниченная |
+| adapter | free generation | constrained |
 |---|---|---|
-| прогон 1 (`lora-eos`) | 98/300 (33%) | 202/300 (67%) |
-| прогон 2 | 44/300 (15%) | **253/300 (84%)** |
+| Run 1 (`lora-eos`) | 98/300 (33%) | 202/300 (67%) |
+| Run 2 | 44/300 (15%) | **253/300 (84%)** |
 
-Свободные числа воспроизвели известные (32.7% и 14.7%) — замер меряет то же,
-что мерили раньше, и ему можно верить.
+The free-generation numbers reproduced the previously known ones (32.7% and 14.7%) —
+the benchmark measures the same thing as before and can be trusted.
 
-**Лучшая клетка квадрата — прогон 2 под ограничением.** Тот самый прогон,
-который считался провалившимся.
+**The best cell in the matrix is Run 2 under constraints.** The very run that was
+considered a failure.
 
-## Что это значит для прогона 3
+## What this means for Run 3
 
-Прогон 2 **не провалил обучение**. Он обучился ЛУЧШЕ прогона 1 — под
-ограниченной генерацией 84% против 67% на одних и тех же примерах — и
-проиграл только потому, что не смог выдать формат (см. `docs/DIAG2.md`:
-теряется ведущее `\n0: `).
+Run 2 **did not fail training**. It trained BETTER than Run 1 — under constrained
+generation, 84% vs. 67% on the exact same examples — and lost only because it failed
+to emit the format (see `docs/DIAG2.md`: the leading `\n0: ` is dropped).
 
-То есть «нужен ли третий прогон обучения» — вопрос, поставленный на неверной
-посылке. Обучение не было проблемой. Проблемой было декодирование, и оно
-чинится без единой минуты GPU.
+In other words, "do we need a third training run" was a question built on a false
+premise. Training was not the problem. Decoding was the problem, and it can be fixed
+without a single minute of GPU time.
 
-## Предсказание: подтвердилось наполовину, и вторая половина полезнее
+## The prediction: half confirmed, and the second half is more useful
 
-Перед запуском записано: ограниченная генерация выбирает канал только из
-исполнимых, значит ошибки «операция на канале, который её не исполняет»
-обязаны ОБНУЛИТЬСЯ.
+Before launching, we wrote down: constrained generation picks a channel only from
+executable ones, so "operation on a channel that does not execute it" errors must
+DROP TO ZERO.
 
-| | незаконный канал | конфликт на канале | операнд не готов |
+| | illegal channel | channel conflict | operand not ready |
 |---|---|---|---|
-| прогон 1, обычный | 315 | 144 | 26 |
-| прогон 1, ограниченный | **0** | 208 | 26 |
-| прогон 2, обычный | 2 | 1 | 3 |
-| прогон 2, ограниченный | **0** | 58 | 2 |
+| Run 1, free | 315 | 144 | 26 |
+| Run 1, constrained | **0** | 208 | 26 |
+| Run 2, free | 2 | 1 | 3 |
+| Run 2, constrained | **0** | 58 | 2 |
 
-Незаконный канал обнулился ровно как предсказано — 315 → 0. Но в сводке по
-типам ошибок доля «ресурс» не упала, и сперва это выглядело опровержением.
-Причина в том, что классификатор кладёт в «ресурс» ДВА разных отказа:
+Illegal channels dropped to zero exactly as predicted — 315 → 0. Yet in the error-type
+summary, the "resource" share did not fall, which at first looked like a refutation.
+The reason is that the classifier lumps TWO distinct failures into "resource":
 
-* **незаконный канал** — операция там не исполняется вовсе. Ограничение
-  снимает его по построению;
-* **конфликт на канале** — две операции выбрали ОДИН И ТОТ ЖЕ законный
-  канал в одном такте. Ограничение его не снимает, а местами усугубляет
-  (208 против 144 у прогона 1): маска сужает выбор до исполнимых каналов, и
-  вероятность, что двое выберут один, растёт.
+* **illegal channel** — the operation does not execute there at all. Constrained
+  decoding eliminates this by construction;
+* **channel conflict** — two operations picked the EXACT SAME legal channel in
+  the same cycle. Constrained decoding does not eliminate this, and in places makes
+  it worse (208 vs. 144 for Run 1): the mask narrows the choice to executable
+  channels, increasing the probability that two operations pick the same one.
 
-Ошибка была в формулировке предсказания, не в механизме: «85% ошибок
-ресурса» я приравнял к «незаконный канал», хотя это две трети от них.
+The mistake was in the wording of the prediction, not the mechanism: I equated
+"85% resource errors" with "illegal channel", even though that was only two-thirds
+of them.
 
-## Отсюда прямой следующий шаг
+## The direct next step
 
-Ограниченная генерация маскирует по `CHANNELS[op]` — по тому, где операция
-ЗАКОННА. Ей не хватает второго условия: где канал ещё СВОБОДЕН в этом такте.
-Это ровно та разница, из-за которой `repair.py` считает паросочетанием, а не
-жадно (см. его докстринг: ADD исполним на всех шести и может занять `,2`,
-оставив STORE без места).
+Constrained generation masks by `CHANNELS[op]` — where the operation is LEGAL.
+It is missing the second condition: where the channel is still FREE in that cycle.
+That is the exact difference why `repair.py` solves via bipartite matching rather
+than greedily (see its docstring: ADD can execute on all six and may occupy `,2`,
+leaving STORE with nowhere to go).
 
-Свести их — и остаётся один класс ошибок, «операнд не готов» (26 и 2), с
-которым не справляется ни один из подходов: он про такты, а такты обе
-техники не трогают.
+Combine them — and only one error class remains, "operand not ready" (26 and 2),
+which neither approach handles: it is about cycles, and neither technique touches
+cycles.
 
-Старый спор «`--constrained` против `repair.py`» этим закрывается: они не
-конкуренты и не
-дубликаты. Одна даёт структурную гарантию законности канала, другая —
-алгоритм бесконфликтной раздачи. Нужны обе, в одном месте.
+This closes the old "`--constrained` vs. `repair.py`" debate: they are neither
+competitors nor duplicates. One provides a structural guarantee of channel legality;
+the other provides a conflict-free assignment algorithm. Both are needed, in one place.

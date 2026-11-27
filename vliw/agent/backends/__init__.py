@@ -1,16 +1,16 @@
-"""Backend'ы агента: один интерфейс, по файлу на провайдер.
+"""Agent backends: one interface, one file per provider.
 
-Концепт — как `Backend.generate(prompt) -> str` в Nex-pilot
-(`nexpilot/backends/base.py`): верхние слои (`agent.py`, `analyst.py`)
-не знают, в какой именно API ушёл запрос — Mistral, Gemini, GigaChat,
-YandexGPT или любой OpenAI-совместимый. Добавление нового провайдера —
-новый файл здесь + одна строка в реестре `llm.py`, без правок агента.
+Same design as `Backend.generate(prompt) -> str` in Nex-pilot
+(`nexpilot/backends/base.py`): upper layers (`agent.py`, `analyst.py`)
+don't know which API handles the request — Mistral, Gemini, GigaChat,
+YandexGPT, or any OpenAI-compatible server. Adding a new provider means
+adding one file here and one entry in `llm.py`, without touching the agent.
 
-Ограничения намеренные, как и в старом `llm.py`:
-  * только стандартная библиотека (`urllib`, `json`) — без новых
-    зависимостей, проект остаётся запускаемым голым Python;
-  * секреты только из окружения/`.env`/`~/.config/nex/key` (см. `llm.py`),
-    никогда строкой в коде и никогда в git (`.env` в `.gitignore`).
+Intentional constraints (same as legacy `llm.py`):
+  * standard library only (`urllib`, `json`) — zero extra dependencies,
+    so the project stays runnable on bare Python;
+  * secrets come only from env / `.env` / `~/.config/nex/key` (see `llm.py`),
+    never hardcoded in source or committed to git (`.env` is in `.gitignore`).
 """
 
 from .base import Backend, LLMError

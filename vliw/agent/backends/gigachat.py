@@ -1,20 +1,20 @@
-"""Сбер GigaChat: OAuth через ngw + OpenAI-подобный chat/completions.
+"""Sber GigaChat: OAuth via ngw + OpenAI-compatible chat/completions.
 
-Аутентификация отличается от всех остальных: вместо готового API-ключа —
-пара client_id/client_secret, по которой получается временный токен
-(`POST {auth_url}/api/v2/oauth`, `scope=GIGACHAT_API_PERS` по умолчанию).
-Токен кэшируется до истечения (`expires_at`), дальше запрашивается заново.
+Authentication differs from other providers: instead of a static API key,
+a client_id/client_secret pair is exchanged for a short-lived token
+(`POST {auth_url}/api/v2/oauth`, `scope=GIGACHAT_API_PERS` by default).
+The token is cached until `expires_at` and refreshed automatically.
 
-Переменные окружения (см. `.env.example`):
-  GIGACHAT_CLIENT_ID / GIGACHAT_CLIENT_SECRET — обязательны
-    (или NEX_API_KEY вида "id:secret" — на случай одного поля ввода)
-  GIGACHAT_SCOPE — по умолчанию GIGACHAT_API_PERS
-  GIGACHAT_BASE_URL — по умолчанию https://api.giga.chat/v1 (с 07.2026
-  целевой адрес; старый gigachat.devices.sberbank.ru пока жив, но выводится)
-  GIGACHAT_AUTH_URL — по умолчанию https://ngw.devices.sberbank.ru:9443
-  GIGACHAT_MODEL — по умолчанию GigaChat
-  GIGACHAT_INSECURE=1 — не проверять TLS-сертификат (запасной путь,
-    если в окружении нет корневых CA; по умолчанию проверка включена)
+Environment variables (see `.env.example`):
+  GIGACHAT_CLIENT_ID / GIGACHAT_CLIENT_SECRET — required
+    (or NEX_API_KEY in "id:secret" form for single-field entry)
+  GIGACHAT_SCOPE — defaults to GIGACHAT_API_PERS
+  GIGACHAT_BASE_URL — defaults to https://api.giga.chat/v1 (target endpoint
+    from 07.2026; legacy gigachat.devices.sberbank.ru is being phased out)
+  GIGACHAT_AUTH_URL — defaults to https://ngw.devices.sberbank.ru:9443
+  GIGACHAT_MODEL — defaults to GigaChat
+  GIGACHAT_INSECURE=1 — skip TLS certificate verification (fallback when
+    root CAs are missing in the environment; verification is on by default)
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ class GigaChatBackend(Backend):
             cid, _, sec = env.get("NEX_API_KEY", "").partition(":")
             cid, sec = cid.strip(), sec.strip()
         if not cid or not sec:
-            raise LLMError("GigaChat: задайте GIGACHAT_CLIENT_ID и GIGACHAT_SECRET "
-                           "(или NEX_API_KEY вида \"id:secret\")")
+            raise LLMError('GigaChat: set GIGACHAT_CLIENT_ID and GIGACHAT_SECRET '
+                           '(or NEX_API_KEY as "id:secret")')
         self._cid = cid.strip()
         self._sec = sec.strip()
         self._scope = scope or env.get("GIGACHAT_SCOPE", "") or "GIGACHAT_API_PERS"
@@ -62,7 +62,7 @@ class GigaChatBackend(Backend):
         self._token = ""
         self._token_until = 0.0
 
-    # --- токен ---
+    # --- token ---
 
     def _ctx(self) -> ssl.SSLContext | None:
         if self._insecure:
@@ -81,7 +81,7 @@ class GigaChatBackend(Backend):
     def _fetch_token(self) -> str:
         import uuid
 
-        # RqUID обязан быть свежим на каждый запрос токена.
+        # RqUID must be fresh for every token request.
         headers = self._token_headers()
         headers["RqUID"] = str(uuid.uuid4())
         body = urllib.parse.urlencode({"scope": self._scope}).encode()
@@ -96,11 +96,10 @@ class GigaChatBackend(Backend):
             raise LLMError(f"GigaChat OAuth: {type(e).__name__}: {e}") from None
         tok = data.get("access_token", "")
         if not tok:
-            raise LLMError(f"GigaChat OAuth: нет access_token в ответе")
-        # `expires_at` у Сбера — абсолютное unix-время (30 минут), а не
-        # длительность: складывать его с now() значило бы кэшировать токен
-        # на десятилетия. Различаем по величине. Про запас обновляем за
-        # минуту до истечения.
+            raise LLMError("GigaChat OAuth: no access_token in response")
+        # Sber's `expires_at` is an absolute Unix timestamp (30 min), not a TTL:
+        # adding it to now() would cache the token for decades. Distinguish by
+        # magnitude and refresh one minute before expiry.
         try:
             exp = int(data.get("expires_at", 0) or 0)
         except (TypeError, ValueError):
@@ -119,7 +118,7 @@ class GigaChatBackend(Backend):
             return self._token
         return self._fetch_token()
 
-    # --- генерация ---
+    # --- generation ---
 
     def _headers(self, stream: bool = False) -> dict:
         return {"Content-Type": "application/json",
@@ -144,11 +143,11 @@ class GigaChatBackend(Backend):
     def _text_of(self, data: dict) -> tuple[str, int]:
         choices = data.get("choices") or []
         if not choices:
-            raise LLMError("модель не вернула ответ")
+            raise LLMError("model returned no response")
         text = content_str(choices[0].get("message", {}).get("content")).strip()
         used = int(data.get("usage", {}).get("completion_tokens", 0) or 0)
         if not text:
-            raise LLMError(f"пустой ответ (finish={choices[0].get('finish_reason')})")
+            raise LLMError(f"empty response (finish={choices[0].get('finish_reason')})")
         return text, used
 
     def complete(self, system, question, history=None, temperature=0.3) -> str:

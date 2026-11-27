@@ -1,14 +1,9 @@
-"""Разбор буфера КОДА: номера строк, линтер и свежесть результатов.
+"""CODE mode buffer parsing: line numbers, linter diagnostics, and cache invalidation.
 
-Редактор режима КОД ставит расписание НА текст — такт и канал в гуттере той
-самой строки, метку `▲` на строке с ошибкой, переход «замечание → курсор».
-Всё это держится на двух вещах, которых у разбора раньше не было: номере
-строки у операции и списке замечаний с этим номером. Здесь они и проверяются,
-без интерфейса — чтобы поломка была видна в ядре, а не в скриншоте.
-
-Отдельно проверяется линтер. Его смысл не в красоте: он ловит ошибки, которые
-АССЕМБЛЕР ПРОПУСКАЕТ — код собирается, считает не то, и виноватой выглядит
-логика. Поэтому у каждой проверки здесь свой тест с конкретным номером строки.
+The CODE editor overlays schedule annotations onto assembly source (issue cycle
+and port in the gutter, `▲` markers on errors, jump-to-line). All of this rests
+on two core invariants: accurate source line numbers per operation and a linter
+that catches hazards the e2k assembler silently accepts.
 """
 
 from __future__ import annotations
@@ -23,23 +18,23 @@ try:
     import textual  # noqa: F401
 
     HAS_TEXTUAL = True
-except Exception:  # pragma: no cover - зависит от окружения
+except Exception:  # pragma: no cover - environment-dependent
     HAS_TEXTUAL = False
 
 
 def _lint(text: str):
-    parsed = asm_parser.parse_asm(text, source="<тест>")
+    parsed = asm_parser.parse_asm(text, source="<test>")
     model = get_profile(DEFAULT_PROFILE)
     return parsed, asm_parser.lint(parsed, model)
 
 
 class TestLineNumbers(unittest.TestCase):
     def test_op_knows_its_source_line(self) -> None:
-        parsed, _ = _lint("! шапка\n{\n  adds,0 %r1, %r2, %r3\n}\n")
+        parsed, _ = _lint("! header\n{\n  adds,0 %r1, %r2, %r3\n}\n")
         self.assertEqual([o.line for o in parsed.ops], [3])
 
     def test_skipped_lines_do_not_shift_the_rest(self) -> None:
-        """Нумерация идёт по ФАЙЛУ, а не по порядку разобранных операций."""
+        """Line numbering tracks the SOURCE FILE, not the parsed-op index."""
         parsed, _ = _lint("{\n  ???\n  adds,0 %r1, %r2, %r3\n}\n")
         self.assertEqual([o.line for o in parsed.ops], [3])
 
@@ -57,29 +52,29 @@ class TestLineNumbers(unittest.TestCase):
 
 class TestLint(unittest.TestCase):
     def test_clean_fragment_has_nothing_to_say(self) -> None:
-        """Законный код — ни одного замечания, кроме info про каналы."""
+        """Legal assembly produces zero errors."""
         text = ("{\n  muls,0 %r10, %r11, %r20\n  muls,1 %r12, %r13, %r21\n}\n"
                 "nop 3\n{\n  adds,0 %r20, %r21, %r22\n}\n")
         _, problems = _lint(text)
         self.assertEqual([p for p in problems if p.severity == "error"], [])
 
     def test_channel_outside_the_port_matrix(self) -> None:
-        """`muls,2` ассемблер отвергает: умножение живёт на ,0 ,1 ,3 ,4."""
+        """`muls,2` is rejected by the assembler: MUL executes only on ,0 ,1 ,3 ,4."""
         _, problems = _lint("{\n  muls,2 %r1, %r2, %r3\n}\n")
         chan = [p for p in problems if p.kind == "channel"]
         self.assertEqual([(p.line, p.severity) for p in chan], [(2, "error")])
         self.assertIn(",0", chan[0].hint)
 
     def test_second_division_while_the_port_is_still_held(self) -> None:
-        """Делитель держит ,5 два такта — соседний такт его не примет."""
+        """DIV holds port ,5 for 2 cycles — the next cycle cannot issue another DIV."""
         _, problems = _lint("{\n  sdivs,5 %r0, %r1, %r2\n}\n"
                             "{\n  sdivs,5 %r3, %r4, %r5\n}\n")
         busy = [p for p in problems if p.kind == "busy"]
         self.assertEqual([p.line for p in busy], [5])
-        self.assertIn("строки 2", busy[0].text)
+        self.assertIn("line 2", busy[0].text)
 
     def test_reading_a_result_before_it_is_ready(self) -> None:
-        """Латентность деления 11 тактов: чтение через такт читает старое."""
+        """DIV latency is 11 cycles: reading earlier creates a RAW hazard."""
         _, problems = _lint("{\n  sdivs,5 %r0, %r1, %r2\n}\n"
                             "nop 2\n{\n  adds,0 %r2, %r3, %r4\n}\n")
         ready = [p for p in problems if p.kind == "ready"]
@@ -87,41 +82,30 @@ class TestLint(unittest.TestCase):
         self.assertIn("11", ready[0].text)
 
     def test_lint_agrees_with_the_core_validator(self) -> None:
-        """Что линтер зовёт ошибкой, то и `Schedule.validate` считает ошибкой.
-
-        Две независимые реализации одного правила разъезжаются молча, и
-        разъехавшись, дают редактору право говорить «всё хорошо» о коде,
-        который ядро потом отвергает. Поэтому — сверка на одном тексте.
-        """
+        """What the linter flags as an error must also fail `Schedule.validate()`."""
         text = ("{\n  muls,0 %r1, %r2, %r3\n}\n{\n  adds,0 %r3, %r4, %r5\n}\n")
         parsed, problems = _lint(text)
         model = get_profile(DEFAULT_PROFILE)
-        dag = asm_parser.build_dag(parsed, key="asm:тест", title="тест")
+        dag = asm_parser.build_dag(parsed, key="asm:test", title="test")
         sched = asm_parser.compiler_schedule(parsed, dag, model)
         self.assertTrue([p for p in problems if p.kind == "ready"],
-                        "линтер обязан увидеть чтение раньше латентности")
+                        "linter must flag RAW hazard before latency elapses")
         self.assertTrue(sched.validate(),
-                        "ядро обязано увидеть то же самое")
+                        "core validator must report the same violation")
 
     def test_missing_channels_are_flagged_as_a_guess(self) -> None:
-        """Без каналов раскладка — наша догадка, и это должно быть сказано."""
+        """Ops without explicit issue ports are flagged as free/unassigned."""
         _, problems = _lint("{\n  adds %r1, %r2, %r3\n}\n")
         self.assertEqual([p.kind for p in problems if p.kind == "free"],
                          ["free"])
 
 
-# Каталог примеров лежит в vliw/tui/screens/code_screen.py, а он тянет
-# textual. Без гварда эти два теста падали ModuleNotFoundError вместо
-# пропуска — вопреки обещанию QUICKSTART «Skips without textual are normal».
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен — каталог примеров живёт в модуле TUI")
+@unittest.skipUnless(HAS_TEXTUAL, "textual not installed — example catalog lives in TUI module")
 class TestExampleCatalogue(unittest.TestCase):
-    """Примеры из `examples/code/*.s` обязаны говорить о себе правду.
+    """Examples in `examples/code/*.s` must match their declared `! nex:` headers.
 
-    В шапке каждого файла стоит строка `! nex: src=… orc=… err=…` — числа,
-    которые пример обещает показать. Пример живёт годами, модель машины и
-    планировщик меняются, и разъехаться эти числа могут молча: файл никто не
-    открывает, пока он не понадобился на демонстрации. Тест пересчитывает их
-    заново тем же кодом, что и режим КОД.
+    Each file carries `! nex: src=… orc=… err=…`. Recomputing these values with
+    the current machine model and oracle prevents stale demo expectations.
     """
 
     import re as _re
@@ -135,7 +119,7 @@ class TestExampleCatalogue(unittest.TestCase):
 
     def test_every_catalogue_entry_has_a_file(self) -> None:
         for name, path in self._files():
-            self.assertTrue(path.exists(), f"{name}: нет файла {path}")
+            self.assertTrue(path.exists(), f"{name}: missing file {path}")
 
     def test_headers_match_what_the_tool_computes(self) -> None:
         from vliw.core.oracle import OracleScheduler
@@ -145,14 +129,13 @@ class TestExampleCatalogue(unittest.TestCase):
             with self.subTest(example=name):
                 text = path.read_text(encoding="utf-8")
                 m = self.HEADER.search(text)
-                self.assertIsNotNone(m, f"{name}: нет строки `! nex: …`")
+                self.assertIsNotNone(m, f"{name}: missing `! nex: …` header")
                 want_src, want_orc, want_err = m.groups()
 
                 parsed = asm_parser.parse_asm(text, source=name)
                 dag = asm_parser.build_dag(parsed, key=f"asm:{name}")
                 sched = asm_parser.compiler_schedule(parsed, dag, model)
-                # То же правило, что в ядре: раскладка, которая не сходится с
-                # моделью, расписанием НЕ считается.
+                # Same rule as the core: an invalid layout does not count as a legal schedule.
                 src = sched.makespan if sched and not sched.validate() else None
                 orc = OracleScheduler(budget_s=6.0,
                                       portfolio_s=2.0).schedule(dag, model)
@@ -160,15 +143,15 @@ class TestExampleCatalogue(unittest.TestCase):
                 errs = [p for p in problems if p.severity == "error"]
 
                 self.assertEqual(str(src if src is not None else "none"),
-                                 want_src, f"{name}: src разъехался")
+                                 want_src, f"{name}: src makespan drifted")
                 self.assertEqual(orc.schedule.makespan, int(want_orc),
-                                 f"{name}: orc разъехался")
+                                 f"{name}: oracle makespan drifted")
                 self.assertEqual(len(errs), int(want_err),
-                                 f"{name}: число ошибок разъехалось")
+                                 f"{name}: error count drifted")
 
 
 class TestResultsFreshness(unittest.TestCase):
-    """Правка буфера обязана менять числа, а не показывать прошлый прогон."""
+    """Editing the buffer must invalidate cached schedules instead of returning stale runs."""
 
     def test_set_dag_drops_the_cached_results(self) -> None:
         from vliw import cli
@@ -177,59 +160,41 @@ class TestResultsFreshness(unittest.TestCase):
         session = cli.Session(args=args)
 
         short = asm_parser.parse_asm("{\n  adds,0 %r1, %r2, %r3\n}\n")
-        session.set_dag(asm_parser.build_dag(short, key="asm:буфер"),
-                        "asm:буфер")
+        session.set_dag(asm_parser.build_dag(short, key="asm:buffer"),
+                        "asm:buffer")
         first = session.results()[1].schedule.makespan
 
         long = asm_parser.parse_asm(
             "{\n  sdivs,5 %r0, %r1, %r2\n}\n"
             "nop 11\n{\n  adds,0 %r2, %r3, %r4\n}\n")
-        session.set_dag(asm_parser.build_dag(long, key="asm:буфер"),
-                        "asm:буфер")
+        session.set_dag(asm_parser.build_dag(long, key="asm:buffer"),
+                        "asm:buffer")
         second = session.results()[1].schedule.makespan
 
         self.assertNotEqual(first, second,
-                            "второй прогон отдал числа первого — кэш не сброшен")
-class TestRealCompilerOutput(unittest.TestCase):
-    """Разбор НАСТОЯЩЕГО вывода lcc, а не только калибровочных проб.
+                            "second run returned first run's makespan — cache not invalidated")
 
-    Все три проверяемые здесь вещи найдены одинаково: сравнением разбора с
-    выводом `lcc -O3` на обычной C-программе. На `examples/probes/*.s` ни
-    одна из них не проявляется — пробы слишком просты, — поэтому и прожили
-    незамеченными до первого настоящего файла.
-    """
+
+class TestRealCompilerOutput(unittest.TestCase):
+    """Parsing REAL `lcc -O3` output, not just synthetic calibration probes."""
 
     def test_speculative_modifier_does_not_eat_the_line(self):
-        """`,sm` после канала не должен выбрасывать операцию целиком.
-
-        Компилятор помечает спекулятивные операции `merges,2,sm`. Прежний
-        шаблон ждал после канала пробел, строка не подходила под него
-        ЦЕЛИКОМ и молча пропадала: на обычном цикле так терялось 90 строк
-        из 182 — больше половины кода.
-        """
+        """Speculative `,sm` suffix after a channel must not drop the instruction."""
         from vliw.core.asm_parser import parse_asm
 
         src = "{\n  merges,2,sm\t0x1, %g17, %r9, %pred3\n  adds,0\t%r1, %r2, %r3\n}\n"
         parsed = parse_asm(src)
-        self.assertEqual(len(parsed.ops), 2, "спекулятивная операция потерялась")
+        self.assertEqual(len(parsed.ops), 2, "speculative op was dropped")
         spec = parsed.ops[0]
-        self.assertEqual(spec.channel, 2, "канал перед модификатором не прочитан")
-        self.assertEqual(spec.flags, ("sm",), "модификатор не сохранён")
-        self.assertEqual(parsed.ops[1].flags, (), "обычной операции приписан флаг")
+        self.assertEqual(spec.channel, 2, "channel before modifier was not parsed")
+        self.assertEqual(spec.flags, ("sm",), "modifier flag was not preserved")
+        self.assertEqual(parsed.ops[1].flags, (), "plain op received spurious flags")
 
     def test_unknown_mnemonic_is_not_passed_off_as_addition(self):
-        """Незнакомое с каналом — UNKNOWN, а не ADD.
-
-        Прежде класс подменялся на ADD (иначе `model.op()` бросал KeyError),
-        и `fdivd` уезжал в отчёт арифметикой с латентностью 1. Подмена была
-        не видна: в сводке она выглядела как «88% ADD».
-        """
+        """An unrecognized channelized op must be classified as UNKNOWN, never silently ADD."""
         from vliw.core.asm_parser import parse_asm
 
-        # Мнемоника ВЫМЫШЛЕННАЯ намеренно. Здесь дважды стояли настоящие
-        # (`fdivd`, потом `aaurwd`), и дважды тест ломался — не потому что
-        # сломалось поведение, а потому что словарь дорос до них. Проверяем
-        # обработку неизвестного, а не то, чего в словаре пока нет.
+        # Intentionally fictional mnemonic so future opcode additions never break this test.
         parsed = parse_asm("{\n  zzqwrt,1\t%r1, %r2, %r3\n}\n")
         self.assertEqual(len(parsed.ops), 1)
         self.assertEqual(parsed.ops[0].op, "UNKNOWN")
@@ -237,14 +202,7 @@ class TestRealCompilerOutput(unittest.TestCase):
         self.assertEqual(parsed.unknown_mnemonics, {"zzqwrt": 1})
 
     def test_unknown_without_channel_is_not_an_alc_operation(self):
-        """Незнакомое БЕЗ канала в граф вычислений не идёт.
-
-        В e2k всё, что исполняется на шести арифметических каналах, несёт
-        `,N`. Без него это предикатная логика (`landp`, `pass`) или
-        подготовка перехода (`ldisp`) — другой блок машины. Раньше такие
-        занимали арифметические порты, и восстановление расписания
-        компилятора падало на первом же из них.
-        """
+        """Unrecognized ops without `,N` are control/predicate ops, not ALC arithmetic ops."""
         from vliw.core.asm_parser import parse_asm
 
         parsed = parse_asm("{\n  landp\t~%pred0, ~%pred1, %pred2\n"
@@ -254,7 +212,7 @@ class TestRealCompilerOutput(unittest.TestCase):
         self.assertIn("landp", parsed.unknown_mnemonics)
 
     def test_setwd_and_friends_are_control_not_arithmetic(self):
-        """`setwd` объявляет окно регистров — это не вычисление."""
+        """`setwd` configures the register window — it is a control op, not arithmetic."""
         from vliw.core.asm_parser import parse_asm
 
         parsed = parse_asm("{\n  setwd\twsz = 0xc, nfx = 0x1\n"
@@ -262,55 +220,35 @@ class TestRealCompilerOutput(unittest.TestCase):
         self.assertEqual([o.mnemonic for o in parsed.ops], ["adds"])
         self.assertEqual(parsed.control_ops, 1)
         self.assertEqual(parsed.unknown_mnemonics, {},
-                         "управляющая операция не должна числиться незнакомой")
+                         "control op must not be reported as unknown")
 
     def test_model_answers_for_unknown_class(self):
-        """Модель обязана знать UNKNOWN во ВСЕХ профилях.
-
-        Иначе парсер не может честно сказать «не знаю»: `model.op()` бросит
-        KeyError и уронит всё, что ниже по цепочке. Ровно поэтому подмена на
-        ADD и появилась.
-        """
+        """Every machine profile must define UNKNOWN with placeholder latency 1 and valid ports."""
         from vliw.core.model import PROFILES, get_profile
 
         for name in PROFILES:
-            with self.subTest(профиль=name):
+            with self.subTest(profile=name):
                 model = get_profile(name)
                 self.assertEqual(model.latency("UNKNOWN"), 1)
                 self.assertTrue(model.channels_for("UNKNOWN"),
-                                "без портов операцию некуда поставить")
+                                "UNKNOWN must have at least one valid port")
 
     def test_calibration_probes_still_parse(self):
-        """Пробы, на которых снята модель машины, разбираются без незнакомых.
-
-        Страховка от правок словаря: если из `MNEMONICS` пропадёт что-то
-        нужное, это увидится здесь, а не в отчёте по настоящему коду.
-        """
+        """Calibration probes used to measure the machine model must parse with zero unknowns."""
         from vliw.core.asm_parser import parse_asm
 
         root = Path(__file__).resolve().parent.parent / "examples" / "probes"
         found = sorted(root.glob("*.s"))
-        self.assertTrue(found, "пробы не найдены — проверять нечего")
+        self.assertTrue(found, "no calibration probes found")
         for path in found:
-            with self.subTest(проба=path.name):
+            with self.subTest(probe=path.name):
                 parsed = parse_asm(path.read_text(encoding="utf-8"))
                 self.assertEqual(parsed.unknown_mnemonics, {})
                 self.assertTrue(parsed.ops)
 
 
 class TestStandaloneCollectorMatchesCore(unittest.TestCase):
-    """`tools/collect_real_schedule.py` обязан разбирать так же, как ядро.
-
-    Скрипт самодостаточен НАМЕРЕННО: его отдают человеку, у которого
-    репозитория нет. Цена самодостаточности — копия логики разбора, и она
-    уже один раз разошлась молча: скрипт перестал выдавать незнакомую
-    мнемонику за сложение и получил полный список управляющих операций, а
-    ядро осталось со старым поведением. Расхождение обнаружилось только
-    когда его результаты сравнили с результатами проекта на одном файле.
-
-    Тест сравнивает не построчно (копия имеет право быть иначе устроена), а
-    по наблюдаемому итогу: словари, списки и разбор настоящего файла.
-    """
+    """`tools/collect_real_schedule.py` must stay in sync with `vliw.core.asm_parser`."""
 
     @staticmethod
     def _script():
@@ -327,15 +265,15 @@ class TestStandaloneCollectorMatchesCore(unittest.TestCase):
     def test_mnemonic_tables_agree(self):
         scr = self._script()
         self.assertEqual(scr.MNEMONICS, asm_parser.MNEMONICS,
-                         "словарь мнемоник разошёлся со скриптом")
+                         "MNEMONICS table diverged from standalone collector")
 
     def test_control_lists_agree(self):
         scr = self._script()
         self.assertEqual(set(scr.CONTROL), set(asm_parser.CONTROL),
-                         "список управляющих операций разошёлся со скриптом")
+                         "CONTROL op list diverged from standalone collector")
 
     def test_same_classes_on_the_same_source(self):
-        """Один и тот же текст — один и тот же разбор по классам операций."""
+        """Identical assembly input must produce identical op-class counts."""
         import collections
 
         scr = self._script()
@@ -353,45 +291,29 @@ class TestStandaloneCollectorMatchesCore(unittest.TestCase):
 
 
 class TestWideInstructionSemantics(unittest.TestCase):
-    """Внутри широкой команды все читают ДО того, как ляжет любая запись.
-
-    Найдено на настоящем выводе lcc: расписание самого компилятора не
-    проходило `Schedule.validate()` — инструмент объявлял вывод lcc
-    незаконным. Причина была не в модели машины, а в разборе: зависимости
-    строились по порядку строк внутри `{ … }`, и соседи по одному такту
-    получали выдуманное ребро «запись → чтение».
-    """
+    """Within a VLIW bundle, all operands are read BEFORE any write commits."""
 
     def test_same_bundle_read_sees_the_old_value(self):
-        """Загрузка и потребитель в одном такте — НЕ зависимость.
-
-        Пара из probe.s: `ldw` пишет %r5, соседний `sdivs` читает %r5. Это
-        СТАРЫЙ %r5 — загрузка готовит регистр следующему потребителю. Ребро
-        здесь завышало критический путь и ломало проверку расписания.
-        """
+        """A load and a consumer of the same register in one VLIW bundle do NOT form a RAW edge."""
         src = ("{\n  ldw,0\t0x0, [ %dr1 ], %r5\n"
                "  sdivs,5\t%r5, %r6, %r4\n}\n")
         parsed = asm_parser.parse_asm(src)
         dag = asm_parser.build_dag(parsed)
         self.assertEqual(len(dag.instrs), 2)
         self.assertEqual(dag.instrs[1].preds, (),
-                         "сосед по такту не может быть производителем")
+                         "same-bundle neighbor cannot be a RAW producer")
 
     def test_next_bundle_does_depend(self):
-        """А через такт зависимость настоящая и обязана быть."""
+        """Across consecutive bundles, the RAW dependency edge must be created."""
         src = ("{\n  ldw,0\t0x0, [ %dr1 ], %r5\n}\n"
                "{\n  adds,1\t%r5, %r6, %r7\n}\n")
         parsed = asm_parser.parse_asm(src)
         dag = asm_parser.build_dag(parsed)
         self.assertEqual(dag.instrs[1].preds, (0,),
-                         "зависимость между тактами потерялась")
+                         "inter-bundle RAW dependency was lost")
 
     def test_compiler_schedule_of_real_probes_validates(self):
-        """Расписание lcc из проб обязано проходить нашу же проверку.
-
-        Прямая страховка от возврата бага: если разбор снова начнёт выдумывать
-        рёбра, `validate()` на выводе компилятора это увидит.
-        """
+        """Reconstructed `lcc` schedules for calibration probes must pass `Schedule.validate()`."""
         from vliw.core.model import get_profile
 
         model = get_profile(DEFAULT_PROFILE)
@@ -402,23 +324,16 @@ class TestWideInstructionSemantics(unittest.TestCase):
             dag = asm_parser.build_dag(parsed)
             sched = asm_parser.compiler_schedule(parsed, dag, model)
             if sched is None:
-                continue          # раскладка по каналам не сошлась — другой случай
+                continue
             checked += 1
-            with self.subTest(проба=path.name):
+            with self.subTest(probe=path.name):
                 self.assertEqual(sched.validate(), [],
-                                 "расписание компилятора объявлено незаконным")
-        self.assertTrue(checked, "ни одной пробы не проверено")
+                                 "compiler schedule falsely rejected as illegal")
+        self.assertTrue(checked, "no probes were validated")
 
 
 class TestHonestCompilerComparison(unittest.TestCase):
-    """Разницу с компилятором нельзя называть резервом, если модель не знает
-    половины операций.
-
-    На выводе `lcc -O3` обычного цикла инструмент показывал «резерв 71%»:
-    63 из 132 операций получили класс UNKNOWN с латентностью-заглушкой 1,
-    и точный поиск обыгрывал компилятор просто потому, что не знал их
-    настоящей цены. Такое число, показанное как достижение, — неправда.
-    """
+    """Do not claim speedup headroom over `lcc` when many ops are UNKNOWN placeholders."""
 
     @staticmethod
     def _render(ops_unknown: int, ops_known: int, comp: int, orc: int):
@@ -437,24 +352,17 @@ class TestHonestCompilerComparison(unittest.TestCase):
 
     def test_large_unknown_share_blocks_the_claim(self):
         text = self._render(63, 69, comp=77, orc=22)
-        self.assertIn("несостоятельно", text)
-        self.assertNotIn("резерв 55", text)
+        self.assertIn("invalid", text)
+        self.assertNotIn("headroom 55", text)
 
     def test_clean_graph_still_reports_the_reserve(self):
         text = self._render(0, 36, comp=35, orc=26)
-        self.assertIn("резерв 9", text)
-        self.assertNotIn("несостоятельно", text)
+        self.assertIn("headroom 9", text)
+        self.assertNotIn("invalid", text)
 
 
 class TestSingleBundleFile(unittest.TestCase):
-    """Файл из ОДНОЙ широкой команды не должен растаскиваться по тактам.
-
-    Запасная ветка разбора («файл без фигурных скобок — каждая операция свой
-    такт») смотрела на то, находимся ли мы ВНУТРИ команды в конце файла. После
-    закрывающей `}` флаг снят, а такты у всех операций нулевые — и ветка
-    срабатывала на совершенно обычном файле, разнося соседей по такту на
-    разные такты. На многотактных файлах не проявлялось: там такты разные.
-    """
+    """A single-bundle `{ ... }` file must stay one cycle, not split into per-op cycles."""
 
     ONE = "{\n  ldw,0\t0x0, [ %dr1 ], %r5\n  adds,1\t%r6, %r7, %r8\n}\n"
 
@@ -464,7 +372,7 @@ class TestSingleBundleFile(unittest.TestCase):
         self.assertEqual([o.cycle for o in parsed.ops], [0, 0])
 
     def test_file_without_braces_still_splits(self):
-        """А настоящий файл без скобок по-прежнему считается по операции в такт."""
+        """Brace-free flat assembly still assigns one operation per cycle."""
         src = "  ldw,0\t0x0, [ %dr1 ], %r5\n  adds,1\t%r6, %r7, %r8\n"
         parsed = asm_parser.parse_asm(src)
         self.assertEqual([o.cycle for o in parsed.ops], [0, 1])
@@ -472,14 +380,7 @@ class TestSingleBundleFile(unittest.TestCase):
 
 
 class TestLinterDoesNotBlameTheCompiler(unittest.TestCase):
-    """Линтер не должен объявлять вывод настоящего lcc незаконным.
-
-    Проверка «результат ещё не готов» шла по порядку строк и не знала, что
-    внутри широкой команды все читают ДО записей. На probe.s это давало три
-    ошибки на ровном месте — инструмент говорил, что компилятор Эльбруса
-    выдал неверный код. Та же ошибка была в build_dag; здесь отдельная копия
-    логики, и она отстала.
-    """
+    """The linter must respect VLIW simultaneous-read bundle semantics on real `lcc` output."""
 
     def test_real_probes_have_no_dependency_errors(self):
         from vliw.core.model import get_profile
@@ -490,33 +391,27 @@ class TestLinterDoesNotBlameTheCompiler(unittest.TestCase):
             parsed = asm_parser.parse_asm(path.read_text(encoding="utf-8"))
             errs = [p for p in asm_parser.lint(parsed, model)
                     if p.severity == "error" and p.kind == "ready"]
-            with self.subTest(проба=path.name):
+            with self.subTest(probe=path.name):
                 self.assertEqual(
-                    errs, [], "вывод lcc объявлен незаконным: "
+                    errs, [], "lcc output falsely flagged as illegal: "
                     + "; ".join(e.text for e in errs[:2]))
 
     def test_real_violation_across_bundles_is_still_caught(self):
-        """А настоящее нарушение — через такт — линтер обязан находить."""
+        """A genuine inter-bundle RAW hazard must still be caught by the linter."""
         from vliw.core.model import get_profile
 
-        # LOAD отдаёт результат через 5 тактов; читаем через один.
+        # LOAD has 5-cycle latency; reading it 1 cycle later is a RAW hazard.
         src = ("{\n  ldw,0\t0x0, [ %dr1 ], %r5\n}\n"
                "{\n  adds,1\t%r5, %r6, %r7\n}\n")
         parsed = asm_parser.parse_asm(src)
         errs = [p for p in asm_parser.lint(parsed, get_profile(DEFAULT_PROFILE))
                 if p.kind == "ready"]
-        self.assertEqual(len(errs), 1, "нарушение между тактами пропущено")
+        self.assertEqual(len(errs), 1, "inter-bundle RAW hazard was missed")
         self.assertIn("%r5", errs[0].text)
 
 
 class TestModeFlagSkipsThePicker(unittest.TestCase):
-    """`--mode` обязан пропускать экран выбора в ОБОИХ интерфейсах.
-
-    Полноэкранный так и делал (`pick_app = args.mode is None`), а построчный
-    применял режим и тут же затирал его вопросом «наберите 1, 2 или 3»: флаг,
-    обещающий в справке «пропустить экран выбора», в `--plain` не работал.
-    Классическое расхождение двух интерфейсов — то же, что и с линтером.
-    """
+    """`--mode` must bypass the interactive mode picker in BOTH TUI and `--plain` mode."""
 
     @staticmethod
     def _run(argv, feed):
@@ -537,7 +432,7 @@ class TestModeFlagSkipsThePicker(unittest.TestCase):
 
     def test_plain_with_mode_does_not_ask(self):
         text = self._run(["--plain", "--no-color", "--mode", "lab"], "/quit\n")
-        self.assertNotIn("наберите 1, 2 или 3", text)
+        self.assertNotIn("1 / 2 / 3", text)
 
     def test_plain_without_mode_still_asks(self):
         text = self._run(["--plain", "--no-color"], "q\n")

@@ -1,14 +1,10 @@
-"""Факты о текущем состоянии — то, чем «заземляется» языковая модель.
+"""Facts about the current state — used to ground the language model.
 
-Смысл модуля: языковая модель не должна ВЫДУМЫВАТЬ числа. Все величины
-(такты, загрузка портов, найденные потери) считает детерминированное ядро
-`vliw.core`, а сюда попадает готовая сводка, которая уходит в системную
-подсказку. Модель работает только объяснением и рассуждением поверх этих
-фактов — поэтому её ответы можно проверить командой `/doctor` или `/compare`.
-
-Это же и есть практический ответ на «дообучить под процессор»: дообучения нет,
-но модель получает измеренную модель машины и результаты анализа прямо в
-контекст, и рассуждает уже про конкретный e2k, а не про VLIW вообще.
+Design principle: the LLM must never INVENT numbers. Every metric (cycles,
+port utilization, detected losses) is computed by the deterministic core
+`vliw.core` and passed here as a structured summary in the system prompt.
+The model only explains and reasons over these facts, so every answer can
+be verified with `/doctor` or `/compare`.
 """
 
 from __future__ import annotations
@@ -17,80 +13,80 @@ from ..core import compute_metrics
 from ..core.doctor import diagnose
 
 SYSTEM = """\
-Ты — NEX, инженерный ассистент по планированию инструкций для VLIW-процессора
-Эльбрус (e2k). Ты встроен в исследовательский CLI и помогаешь разбираться,
-почему участок кода выполняется за столько тактов и где теряется время.
+You are NEX, an engineering assistant for instruction scheduling on the
+Elbrus (e2k) VLIW processor. You are embedded in a research CLI and help
+engineers understand why a code block takes a given number of cycles and
+where time is lost.
 
-ЖЁСТКИЕ ПРАВИЛА:
-1. Все числа бери ТОЛЬКО из блока ФАКТЫ ниже. Не придумывай такты, проценты и
-   имена операций. Если нужного числа в фактах нет — так и скажи и предложи
-   команду, которая его посчитает.
-2. Отвечай по-русски, коротко и по делу: инженеру, а не студенту. Без
-   маркетинга и без общих слов про «оптимизацию».
-3. Опирайся на измеренную модель машины. Единственный по-настоящему монопольный
-   исполнитель на e2k — ДЕЛИТЕЛЬ (только порт `,5`). Умножение исполнимо на
-   четырёх портах, запись — на двух, загрузка — на четырёх. Не приписывай
-   умножителю монополию: это опровергнуто проверкой ассемблером.
-4. Различай две вещи и называй их прямо: «потеря» (планировщик выдал операции в
-   неудачном порядке, такты можно отыграть) и «предел машины» (ждать было
-   правильно, быстрее нельзя).
-5. Если уместно, заканчивай одной строкой «Дальше:» с конкретной командой
-   (/doctor, /compare, /tiny, /asm, /explain N, /load файл.s).
-6. Не используй Markdown-заголовки и таблицы — вывод идёт в терминал.
-   Допустимы короткие списки через «—».
+STRICT RULES:
+1. Take ALL numbers ONLY from the FACTS block below. Never invent cycles,
+   percentages, or operation names. If a requested number is missing from
+   FACTS, say so directly and suggest the command that computes it.
+2. Answer in concise, direct technical English — engineer to engineer.
+   No marketing fluff or generic remarks about "optimization".
+3. Rely on the measured machine model. The ONLY truly exclusive functional
+   unit on e2k is the DIVIDER (port `,5` only). Multiplication runs on four
+   ports, store on two, load on four. Never claim multiplication is exclusive:
+   that was disproven by assembler verification.
+4. Distinguish two things clearly: a "loss" (the scheduler issued operations
+   in a suboptimal order and cycles can be recovered) vs. a "machine bound"
+   (waiting was unavoidable and no faster schedule exists).
+5. When appropriate, end with a single line `Next:` suggesting a concrete
+   command (/doctor, /compare, /tiny, /asm, /explain N, /load file.s).
+6. Do not use Markdown headings or tables — output is rendered in a terminal.
+   Short bullet lists with "—" are fine.
 """
 
 
 def machine_facts(model) -> list[str]:
-    out = [f"Профиль машины: {model.name}, портов: {model.width}."]
+    out = [f"Machine profile: {model.name}, ports: {model.width}."]
     sole = model.sole_host_ops()
     for port, ops in sorted(sole.items()):
-        out.append(f"Порт {model.port_label(port)} — ЕДИНСТВЕННЫЙ исполнитель "
-                   f"{'/'.join(ops)} (монопольный).")
+        out.append(f"Port {model.port_label(port)} is the SOLE executor for "
+                   f"{'/'.join(ops)} (exclusive).")
     lat = []
     for name in sorted(model.ops):
         op = model.ops[name]
-        s = f"{name}={op.latency}т."
+        s = f"{name}={op.latency}c"
         if op.blocks_channel():
-            s += f" (держит порт {op.occupancy}т.)"
+            s += f" (holds port {op.occupancy}c)"
         lat.append(s)
-    out.append("Латентности: " + ", ".join(lat))
+    out.append("Latencies: " + ", ".join(lat))
     for op_name in sorted(model.ops):
         chans = model.channels_for(op_name)
         if 1 < len(chans) < model.width:
-            out.append(f"{op_name} исполнима на портах "
+            out.append(f"{op_name} executes on ports "
                        f"{', '.join(model.port_label(c) for c in chans)} "
-                       f"({len(chans)} из {model.width}).")
-    out.append("Модель снята с компилятора lcc-1.29.16: матрица портов "
-               "проверена ассемблером (отказы вида 'cannot be encoded in ALC'), "
-               "латентности — цепочками зависимых операций, темп приёма — "
-               "потоками независимых.")
+                       f"({len(chans)} of {model.width}).")
+    out.append("Model measured from lcc-1.29.16: port matrix verified with "
+               "the assembler ('cannot be encoded in ALC' rejections), "
+               "latencies via dependent chains, issue rates via independent streams.")
     return out
 
 
 def schedule_facts(session) -> list[str]:
-    """Числа по текущему участку — только если он уже посчитан."""
+    """Numbers for the current block — only if already computed."""
     cached = session.peek()
     dag = session.dag_obj
-    out = [f"Текущий участок: {session.scenario}, инструкций: {len(dag)}."]
+    out = [f"Current block: {session.scenario}, instructions: {len(dag)}."]
     counts = ", ".join(f"{k}×{v}" for k, v in sorted(dag.op_counts().items()))
-    out.append(f"Состав операций: {counts}.")
+    out.append(f"Operation mix: {counts}.")
     if dag.note:
-        out.append(f"Описание участка: {dag.note[:400]}")
+        out.append(f"Block note: {dag.note[:400]}")
     if cached is None:
-        out.append("Расписание ещё НЕ посчитано (нужна команда /run).")
+        out.append("Schedule has NOT been computed yet (run /run).")
         return out
 
     base, orc, met = cached
     b, o = base.schedule.makespan, orc.schedule.makespan
-    out.append(f"baseline (жадная эвристика): {b} тактов.")
-    out.append(f"oracle (точный поиск, теоретический потолок): {o} тактов.")
-    out.append(f"Нижняя граница: {met.lower_bound} тактов "
-               f"(критический путь {met.critical_path_bound}, "
-               f"ресурсы {met.resource_bound}; связывает {met.binding}).")
-    out.append(f"Разрыв baseline→oracle: {b - o} тактов.")
-    out.append("Оптимальность oracle доказана." if orc.optimal
-               else "Оптимальность oracle НЕ доказана (лучшее найденное).")
+    out.append(f"baseline (greedy heuristic): {b} cycles.")
+    out.append(f"oracle (exact search, theoretical optimum): {o} cycles.")
+    out.append(f"Lower bound: {met.lower_bound} cycles "
+               f"(critical path {met.critical_path_bound}, "
+               f"resource {met.resource_bound}; binding: {met.binding}).")
+    out.append(f"Gap baseline->oracle: {b - o} cycles.")
+    out.append("Oracle optimality is PROVEN." if orc.optimal
+               else "Oracle optimality is NOT proven (best found).")
     return out
 
 
@@ -103,33 +99,33 @@ def doctor_facts(session, limit: int = 6) -> list[str]:
         d = diagnose(session.dag_obj, session.model(), base.schedule, met)
     except Exception:
         return []
-    out = [f"ДИАГНОСТИКА baseline: makespan {d.makespan}т., "
-           f"предел {d.lower_bound}т., простоев {d.idle_cycles}т., "
-           f"заполнение слотов {d.slot_utilization:.0%}."]
+    out = [f"BASELINE DIAGNOSTICS: makespan {d.makespan}c, "
+           f"lower bound {d.lower_bound}c, idle cycles {d.idle_cycles}c, "
+           f"slot utilization {d.slot_utilization:.0%}."]
     for p in d.ports:
         load = p.load(d.span)
         if load or p.sole_ops:
-            sole = f" (только {'/'.join(p.sole_ops)})" if p.sole_ops else ""
-            out.append(f"  порт {p.label}: загрузка {load:.0%}, "
-                       f"{p.issued} операций{sole}")
+            sole = f" (sole {'/'.join(p.sole_ops)})" if p.sole_ops else ""
+            out.append(f"  port {p.label}: load {load:.0%}, "
+                       f"{p.issued} ops{sole}")
     losses = [f for f in d.findings if f.recoverable][:limit]
     limits = [f for f in d.findings if not f.recoverable][:limit]
     if losses:
-        out.append("МОЖНО ОТЫГРАТЬ:")
+        out.append("RECOVERABLE LOSSES:")
         for f in losses:
-            out.append(f"  −{f.cycles_lost}т. [{f.code}] {f.title}. "
-                       f"Где: {f.where}. Почему: {f.why}")
+            out.append(f"  −{f.cycles_lost}c [{f.code}] {f.title}. "
+                       f"Where: {f.where}. Why: {f.why}")
     else:
-        out.append("Потерь из-за порядка выдачи нет.")
+        out.append("No ordering losses detected.")
     if limits:
-        out.append("ПРЕДЕЛЫ МАШИНЫ (не ошибки):")
+        out.append("MACHINE BOUNDS (not errors):")
         for f in limits:
             out.append(f"  {f.title} — {f.why}")
     return out
 
 
 def schedule_layout(session, which: str = "baseline", max_rows: int = 40) -> list[str]:
-    """Компактная раскладка «такт: порт=операция» — чтобы модель видела расписание."""
+    """Compact layout 'cycle: port=op' so the model can inspect exact placements."""
     cached = session.peek()
     if cached is None:
         return []
@@ -141,37 +137,26 @@ def schedule_layout(session, which: str = "baseline", max_rows: int = 40) -> lis
     for p in sched.placements.values():
         by_cycle.setdefault(p.cycle, []).append(
             f"{model.port_label(p.channel)}={dag[p.instr].op} {dag[p.instr].name}")
-    out = [f"РАСПИСАНИЕ {which} (такт: что выдано):"]
+    out = [f"SCHEDULE {which} (cycle: issued ops):"]
     cycles = sorted(by_cycle)
     for c in cycles[:max_rows]:
-        out.append(f"  т.{c}: " + ", ".join(sorted(by_cycle[c])))
-    # Обрезка обязана быть видна модели. Молча укороченная раскладка выглядит
-    # как полная — и на вопрос про инструкцию из хвоста модель ответит числом,
-    # которого не видела.
+        out.append(f"  c.{c}: " + ", ".join(sorted(by_cycle[c])))
+    # Truncation must be explicit so the model does not invent tail placements.
     if len(cycles) > max_rows:
         hidden = len(cycles) - max_rows
-        out.append(f"  ... ещё {hidden} тактов не показано: раскладка обрезана "
-                   f"на {max_rows} строках. Про такты после т.{cycles[max_rows - 1]} "
-                   f"данных здесь НЕТ — не называй их, предложи /run или /explain N.")
-    # Такты baseline и oracle различаются; без явной пометки их легко смешать
-    # в одном ответе, взяв makespan от одного, а номер такта от другого.
+        out.append(f"  ... {hidden} more cycles omitted: layout truncated at "
+                   f"{max_rows} rows. Data after c.{cycles[max_rows - 1]} is "
+                   f"NOT shown — do not guess it; suggest /run or /explain N.")
     other = orc if which == "baseline" else base
     if other.schedule.makespan != sched.makespan:
-        out.append(f"  (это такты {which}; у "
+        out.append(f"  (these are {which} cycles; "
                    f"{'oracle' if which == 'baseline' else 'baseline'} "
-                   f"расстановка другая — {other.schedule.makespan} тактов)")
+                   f"has a different layout — {other.schedule.makespan} cycles)")
     return out
 
 
 def tiny_facts(session) -> list[str]:
-    """TINY Flash против baseline: третья цифра в сравнении планировщиков.
-
-    Синергия в честную сторону: TINY Flash считается детерминированно
-    (миллисекунды, без LLM), а агент получает готовое число и объясняет его —
-    наоборот (модель подсказывает планировщику) было бы выдумкой вместо
-    поиска. Без весов — молча пропускаем: портфель тогда равен baseline,
-    и строка была бы шумом, а не фактом.
-    """
+    """TINY Flash vs baseline: third reference point in scheduler comparison."""
     cached = session.peek()
     if cached is None:
         return []
@@ -188,21 +173,20 @@ def tiny_facts(session) -> list[str]:
     b, o, t = base.schedule.makespan, orc.schedule.makespan, res.schedule.makespan
     winner = res.search_stats.get("tiny_winner", "?")
     if t >= b:
-        return [f"TINY Flash ({winner}): {t} тактов — вровень с baseline, "
-                f"хуже не стало (оракул: {o})."]
-    return [f"TINY Flash ({winner}): {t} тактов — лучше baseline ({b}), "
-            f"оракул: {o}."]
+        return [f"TINY Flash ({winner}): {t} cycles — tied with baseline, "
+                f"no regression (oracle: {o})."]
+    return [f"TINY Flash ({winner}): {t} cycles — beats baseline ({b}), "
+            f"oracle: {o}."]
 
 
 def build(session, include_layout: bool = False) -> str:
-    """Собрать блок ФАКТЫ для системной подсказки."""
-    parts: list[str] = ["ФАКТЫ (единственный источник чисел):", ""]
+    """Assemble the FACTS block for the system prompt."""
+    parts: list[str] = ["FACTS (sole source of numbers):", ""]
     parts += machine_facts(session.model())
     parts.append("")
     parts += schedule_facts(session)
     from ..ai_hints import core_facts
-    # Крошки теперь внутри ядра NEX (блок «планировщик»): рассказчик берёт строку от ядра;
-    # нет ядра — прежний прямой путь.
+    # TINY AI runs inside NEX core ("scheduler" block); fall back to direct call if absent.
     tiny = core_facts(session) or tiny_facts(session)
     if tiny:
         parts += tiny
@@ -216,97 +200,65 @@ def build(session, include_layout: bool = False) -> str:
             parts.append("")
             parts += lay
     parts.append("")
-    parts.append("Доступные сценарии: см. команду /scenarios. "
-                 "Команды: /run /compare /doctor /asm /explain /path /bounds "
+    parts.append("Available scenarios: see /scenarios. "
+                 "Commands: /run /compare /doctor /asm /explain /path /bounds "
                  "/model /load /probe.")
     return "\n".join(parts)
 
 
 PANEL_SYSTEM = """\
-Ты — NEX, инженерный ассистент по планированию инструкций для VLIW-процессора
-Эльбрус (e2k). Человек смотрит на ОДНУ панель инструмента и спрашивает про то,
-что в ней.
+You are NEX, an engineering assistant for instruction scheduling on the
+Elbrus (e2k) VLIW processor. The user is looking at ONE panel of the tool
+and asking about its contents.
 
-ЖЁСТКИЕ ПРАВИЛА:
-1. Отвечай ТОЛЬКО по строкам блока ПАНЕЛЬ ниже. Там всё, что нужно.
-2. Ничего не выводи и не обобщай сверх этих строк. Если в них нет ответа —
-   так и скажи и предложи команду (/doctor, /compare, /run, /bounds).
-3. Не переворачивай утверждения. «Исполняется только на ,2 и ,5» значит, что
-   на остальных портах она НЕ исполняется, — и ничего больше.
-4. Отвечай по-русски, два-четыре предложения, инженеру. Без Markdown-таблиц и
-   заголовков: вывод идёт в терминал.
+STRICT RULES:
+1. Answer ONLY from the PANEL lines below. Everything needed is there.
+2. Do not extrapolate beyond those lines. If the answer isn't there, say so
+   and suggest a command (/doctor, /compare, /run, /bounds).
+3. Never invert statements. "Executes only on ,2 and ,5" means it does NOT
+   execute on other ports — nothing else.
+4. Answer in concise technical English, 2–4 sentences, engineer to engineer.
+   No Markdown tables or headings: output goes to a terminal.
 """
 
 
 CELL_SYSTEM = """\
-Ты — NEX. Инструмент уже разобрал одну операцию расписания точно и по пунктам.
-Твоя работа — сказать то же самое ОДНОЙ фразой человеческим языком, как
-объясняют коллеге, впервые увидевшему VLIW.
+You are NEX. The tool has already analyzed one scheduled operation step by step.
+Your job is to restate the same conclusion in ONE plain-English sentence,
+as if explaining to a colleague seeing VLIW for the first time.
 
-ЖЁСТКИЕ ПРАВИЛА:
-1. Одно предложение, максимум два. Это подпись под панелью, а не отчёт.
-2. НИ ОДНОГО числа, которого нет в разборе ниже. Не складывай, не вычитай,
-   не прикидывай. Числа уже посчитаны, твоё дело — слова.
-3. Не выдумывай причин. Если в разборе сказано «операндов не ждёт» — значит
-   ждать было нечего, и никакой очереди не было.
-4. Не перечисляй пункты разбора: они на экране прямо над твоей фразой.
-5. По-русски. Без Markdown.
+STRICT RULES:
+1. One sentence, two at most. This is a caption under a panel, not a report.
+2. ZERO numbers that do not appear in the breakdown below. Do not add,
+   subtract, or estimate. Numbers are already computed; your job is phrasing.
+3. Do not invent causes. If the breakdown says "waits for no operands", then
+   there was nothing to wait for and no queue.
+4. Do not re-list the breakdown bullets: they are already visible right above.
+5. Plain English. No Markdown.
 """
 
 _NUM = __import__("re").compile(r"\d+")
 
 
 def cell_answer_is_grounded(answer: str, facts: list[str]) -> bool:
-    """Не появилось ли в ответе числа, которого не было в разборе.
+    """Verify no number appeared in the answer that wasn't in the source facts.
 
-    Сторож, а не вера в подсказку. Проверено на этом проекте: локальная 3B
-    на прямой вопрос «почему операция здесь» уверенно сочиняет причину с
-    числами («блокировала канал 2 на 21 такта»), даже когда в разборе таких
-    чисел нет вовсе. Просить её этого не делать бесполезно — она не знает,
-    что придумывает.
-
-    Проверка машинная и грубая нарочно: любое число из ответа обязано
-    встречаться в исходных строках. Пропустит перевранную СВЯЗЬ между верными
-    числами, но поймает выдуманные — а именно они и превращают подпись в
-    дезинформацию. Не прошло — фразу не показываем вовсе: пустое место
-    честнее уверенной ошибки.
+    Acts as a hard guard against small-model hallucinations: every digit
+    sequence in `answer` must appear verbatim in `facts`.
     """
     src = set(_NUM.findall(" ".join(facts)))
     return all(n in src for n in _NUM.findall(answer))
 
 
 def cell_prompt(facts: list[str]) -> str:
-    """Подсказка для фразы под курсором — пересказ, а не рассуждение.
-
-    Самая узкая из всех: на входе ровно то, что уже написано в панели
-    «ПОЧЕМУ ЗДЕСЬ». Это не экономия, а единственный режим, в котором
-    локальной 3B можно верить. Замерено на этом проекте: она уверенно
-    ошибается, когда надо связать несколько чисел (на панели ДИАГНОЗ
-    склеила «за 1 т. операция заняла 15 т.»), и не ошибается, когда надо
-    переформулировать одно готовое утверждение.
-    """
-    return "\n".join([CELL_SYSTEM, "", "РАЗБОР ИНСТРУМЕНТА:", ""]
+    """Prompt for the one-line cursor caption — paraphrase, not open reasoning."""
+    return "\n".join([CELL_SYSTEM, "", "TOOL BREAKDOWN:", ""]
                      + ["  " + f for f in facts])
 
 
 def panel_prompt(title: str, facts: list[str]) -> str:
-    """Подсказка для чата по одной панели — узкая нарочно.
-
-    Сюда НЕ идёт общий блок ФАКТЫ, хотя первая версия его слала. Две причины,
-    обе измерены на живой модели.
-
-    Скорость: общий блок — 1451 токен, и на CPU его прогрев стоит десятки
-    секунд на каждый новый хвост. Панельный промпт — порядка полутора сотен
-    токенов, и ответ приходит за секунды.
-
-    Точность: чем больше материала, тем больше у модели на 3B поводов
-    связать не то с не тем. На вопрос «какие операции ограничены одним
-    портом?» с полным блоком она ответила «LOAD, MUL, STORE ограничены портом
-    ,5» — то есть перевернула ровно те строки, которые ей дали (монопольный
-    только DIV; LOAD и MUL идут на четырёх портах, STORE на двух). Узкий
-    контекст — это не экономия, это и есть защита от выдумки.
-    """
-    out = [PANEL_SYSTEM, "", f"ПАНЕЛЬ «{title}» — единственный источник:", ""]
+    """Narrow prompt for single-panel Q&A — fast and resistant to hallucination."""
+    out = [PANEL_SYSTEM, "", f'PANEL "{title}" — sole source:', ""]
     out += ["  " + f for f in facts]
     return "\n".join(out)
 
@@ -314,38 +266,20 @@ def panel_prompt(title: str, facts: list[str]) -> str:
 def system_prompt(session, include_layout: bool = False,
                   panel: tuple[str, list[str]] | None = None,
                   smalltalk: bool = False) -> str:
-    """Системная подсказка. `panel` — (заголовок, факты) открытой панели.
+    """Build the full system prompt. `panel` is (title, facts) of the active pane.
 
-    ПОРЯДОК ЗДЕСЬ — НЕ КОСМЕТИКА. Панельная часть идёт СУФФИКСОМ, после общих
-    фактов, и это единственное, что делает панельный чат пригодным на
-    локальной модели.
-
-    llama.cpp кэширует посчитанный ПРЕФИКС промпта (`cache_prompt`). Общая
-    часть — правила, матрица машины, числа участка — примерно 1450 токенов, и
-    на CPU она считается порядка сорока секунд. Если панельный контекст
-    подмешивать в середину или в начало, префикс меняется при каждом переходе
-    между панелями, кэш промахивается, и каждый вопрос снова стоит сорок
-    секунд. С суффиксом общая часть остаётся байт в байт той же, кэш попадает,
-    и платим только за хвост в несколько десятков токенов.
+    ORDER MATTERS: panel and smalltalk modifiers are appended as SUFFIXES after
+    the shared FACTS prefix so llama.cpp's `cache_prompt` hits on the ~1450-token
+    prefix instead of recomputing it on every pane switch.
     """
     out = SYSTEM + "\n\n" + build(session, include_layout)
     if smalltalk:
-        # Отмена правила 5 — СУФФИКСОМ, а не правкой префикса: префикс
-        # кэшируется llama.cpp, и любое изменение в нём стоит сорока секунд
-        # пересчёта (см. рассуждение ниже про порядок).
-        #
-        # Зачем отменять: на «привет» модель выдавала «Привет. Дальше: /run».
-        # Строка «Дальше:» задумана как способ ПЕРЕПРОВЕРИТЬ сказанное
-        # командой — а проверять в приветствии нечего, и совет запустить
-        # расписание в ответ на «привет» выглядит так, будто отвечает не
-        # собеседник, а справочник, которому задали не тот вопрос.
-        out += ("\n\nЭТО НЕ ВОПРОС ПРО УЧАСТОК, а обычная реплика. Ответь "
-                "коротко и по-человечески. Строку «Дальше:» НЕ добавляй: "
-                "проверять в этом ответе нечего. Числа и термины не "
-                "приплетай.")
+        out += ("\n\nTHIS IS NOT A QUESTION ABOUT THE BLOCK, just casual "
+                "small talk. Reply briefly and naturally. Do NOT add a 'Next:' "
+                "line and do not pull in numbers or scheduling jargon.")
     if panel is not None:
         title, facts = panel
-        out += ("\n\nСЕЙЧАС ЧЕЛОВЕК СМОТРИТ НА ПАНЕЛЬ «" + title + "». "
-                "Отвечай про то, что в ней, и не пересказывай остальное.\n")
+        out += (f'\n\nTHE USER IS CURRENTLY VIEWING PANEL "{title}". '
+                "Answer only about what is shown in this panel.\n")
         out += "\n".join("  " + f for f in facts)
     return out

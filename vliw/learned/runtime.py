@@ -1,20 +1,13 @@
-"""Запуск обученного адаптера локально: поиск весов, зависимости, генерация.
+"""Local execution of trained adapters: weight discovery, deps, generation.
 
-Зачем этот слой отдельно от `scheduler.py`
-------------------------------------------
-Веса до сих пор работали только на Kaggle: инференс жил в
-`training/validate_kaggle.py`, который самодостаточен РАДИ Kaggle (там нет
-пакета `vliw`) и умеет ровно одно — прогнать эвал по файлу и напечатать
-сводку. Из инструмента адаптер было не запустить вообще.
+Why this layer is separate from `scheduler.py`
+----------------------------------------------
+Previously weights only ran on Kaggle via standalone `training/validate_kaggle.py`.
+This mirrors the same loading flow (including two environment workarounds) for
+local CLI use: the model loads once and serves arbitrary DAGs.
 
-Здесь ровно та же схема загрузки, что и в `validate_kaggle.py` (включая обход
-двух багов окружения — они разобраны на месте), но пригодная к вызову из CLI:
-модель поднимается один раз и отвечает на произвольный граф.
-
-Тяжёлые импорты (torch/transformers/peft) — ТОЛЬКО внутри функций. У проекта
-нет обязательных зависимостей, и `import vliw` не должен их требовать: без
-установленного torch инструмент обязан работать как раньше, просто без
-команды `/learned`.
+Heavy imports (torch/transformers/peft) happen ONLY inside functions so
+`import vliw` stays dependency-free when `/learned` is not used.
 """
 
 from __future__ import annotations
@@ -30,30 +23,29 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 CHECKPOINTS = _ROOT / "training" / "checkpoints"
 VENDOR = _ROOT / "vendor"
 
-# Пакеты, без которых локальный запуск невозможен. Проверяются по отдельности,
-# чтобы сообщение называло недостающее поимённо, а не «что-то не так».
+# Packages required for local torch execution. Checked individually so
+# diagnostics name each missing package explicitly.
 REQUIRED = ("torch", "transformers", "peft")
 
 
 # --------------------------------------------------------------------------
-# Что вообще есть на диске
+# Discovered local assets
 # --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Adapter:
-    """Найденный LoRA-адаптер."""
+    """Discovered LoRA adapter."""
 
     path: Path
     base: str
-    """Базовая модель из adapter_config.json — LoRA привязан к ней по форме."""
+    """Base model from adapter_config.json (LoRA matches its tensor shapes)."""
     size_mb: float
     has_tokenizer: bool
-    """Лежит ли рядом токенизатор.
+    """Whether a tokenizer sits beside the adapter.
 
-    У `lora-eos` его нет (обучение сохранило только адаптер), поэтому
-    токенизатор приходится брать у базовой модели или у соседнего адаптера —
-    иначе загрузка падает на ровном месте.
+    `lora-eos` saved only adapter weights, so we fall back to the base model
+    or sibling adapter tokenizer.
     """
 
     @property
@@ -62,7 +54,7 @@ class Adapter:
 
 
 def find_adapters(root: Path | None = None) -> list[Adapter]:
-    """Все адаптеры в training/checkpoints — по наличию adapter_config.json."""
+    """All adapters in training/checkpoints containing adapter_config.json."""
     root = root or CHECKPOINTS
     out: list[Adapter] = []
     if not root.exists():
@@ -83,7 +75,7 @@ def find_adapters(root: Path | None = None) -> list[Adapter]:
 
 
 def resolve_adapter(name: str | None = None) -> Adapter | None:
-    """Адаптер по имени/пути; без имени — последний по времени изменения."""
+    """Resolve adapter by name/path, or pick the most recently modified."""
     found = find_adapters()
     if name:
         p = Path(name)
@@ -97,14 +89,14 @@ def resolve_adapter(name: str | None = None) -> Adapter | None:
 
 
 def missing_deps() -> list[str]:
-    """Каких пакетов не хватает для локального запуска."""
+    """Missing Python packages required for local torch execution."""
     import importlib.util
 
     return [m for m in REQUIRED if importlib.util.find_spec(m) is None]
 
 
 def _mem_total_gb() -> float | None:
-    """Сколько всего ОЗУ. Нужно для честного предупреждения про размер модели."""
+    """Total host RAM in GiB, used for model-size warnings."""
     try:
         with open("/proc/meminfo", encoding="utf-8") as f:
             for line in f:
@@ -116,40 +108,40 @@ def _mem_total_gb() -> float | None:
 
 
 def status(name: str | None = None) -> tuple[bool, list[str]]:
-    """(готово ли к запуску, строки отчёта). Не требует torch."""
+    """Return (ready, report_lines). Does not require torch."""
     lines: list[str] = []
     adapters = find_adapters()
     if adapters:
-        lines.append("найденные адаптеры:")
+        lines.append("found adapters:")
         for a in adapters:
-            tok = "" if a.has_tokenizer else "  (без токенизатора — возьмём у базовой)"
-            lines.append(f"  {a.name}  {a.size_mb:.0f} МБ  база: {a.base}{tok}")
+            tok = "" if a.has_tokenizer else "  (no tokenizer — will use base)"
+            lines.append(f"  {a.name}  {a.size_mb:.0f} MB  base: {a.base}{tok}")
     else:
-        lines.append(f"адаптеров не найдено в {CHECKPOINTS}")
+        lines.append(f"no adapters found in {CHECKPOINTS}")
 
     miss = missing_deps()
     if miss:
         lines.append("")
-        lines.append("не хватает пакетов: " + ", ".join(miss))
-        lines.append("  поставить:  .venv/bin/pip install " + " ".join(miss))
+        lines.append("missing packages: " + ", ".join(miss))
+        lines.append("  install:  .venv/bin/pip install " + " ".join(miss))
     else:
         lines.append("")
-        lines.append("зависимости на месте: " + ", ".join(REQUIRED))
+        lines.append("dependencies present: " + ", ".join(REQUIRED))
 
     mem = _mem_total_gb()
     if mem is not None:
         lines.append("")
-        lines.append(f"ОЗУ на машине: {mem:.1f} ГБ")
+        lines.append(f"host RAM: {mem:.1f} GB")
         if mem < 12:
             lines.append(
-                "  ВНИМАНИЕ: Phi-4-mini даже в 4 битах занимает ~2.4 ГБ плюс "
-                "активации и KV-кэш. На этой машине запуск будет уходить в своп и "
-                "считаться минутами, а то и не поднимется вовсе.")
+                "  WARNING: even at 4-bit, Phi-4-mini takes ~2.4 GB plus "
+                "activations and KV cache. On this host it may swap and "
+                "take minutes, or fail to start.")
             lines.append(
-                "  Разумный путь для CPU — 4-битный GGUF через llama.cpp "
-                "(~2.4 ГБ): см. docs/LEARNED.md.")
+                "  Recommended CPU path: 4-bit GGUF via llama.cpp "
+                "(~2.4 GB): see docs/LEARNED.md.")
 
-    # llama.cpp — основной путь на CPU, проверяем его первым.
+    # llama.cpp is the primary CPU path — check it first.
     lines.append("")
     if adapters:
         best = resolve_adapter(name)
@@ -159,21 +151,21 @@ def status(name: str | None = None) -> tuple[bool, list[str]]:
                 b = find_gguf_base()
                 srv_ok, _ = llama_server_ready(best)
                 if srv_ok:
-                    lines.append(f"llama-server: готов  (адаптер {best.name})")
-                    lines.append(f"  база {b.name}, "
-                                 f"{b.stat().st_size / 1e9:.1f} ГБ, 4 бита")
-                    lines.append(f"  веса грузятся один раз за сессию, "
-                                 f"{default_threads()} потоков")
-                    lines.append("  замерено: 12 с на граф против 32 с у "
-                                 "процесса на команду")
+                    lines.append(f"llama-server: ready  (adapter {best.name})")
+                    lines.append(f"  base {b.name}, "
+                                 f"{b.stat().st_size / 1e9:.1f} GB, 4-bit")
+                    lines.append(f"  weights load once per session, "
+                                 f"{default_threads()} threads")
+                    lines.append("  measured: 12 s/graph vs 32 s for "
+                                 "per-command subprocess")
                 else:
-                    lines.append(f"llama.cpp: готов  (адаптер {best.name})")
-                    lines.append(f"  база {b.name}, "
-                                 f"{b.stat().st_size / 1e9:.1f} ГБ, 4 бита")
-                    lines.append("  процесс на каждую команду: веса читаются "
-                                 "заново, около 32 с на граф")
+                    lines.append(f"llama.cpp: ready  (adapter {best.name})")
+                    lines.append(f"  base {b.name}, "
+                                 f"{b.stat().st_size / 1e9:.1f} GB, 4-bit")
+                    lines.append("  per-command subprocess: weights reload "
+                                 "each call, ~32 s/graph")
                 return True, lines
-            lines.append("llama.cpp: не готов")
+            lines.append("llama.cpp: not ready")
             for pr in problems:
                 lines.append("  " + pr)
 
@@ -182,52 +174,39 @@ def status(name: str | None = None) -> tuple[bool, list[str]]:
 
 
 # --------------------------------------------------------------------------
-# Бэкенды генерации
+# Generation backends
 # --------------------------------------------------------------------------
 
 
 class Backend:
-    """Что угодно, что умеет продолжить текст.
+    """Base interface for text continuation backends.
 
-    ОСНОВНОЙ метод — `generate_events()`: генератор кусков ответа. Так, а не
-    через callback `on_text=`, потому что генератор даёт отмену бесплатно и
-    правильно. Раньше здесь был callback, и отменить генерацию было нечем:
-    Textual снимал свой воркер, а блокирующий `subprocess` внутри про отмену
-    не знал и продолжал считать (см. комментарий к `_GENERATE_LOCK` ниже —
-    из-за этого пришлось заводить блокировку). У генератора `close()` бросает
-    `GeneratorExit` в точке `yield`, отрабатывает `finally`, и подпроцесс
-    llama.cpp умирает вместе с отменой.
+    PRIMARY method is `generate_events()`, yielding response chunks so
+    caller cancellation via `close()` triggers `GeneratorExit` and cleans
+    up subprocesses in `finally`.
 
-    `generate()` оставлен как удобная обёртка: он собирает поток целиком.
-    Реализовывать в наследнике нужно только `generate_events()`.
+    `generate()` is a convenience wrapper that joins the stream.
+    Subclasses only need to implement `generate_events()`.
     """
 
     name = "?"
 
     slow_start = False
-    """Грузит ли бэкенд веса при первом обращении.
-
-    Нужно интерфейсу, чтобы не обещать долгое ожидание там, где его нет:
-    подставной бэкенд отвечает мгновенно, и подпись «веса грузятся с диска»
-    была бы про него неправдой.
-    """
+    """Whether the backend loads weights on first call (for UI wait hints)."""
 
     def generate_events(self, prompt: str, max_new_tokens: int,
                         temperature: float = 0.0, seed: int | None = None):
-        """Куски ответа по мере генерации. Сырые: маркеры конца не срезаны.
+        """Yield raw response chunks as generated (end markers unstripped).
 
-        `temperature`/`seed` — сэмплинг для best-of-N (см. bench.py). Умолчание
-        — жадный детерминированный поиск (`temperature=0`), которым сняты все
-        замеры: при умолчаниях ответ бэкенда обязан совпадать с прежним до
-        строки. `seed` пришпиливает случайность там, где она есть; None — не
-        трогать.
+        `temperature`/`seed` enable sampling for best-of-N (`bench.py`).
+        Default is deterministic greedy (`temperature=0`).
         """
         raise NotImplementedError
 
     def generate(self, prompt: str, max_new_tokens: int,
                  on_text=None, temperature: float = 0.0,
                  seed: int | None = None) -> str:
-        """Весь ответ целиком. `on_text(chunk)` — по мере поступления."""
+        """Return full response. Calls `on_text(chunk)` as chunks arrive."""
         parts: list[str] = []
         kw = sampling_kwargs(temperature, seed)
         for chunk in self.generate_events(prompt, max_new_tokens, **kw):
@@ -239,13 +218,8 @@ class Backend:
 
 def sampling_kwargs(temperature: float, seed: int | None,
                     grammar: str | None = None) -> dict:
-    """Аргументы сэмплинга для generate_events() — пустые при умолчаниях.
-
-    Передавать kwargs ТОЛЬКО когда они отличаются от умолчаний. Причина не в
-    эстетике: подменные бэкенды тестов определяют `generate_events(prompt,
-    max_new_tokens)` по старому контракту, и лишний kwarg уронил бы их на
-    ровном месте. Заодно старый путь (temperature=0) остаётся прежним вызовом
-    байт-в-байт.
+    """Sampling kwargs for generate_events() — empty at defaults so mock
+    backends with the 2-arg signature keep working untouched.
     """
     kw: dict = {}
     if temperature:
@@ -258,16 +232,11 @@ def sampling_kwargs(temperature: float, seed: int | None,
 
 
 END_MARKER = "[end of text]"
-"""Чем llama.cpp помечает конец. Может прийти разорванным между кусками,
-поэтому срезается по СОБРАННОМУ тексту, а не по каждому куску отдельно."""
+"""llama.cpp end-of-text markers; stripped on assembled text since chunks may split them."""
 
 
 class ScriptedBackend(Backend):
-    """Заранее заданные ответы. Для тестов и разбора уже снятых прогонов.
-
-    Позволяет прогнать весь путь «граф → промпт → ответ → расписание →
-    проверка» без torch и без весов — то есть проверять склейку, а не модель.
-    """
+    """Canned responses for tests and replaying recorded runs without torch/weights."""
 
     name = "scripted"
 
@@ -275,7 +244,7 @@ class ScriptedBackend(Backend):
         self._replies = [replies] if isinstance(replies, str) else list(replies)
         self._i = 0
         self.last_sampling: dict = {}
-        """Что попросили при последней генерации — точка наблюдения для тестов."""
+        """Last generation request parameters (inspection hook for tests)."""
 
     def generate_events(self, prompt: str, max_new_tokens: int,
                         temperature: float = 0.0, seed: int | None = None):
@@ -288,10 +257,9 @@ class ScriptedBackend(Backend):
 
 
 class TransformersBackend(Backend):
-    """Локальный запуск через transformers + peft — как на Kaggle, но в CLI.
+    """Local execution via transformers + peft (same path as Kaggle).
 
-    Модель поднимается ОДИН раз на объект: загрузка 3B весов занимает
-    десятки секунд, и делать её на каждый граф бессмысленно.
+    Loads weights once per instance.
     """
 
     name = "transformers"
@@ -305,15 +273,7 @@ class TransformersBackend(Backend):
         self._model = None
 
     def _resolve(self):
-        """Устройство и тип весов — конкретные, а не строка «auto».
-
-        Тип выбирается по устройству, и это не вкусовщина:
-          * float32 на CPU — 12.4 ГБ на 3B, не влезает почти никуда;
-          * float16 на CPU в torch местами не имеет ядер и падает в
-            медленные ветки, зато на GPU это норма (так и гоняли на Kaggle);
-          * bfloat16 — половина памяти (~6.2 ГБ) и нормальная поддержка на
-            современных x86, поэтому он и стоит умолчанием для CPU.
-        """
+        """Resolve concrete device and dtype (bf16 on CPU, fp16 on GPU)."""
         import torch
 
         device = self.device
@@ -329,9 +289,9 @@ class TransformersBackend(Backend):
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        # Тот же точечный обход, что и в training/validate_kaggle.py: peft
-        # этой версии кодирует несовместимую torchao прямым ImportError, хотя
-        # torchao-квантование мы не используем вовсе (обычный LoRA).
+        # Same workaround as training/validate_kaggle.py: this peft version
+        # raises ImportError on incompatible torchao even though we only
+        # use standard LoRA without torchao quantization.
         try:
             import peft.tuners.lora.torchao as _torchao_mod
 
@@ -339,22 +299,22 @@ class TransformersBackend(Backend):
         except Exception:
             pass
 
-        # Токенизатор: рядом с адаптером его может не быть (у lora-eos нет),
-        # тогда берём у базовой модели. Раньше это был бы отказ на пустом месте.
+        # Tokenizer may be absent beside the adapter (e.g. lora-eos);
+        # fall back to the base model tokenizer.
         tok_src = str(self.adapter.path) if self.adapter.has_tokenizer else self.adapter.base
         self._tok = AutoTokenizer.from_pretrained(tok_src, trust_remote_code=True)
 
         device, torch_dtype = self._resolve()
 
-        # `torch_dtype=`, а не новое `dtype=`: именно это имя проверенно
-        # работает на Kaggle (training/validate_kaggle.py), и в transformers 5.x
-        # оно всё ещё принимается — устарело, но не удалено. Определять имя
-        # через inspect.signature() бессмысленно: параметр идёт в **kwargs, и
-        # в сигнатуре его нет ни под одним из имён.
+        # Use `torch_dtype=` (verified on Kaggle and accepted in
+        # transformers 5.x via **kwargs).
         #
-        # Имя базы берём из adapter_config.json явно — если подсунуть путь
-        # адаптера, новые transformers пытаются подтянуть LoRA внутри
-        # from_pretrained и падают. Адаптер применяем отдельно, ниже.
+        #
+        #
+        #
+        # Pass explicit base name from adapter_config.json so newer
+        # transformers does not auto-load LoRA inside from_pretrained.
+        # Apply the adapter separately below.
         base = AutoModelForCausalLM.from_pretrained(
             self.adapter.base,
             torch_dtype=torch_dtype,
@@ -370,19 +330,14 @@ class TransformersBackend(Backend):
 
     def generate_events(self, prompt: str, max_new_tokens: int,
                         temperature: float = 0.0, seed: int | None = None):
-        """Одним куском: transformers здесь считает без стриминга.
-
-        Честно отдаём один `yield` вместо имитации потока. Интерфейс увидит
-        отсутствие промежуточных событий и покажет ожидание, а не ложную
-        побуквенную анимацию.
-        """
+        """Single chunk: transformers runs non-streaming and yields once."""
         import torch
 
         self._load()
         inputs = self._tok(prompt, return_tensors="pt").to(self._model.device)
-        # Умолчание — детерминированно, как на замерах (do_sample=False).
-        # Сэмплинг включается ТОЛЬКО явной температурой: иначе путь best-of-N
-        # менял бы и обычный прогон.
+        # Default is deterministic (do_sample=False). Sampling activates
+        # ONLY with explicit temperature so standard runs stay unchanged.
+        #
         gen_kw: dict = {"do_sample": False}
         if temperature and temperature > 0:
             gen_kw = {"do_sample": True, "temperature": float(temperature)}
@@ -395,34 +350,23 @@ class TransformersBackend(Backend):
                 pad_token_id=self._tok.pad_token_id or self._tok.eos_token_id,
                 **gen_kw,
             )
-        # Возвращаем ТОЛЬКО продолжение: промпт модель повторяет на входе, и
-        # если его не срезать, разбор увидит строки графа как «расписание».
+        # Return ONLY the continuation so the parser does not mistake
+        # echoed prompt lines for a schedule.
         gen = out[0][inputs["input_ids"].shape[1]:]
         yield self._tok.decode(gen, skip_special_tokens=True)
 
 
 def make_backend(adapter: Adapter, device: str | None = None,
                  dtype: str = "auto", prefer: str = "auto") -> Backend:
-    """Бэкенд для запуска. По умолчанию — постоянный llama-server.
-
-    Порядок не случайный.
-
-    1. `llama-server` — тот же llama.cpp, но процесс живёт между командами:
-       веса читаются один раз за сессию. Замерено на `slotclash`/`lora-eos`:
-       14 с против 32 с, первый токен 0.11 с против ~20 с. Ответ совпадает
-       до строки — это те же веса и `temperature=0`.
-    2. `llama-completion` — процесс на каждый запрос. Остаётся запасным: он
-       не требует сокета и проверен дольше.
-     3. `transformers` — эталонный путь, им гонялись замеры на Kaggle, и на
-        машине с GPU он предпочтительнее. База в bfloat16 занимает ~7 ГБ
-        против 2.4 ГБ у 4-битного GGUF, поэтому на CPU он последний.
+    """Pick execution backend. Default order: persistent llama-server ->
+    per-request llama-completion -> transformers+peft.
     """
     if prefer in ("auto", "llama-server"):
         ok, problems = llama_server_ready(adapter)
         if ok:
             return LlamaServerBackend(adapter)
         if prefer == "llama-server":
-            raise RuntimeError("путь llama-server не готов:\n  "
+            raise RuntimeError("llama-server path not ready:\n  "
                                + "\n  ".join(problems))
 
     if prefer in ("auto", "llama.cpp"):
@@ -430,45 +374,39 @@ def make_backend(adapter: Adapter, device: str | None = None,
         if ok:
             return LlamaCppBackend(adapter)
         if prefer == "llama.cpp":
-            raise RuntimeError("путь llama.cpp не готов:\n  " + "\n  ".join(problems))
+            raise RuntimeError("llama.cpp path not ready:\n  " + "\n  ".join(problems))
 
     miss = missing_deps()
     if miss:
         raise RuntimeError(
-            "для локального запуска не хватает пакетов: " + ", ".join(miss)
-            + ".\nПоставить:  .venv/bin/pip install " + " ".join(miss)
-            + "\nБез них инструмент работает как раньше — просто без /learned.")
+            "missing packages for local execution: " + ", ".join(miss)
+            + ".\nInstall:  .venv/bin/pip install " + " ".join(miss)
+            + "\nWithout them the tool still works normally — just without /learned.")
     device = device or os.environ.get("NEX_LEARNED_DEVICE", "auto")
     return TransformersBackend(adapter, dtype=dtype, device=device)
 
 
-# Один процесс llama-completion за раз, на весь инструмент. Найдено по факту:
-# два процесса по 3.6 ГБ одновременно, 1 ГБ свободной памяти, секунды до OOM.
+# Single llama-completion process at a time across the tool to prevent
+# two 3.6 GB processes from triggering OOM.
 #
-# ИСХОДНАЯ ПРИЧИНА УСТРАНЕНА, блокировка осталась подстраховкой. Раньше отмена
-# до подпроцесса не доходила: Textual снимал свой воркер, а блокирующий вызов
-# внутри про это не знал и считал дальше — отсюда и второй процесс рядом с
-# первым. Теперь генерация — генератор, и `close()` доводит `finally` с
-# `proc.kill()`. Замерено: процессов llama-completion 0 → 1 → 0, где 0 —
-# через четыре секунды после прерывания.
+# Kept as a safety guard against concurrent launches (/learned and
+# /learned --bench at the same time), even though generator close()
+# now kills canceled subprocesses cleanly.
 #
-# Почему блокировку всё-таки не убрали: она стережёт случай, до которого
-# отмена не дотягивается по определению — два ОДНОВРЕМЕННЫХ запуска (`/learned`
-# и `/learned --bench` из разных мест). Там отменять нечего, там надо не дать
-# запуститься второму.
+#
+#
+#
+#
+#
+#
+#
 _GENERATE_LOCK = threading.Lock()
 
 
 def _llama_cmd(binary, base_gguf, lora_gguf, prompt_file: str,
                max_new_tokens: int, ctx: int, threads: int,
                temperature: float = 0.0, seed: int | None = None) -> list[str]:
-    """Командная строка llama-completion. Чистая функция — ради тестов.
-
-    При умолчаниях (`temperature=0`, seed не задан) список совпадает со
-    старым ДО ЭЛЕМЕНТА: `--temp 0` остаётся «0», а не «0.0» — не потому, что
-    llama.cpp различает (не различает), а чтобы диф командной строки при
-    регрессии показывал только настоящие изменения.
-    """
+    """Build llama-completion CLI arguments (pure function for testing)."""
     temp_arg = "0" if not temperature else f"{temperature:g}"
     cmd = [
         str(binary),
@@ -478,7 +416,7 @@ def _llama_cmd(binary, base_gguf, lora_gguf, prompt_file: str,
         "-c", str(ctx),
         "--temp", temp_arg,
         "-t", str(threads),
-        "-no-cnv",                  # БЕЗ chat-шаблона: обучение шло на сыром промпте
+        "-no-cnv",                  # NO chat template: training used raw prompts
         "--no-warmup",
     ]
     if seed is not None:
@@ -489,18 +427,9 @@ def _llama_cmd(binary, base_gguf, lora_gguf, prompt_file: str,
 
 
 class LlamaCppBackend(Backend):
-    """Локальный запуск через llama.cpp — 4-битная база, CPU, без GPU.
+    """Local execution via llama.cpp (4-bit GGUF base on CPU, no GPU).
 
-    Почему именно этот путь, а не transformers
-    ------------------------------------------
-    Адаптер обучался на Kaggle поверх 4-битной базы (`load_in_4bit=True` в
-    training/train_qlora.py), то есть точная база ему и не нужна была никогда.
-    Здесь та же идея, но квантование llama.cpp: база занимает 2.1 ГБ вместо
-    6.2 ГБ в bfloat16 — разница между «влезает на ноутбук» и «уходит в своп».
-
-    Запускается внешний бинарник, а не питоновская обёртка: у llama-cpp-python
-    нет готовых колёс, он собирается из исходников, а компилятора на машине
-    может не быть. Готовый бинарник ggml-org работает как есть.
+    Runs the prebuilt binary directly (~2.1 GB RAM vs ~6.2 GB bf16).
     """
 
     name = "llama.cpp"
@@ -515,18 +444,14 @@ class LlamaCppBackend(Backend):
 
     def generate_events(self, prompt: str, max_new_tokens: int,
                         temperature: float = 0.0, seed: int | None = None):
-        """Куски ответа по мере генерации.
-
-        Блокировка берётся ДО первого `yield` (см. правило в
-        `vliw/core/api.py::stream`): иначе отмена ровно на первом событии
-        прошла бы мимо `finally`, и блокировка осталась бы взятой навсегда —
-        модель больше не запустилась бы до перезапуска инструмента.
+        """Stream response chunks. Lock is acquired before the first `yield` so
+        early cancellation always reaches `finally`.
         """
         if not _GENERATE_LOCK.acquire(blocking=False):
             raise RuntimeError(
-                "модель уже считает предыдущий запрос — дождитесь его "
-                "завершения, повторный запуск запустил бы второй процесс "
-                "рядом с первым и вдвое больше памяти")
+                "model is already running a previous request — wait for it "
+                "to finish; launching another would spawn a second process "
+                "and double memory usage")
         try:
             yield from self._generate_events_locked(prompt, max_new_tokens,
                                                     temperature, seed)
@@ -539,20 +464,20 @@ class LlamaCppBackend(Backend):
         import subprocess
         import tempfile
 
-        # Промпт передаём файлом, а не -p: в нём переводы строк и кириллица,
-        # и через аргументы командной строки это ломается на ровном месте.
+        # Pass prompt via file instead of -p to avoid CLI newline/encoding issues.
+        #
         with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8",
                                          delete=False) as f:
             f.write(prompt)
             prompt_file = f.name
 
-        # -c ограничивает контекст, а с ним и KV-cache. Без этого флага
-        # llama.cpp резервирует под контекст столько, сколько заявляет модель
-        # (у Qwen2.5 это 32768) — 1.1 ГБ памяти впустую при промпте в
-        # ~200 токенов и ответе до max_new_tokens. Разница измерена:
-        # 4.66 ГБ пиковой RSS с дефолтным контекстом против 3.55 ГБ с -c 2048.
-        # Обнаружено по факту: OOM-killer убил подпроцесс внутри полноэкранного
-        # режима, где памяти и так меньше запаса (кэш расписаний, отрисовка).
+        # -c caps context and KV cache (default 32768 wastes ~1.1 GB RAM).
+        #
+        #
+        #
+        #
+        #
+        #
         ctx = max(1024, (max_new_tokens + 400) * 2)
         cmd = _llama_cmd(self.binary, self.base_gguf, self.lora_gguf,
                          prompt_file, max_new_tokens, ctx, self.threads,
@@ -560,13 +485,13 @@ class LlamaCppBackend(Backend):
 
         env = _llama_env(self.binary)
 
-        # Popen, а не subprocess.run: run() отдаёт вывод только целиком и в
-        # конце, а генерация идёт ~30 секунд. Читаем посимвольно и отдаём
-        # наружу по мере поступления — чтобы было видно, как модель пишет
-        # расписание, а не тишина на полминуты.
+        # Use Popen to stream characters incrementally instead of buffering
+        # the entire ~30 s generation.
+        #
+        #
         timeout_s = max(120, max_new_tokens * 3)
         deadline = time.monotonic() + timeout_s
-        tail = prompt[-40:]          # по нему отличаем эхо промпта от ответа
+        tail = prompt[-40:]          # separates echoed prompt from continuation
         buf: list[str] = []
         answer: list[str] = []
         echo_done = False
@@ -579,8 +504,8 @@ class LlamaCppBackend(Backend):
                 if time.monotonic() > deadline:
                     proc.kill()
                     raise TimeoutError(
-                        f"модель не уложилась в {timeout_s} с — вероятно, "
-                        "процессор занят другим процессом модели")
+                        f"model exceeded {timeout_s} s — CPU may be "
+                        "busy with another model process")
                 chunk = proc.stdout.read(1)
                 if not chunk:
                     break
@@ -589,8 +514,8 @@ class LlamaCppBackend(Backend):
                     answer.append(chunk)
                     yield chunk
                     continue
-                # llama.cpp сперва повторяет промпт, и только потом пишет своё.
-                # Пока не увидели хвост промпта — всё это эхо, наружу не отдаём.
+                # llama.cpp echoes the prompt first; suppress output until prompt tail passes.
+                #
                 if "".join(buf[-len(tail):]) == tail:
                     echo_done = True
             proc.wait(timeout=10)
@@ -605,11 +530,11 @@ class LlamaCppBackend(Backend):
         if echo_done:
             return
 
-        # Потоковый детектор эха не сработал: хвост промпта проскочил мимо
-        # него (например, llama.cpp переформатировал пробелы). Тогда наружу
-        # не ушло НИ ОДНОГО куска — спасаем текст по готовому буферу и отдаём
-        # одним событием. Раньше здесь расходились две правды: `generate()`
-        # возвращал спасённый текст, а поток `on_text` в этом случае молчал.
+        # Fallback if streaming echo detector missed the prompt tail:
+        # extract continuation from the full buffer and emit once.
+        #
+        #
+        #
         out = "".join(buf)
         if tail in out:
             out = out.split(tail, 1)[1]
@@ -618,50 +543,25 @@ class LlamaCppBackend(Backend):
 
 
 _SERVER = None
-"""Один сервер на процесс инструмента. См. `vliw/learned/server.py`."""
+"""Singleton server per tool process. See `vliw/learned/server.py`."""
 
 def default_threads() -> int:
-    """Сколько потоков давать llama.cpp. Половина логических ядер.
-
-    Не `os.cpu_count()`, хотя раньше было именно так. Замерено на этой машине
-    (12 логических ядер, `slotclash`, `lora-eos`, тёплый кэш промпта):
-
-        -t  4     14.2 с
-        -t  6     12.5 с
-        -t  8     12.8 с
-        -t 12     20.0 с      ← столько брал прежний код
-
-    Все логические ядра — худший вариант из проверенных, и с заметным
-    отрывом: гипертрединг не даёт вторых АЛУ, а потоки начинают драться за
-    кэш и память. Половина логических ядер попадает примерно в число
-    физических, и это же значение остаётся разумным на машине без
-    гипертрединга. Предел в 8 — чтобы на 32-ядерном сервере не заводить
-    шестнадцать потоков под задачу, которая от них уже не ускоряется.
+    """Thread count for llama.cpp: half of logical cores, capped at 8
+    (avoids hyperthreading cache contention).
     """
     return max(2, min(8, (os.cpu_count() or 4) // 2))
 
 
 SERVER_CTX = 4096
-"""Окно контекста сервера: хватает и планировщику, и разговору агента."""
+"""Server context window: large enough for both scheduler and agent chat."""
 
 SERVER_MAX_TOKENS = 768
-"""Под какой длиной ответа рассчитан контекст сервера.
-
-Своя константа, а не импорт `LearnedScheduler.DEFAULT_MAX_NEW_TOKENS`:
-`scheduler` уже импортирует `runtime`, и обратный импорт замкнул бы круг.
-Значение одно и то же и по одной причине — самый длинный эталон в данных
-(граф на 24 инструкции) укладывается примерно в 400 токенов, здесь запас.
-"""
+"""Target response length for server context sizing (avoids circular import with scheduler)."""
 
 
 class LlamaServerBackend(Backend):
-    """Постоянный llama-server: веса живут между командами.
-
-    Отличий от `LlamaCppBackend` два, и оба на стороне процесса, а не модели:
-    веса читаются один раз за сессию, а смена адаптера — HTTP-запрос вместо
-    перезапуска. Ответ тот же самый: та же сборка llama.cpp, те же веса,
-    `temperature=0`. Проверено на `slotclash`/`lora-eos` — совпадение до
-    строки, при 14 с против 32 с.
+    """Persistent llama-server backend: weights persist across commands and
+    adapters switch via HTTP without restarting.
     """
 
     name = "llama-server"
@@ -676,9 +576,9 @@ class LlamaServerBackend(Backend):
     def generate_events(self, prompt: str, max_new_tokens: int,
                         temperature: float = 0.0, seed: int | None = None,
                         grammar: str | None = None):
-        # Адаптер передаём в complete(), а не выбираем заранее: он держит
-        # режим сервера занятым на всю генерацию, чтобы разговор с базовой
-        # моделью не переключил LoRA у нас под руками.
+        # Pass adapter into complete() so the mode lock stays held throughout
+        # generation and chat cannot switch LoRA mid-request.
+        #
         yield from shared_server().complete(prompt, max_new_tokens,
                                             adapter=self.adapter.name,
                                             temperature=temperature,
@@ -686,12 +586,9 @@ class LlamaServerBackend(Backend):
 
 
 def shared_server():
-    """Один llama-server на процесс инструмента: и планировщику, и агенту.
+    """Shared llama-server singleton for both scheduler and agent chat.
 
-    Второй процесс завести нельзя: база в 4 битах занимает 3.5 ГБ, а на
-    машине с 8 ГБ два таких уже не помещаются. Поэтому режимы делят один
-    процесс и переключаются шкалами LoRA — планировщику адаптер, разговору
-    голая база (см. `LlamaServer.using`).
+    Modes share one process and switch LoRA scales via `LlamaServer.using`.
     """
     global _SERVER
 
@@ -700,28 +597,28 @@ def shared_server():
     if _SERVER is None:
         binary, base = find_llama_server(), find_gguf_base()
         if binary is None or base is None:
-            raise _srv.ServerError("llama-server или база GGUF не найдены в vendor/")
-        # Пустой список адаптеров — не ошибка: разговор идёт на голой базе,
-        # и агенту обученные веса не нужны вовсе. Наличие адаптера для
-        # ПЛАНИРОВЩИКА проверяет `llama_server_ready()`, до этого места.
+            raise _srv.ServerError("llama-server or GGUF base not found in vendor/")
+        # Empty adapter list is valid: chat uses the bare base model.
         #
-        # LoRA-адаптеры проекта обучены ПОД QWEN и на чужой базе сервер
-        # упадёт при старте — поэтому цепляем их только к qwen-базе.
-        # Планировщик на LoRA при этом недоступен (крошки в vliw/tiny/ его
-        # уже заменили быстрее и точнее), разговор идёт на голой базе.
+        #
+        #
+        # Project LoRAs target Qwen only; attach them only to a Qwen base.
+        #
+        #
+        #
         adapters: list[tuple[str, Path]] = []
         if base_family(base) == "qwen":
             adapters = [(a.name, gguf_adapter_for(a)) for a in find_adapters()]
             adapters = [(n, p) for n, p in adapters if p is not None]
-        # Контекст фиксируется при старте, поэтому его хватать должно ОБОИМ
-        # режимам, а не только планировщику. Замерено: системный промпт
-        # агента — 1451 токен (факты об участке, матрица портов, находки
-        # доктора), плюс история диалога, плюс ответ. Прежние 2336 были
-        # посчитаны по планировщику, у которого промпт короткий, — и агент
-        # упирался в потолок, отвечая обрывком или пустотой.
+        # Context is fixed at startup and must fit both scheduler and agent chat
+        # (system prompt ~1451 tokens + dialog + reply), without wasting RAM on
+        # full 32768 KV cache.
         #
-        # Не 32768, которые заявляет модель: столько llama.cpp зарезервировал
-        # бы под KV-кэш и съел лишний гигабайт (см. LlamaCppBackend).
+        #
+        #
+        #
+        #
+        #
         ctx = SERVER_CTX
         _SERVER = _srv.LlamaServer(binary=binary, base_gguf=base,
                                    adapters=adapters, threads=default_threads(),
@@ -731,23 +628,19 @@ def shared_server():
 
 
 def llama_server_ready(adapter: Adapter) -> tuple[bool, list[str]]:
-    """Готов ли путь llama-server: бинарник, база, сконвертированный адаптер."""
+    """Check llama-server readiness: binary, base GGUF, converted adapter."""
     problems = []
     if find_llama_server() is None:
-        problems.append("нет бинарника llama-server в vendor/")
+        problems.append("missing llama-server binary in vendor/")
     if find_gguf_base() is None:
-        problems.append("нет квантованной базы (*.gguf) в vendor/models/")
+        problems.append("missing quantized base (*.gguf) in vendor/models/")
     if gguf_adapter_for(adapter) is None:
-        problems.append(f"адаптер {adapter.name} не сконвертирован в GGUF")
+        problems.append(f"adapter {adapter.name} is not converted to GGUF")
     return not problems, problems
 
 
 def _llama_env(binary: Path) -> dict[str, str]:
-    """Окружение для запуска llama.cpp.
-
-    libgomp лежит внутри torch — своей в системе может не быть, а ставить её
-    через apt нельзя без root. Берём оттуда, раз уж torch установлен.
-    """
+    """Environment for running llama.cpp (reuses torch's bundled libgomp if present)."""
     env = dict(os.environ)
     libs = [str(binary.parent)]
     torch_lib = _torch_lib_dir()
@@ -758,7 +651,7 @@ def _llama_env(binary: Path) -> dict[str, str]:
 
 
 def _torch_lib_dir():
-    """Папка с библиотеками torch — там же лежит libgomp.so.1."""
+    """Directory containing torch shared libraries (including libgomp.so.1)."""
     try:
         import importlib.util
 
@@ -773,7 +666,7 @@ def _torch_lib_dir():
 
 
 def find_llama_server() -> Path | None:
-    """Бинарник llama-server в vendor/. Постоянный процесс, см. server.py."""
+    """Path to llama-server binary in vendor/."""
     for p in sorted(VENDOR.glob("llama-*/llama-server")):
         if os.access(p, os.X_OK):
             return p
@@ -781,7 +674,7 @@ def find_llama_server() -> Path | None:
 
 
 def find_llama_binary() -> Path | None:
-    """Бинарник llama-completion в vendor/. Неинтерактивный, в отличие от llama-cli."""
+    """Path to non-interactive llama-completion binary in vendor/."""
     for p in sorted(VENDOR.glob("llama-*/llama-completion")):
         if os.access(p, os.X_OK):
             return p
@@ -789,11 +682,7 @@ def find_llama_binary() -> Path | None:
 
 
 def base_family(base: Path | None = None) -> str:
-    """Семейство базы: 'qwen' или имя файла без суффикса ('gemma-4-E4B-it', ...).
-
-    Нужно, потому что обученные LoRA-адаптеры проекта (qwen-vliw-lora и др.)
-    привязаны к весам Qwen2.5-3B и на чужой базе сервер не стартует вовсе.
-    """
+    """Base model family ('qwen' or stem) to guard Qwen-specific LoRA loading."""
     name = (base or find_gguf_base() or Path("")).name.lower()
     if "qwen" in name:
         return "qwen"
@@ -801,11 +690,9 @@ def base_family(base: Path | None = None) -> str:
 
 
 def find_gguf_base() -> Path | None:
-    """Квантованная база в vendor/models. Адаптеры (…-f16.gguf) исключаем.
+    """Find quantized base GGUF in vendor/models (excluding -f16.gguf adapters).
 
-    Если баз несколько — порядок предпочтения: phi, затем gemma, затем
-    любая не-qwen, в конце qwen (retired, см. vendor/models/_retired/).
-    Актуальная база агента — Phi-4-mini.
+    Preference order: phi -> gemma -> any non-qwen -> qwen.
     """
     cands = sorted(p for p in (VENDOR / "models").glob("*.gguf")
                    if not p.name.endswith("-f16.gguf"))
@@ -826,18 +713,18 @@ def find_gguf_base() -> Path | None:
 
 
 def gguf_adapter_for(adapter: Adapter) -> Path | None:
-    """Сконвертированный в GGUF адаптер рядом с базой."""
+    """Converted GGUF adapter alongside the base model."""
     p = VENDOR / "models" / f"{adapter.name}-f16.gguf"
     return p if p.exists() else None
 
 
 def llama_cpp_ready(adapter: Adapter) -> tuple[bool, list[str]]:
-    """Готов ли путь llama.cpp: бинарник, база, сконвертированный адаптер."""
+    """Check llama.cpp readiness: binary, base GGUF, converted adapter."""
     problems = []
     if find_llama_binary() is None:
-        problems.append("нет бинарника llama-completion в vendor/")
+        problems.append("missing llama-completion binary in vendor/")
     if find_gguf_base() is None:
-        problems.append("нет квантованной базы (*.gguf) в vendor/models/")
+        problems.append("missing quantized base (*.gguf) in vendor/models/")
     if gguf_adapter_for(adapter) is None:
-        problems.append(f"адаптер {adapter.name} не сконвертирован в GGUF")
+        problems.append(f"adapter {adapter.name} is not converted to GGUF")
     return not problems, problems

@@ -1,10 +1,8 @@
-"""Агент на локальной модели: выбор провайдера и маршрутизация.
+"""Local-model agent tests: provider selection and offline routing.
 
-Настоящая модель здесь не поднимается — ~5 ГБ весов не место в тесте.
-Проверяется выбор пути и то, что публичные функции `llm` действительно
-уезжают в локальный клиент, а не в сеть. Ошибка здесь выглядела бы как
-молчаливый поход в интернет с ключом, которого нет, — то есть как «агент не
-работает» без объяснения причины.
+No real GGUF weights (~5 GB) are loaded here. Instead, we verify provider
+routing so that local mode never silently attempts network calls when no API
+key is configured.
 """
 
 from __future__ import annotations
@@ -16,12 +14,10 @@ from vliw.agent import llm, local
 
 
 class TestProviderChoice(unittest.TestCase):
-    """Кто отвечает: локальная модель, Le Chat или Gemini."""
+    """Provider selection: local model, Le Chat (Mistral), or Gemini."""
 
     def _with(self, env: dict, local_ready: bool = True, key: str = ""):
-        # Настоящий `.env` проекта глушим: иначе выбор провайдера зависит от
-        # того, что пользователь сохранил себе через `/ai` (см. `setting()`),
-        # и тест становится недетерминированным от машины к машине.
+        # Mask the project `.env` so tests are deterministic regardless of local `/ai` settings.
         return (mock.patch.dict(llm.os.environ, env, clear=False),
                 mock.patch.object(local, "ready", lambda: local_ready),
                 mock.patch.object(llm, "_raw_key", lambda: key),
@@ -37,97 +33,92 @@ class TestProviderChoice(unittest.TestCase):
         self.assertEqual(self._provider({"NEX_PROVIDER": "локально"}), "local")
 
     def test_no_key_falls_to_local_when_weights_are_here(self) -> None:
-        """Без ключа — локальная модель, а не поход в сеть за отказом."""
+        """With no API key and local weights present, route to local instead of failing online."""
         self.assertEqual(self._provider({"NEX_PROVIDER": ""}, local_ready=True),
                          "local")
 
     def test_no_key_and_no_weights_keeps_the_cloud_default(self) -> None:
-        """Без весов остаёмся на прежнем поведении: облако и внятный отказ."""
+        """Without local weights, preserve the default cloud provider behavior."""
         self.assertEqual(
             self._provider({"NEX_PROVIDER": ""}, local_ready=False),
             llm.DEFAULT_PROVIDER)
 
     def test_explicit_cloud_is_not_overridden_by_local_weights(self) -> None:
-        """Попросили Mistral — идём в Mistral, даже если веса лежат рядом."""
+        """Explicitly requesting a cloud provider must override available local weights."""
         self.assertEqual(self._provider({"NEX_PROVIDER": "mistral"}), "mistral")
         self.assertEqual(self._provider({"NEX_PROVIDER": "gemini"}), "gemini")
 
     def test_key_present_means_cloud(self) -> None:
-        """Ключ задан — прежнее поведение не меняется."""
+        """When an API key is configured, default cloud routing is preserved."""
         self.assertEqual(
             self._provider({"NEX_PROVIDER": ""}, local_ready=True, key="abc123"),
             llm.DEFAULT_PROVIDER)
 
 
 class TestRouting(unittest.TestCase):
-    """Публичные функции `llm` в локальном режиме не ходят в сеть."""
+    """Public `llm` entry points must never hit the network in local mode."""
 
     def setUp(self) -> None:
         patcher = mock.patch.object(llm, "provider", lambda: "local")
         patcher.start()
         self.addCleanup(patcher.stop)
-        # Если маршрутизация сломается, тест упадёт здесь, а не втихую уйдёт
-        # в интернет.
         net = mock.patch.object(llm, "_make_backend",
                                 mock.Mock(side_effect=AssertionError(
-                                    "локальный режим не должен ходить в сеть")))
+                                    "local mode must never make network calls")))
         net.start()
         self.addCleanup(net.stop)
 
     def test_complete_goes_local(self) -> None:
-        with mock.patch.object(local, "complete", lambda *a, **k: "локальный ответ"):
-            self.assertEqual(llm.complete("сис", "вопрос"), "локальный ответ")
+        with mock.patch.object(local, "complete", lambda *a, **k: "local reply"):
+            self.assertEqual(llm.complete("sys", "question"), "local reply")
 
     def test_stream_goes_local(self) -> None:
-        with mock.patch.object(local, "stream", lambda *a, **k: iter(["a", "б"])):
-            self.assertEqual(list(llm.stream("сис", "вопрос")), ["a", "б"])
+        with mock.patch.object(local, "stream", lambda *a, **k: iter(["a", "b"])):
+            self.assertEqual(list(llm.stream("sys", "question")), ["a", "b"])
 
     def test_structured_goes_local(self) -> None:
         with mock.patch.object(local, "structured", lambda *a, **k: ("{}", 7)):
-            self.assertEqual(llm.structured("сис", "вопрос", {}), ("{}", 7))
+            self.assertEqual(llm.structured("sys", "question", {}), ("{}", 7))
 
     def test_check_goes_local(self) -> None:
-        with mock.patch.object(local, "check", lambda: (True, "готово")):
-            self.assertEqual(llm.check(), (True, "готово"))
+        with mock.patch.object(local, "check", lambda: (True, "ready")):
+            self.assertEqual(llm.check(), (True, "ready"))
 
     def test_describe_says_where_it_runs(self) -> None:
         with mock.patch.object(local, "model_label", lambda: "Phi-4-mini-instruct-Q4_K_M.gguf"):
-            self.assertIn("локально", llm.describe())
+            self.assertIn("local", llm.describe())
             self.assertTrue(llm.is_local())
 
 
 class TestSmallModelNudge(unittest.TestCase):
-    """Добавка к промпту — только для вопросов по делу, не для реплик.
+    """Prompt nudge applies only to technical questions, never to greetings/smalltalk.
 
-    Найдено вживую: с добавкой на КАЖДЫЙ вопрос (включая «привет») модель
-    тащила числа из блока ФАКТЫ в любой ответ. ФАКТЫ есть всегда, даже когда
-    расписание ещё не считалось, — и на 3B это давало не «ответь короче», а
-    выдуманный технический разбор из ближайших похожих слов: «11 тактов»
-    (на деле это latency DIV, а не длина расписания) и перевранный смысл
-    заметки об участке. Без добавки на «привет» — обычное приветствие.
+    With the nudge attached to casual greetings, small 3B local models dragged
+    unrelated numbers from FACTS into the reply. Disabling the nudge on
+    smalltalk keeps greetings natural.
     """
 
     def test_nudge_on_by_default(self) -> None:
-        msgs = local._messages("СИСТЕМА", "вопрос", None)
+        msgs = local._messages("SYSTEM", "question", None)
         self.assertEqual(msgs[0]["role"], "system")
-        self.assertTrue(msgs[0]["content"].startswith("СИСТЕМА"))
-        self.assertIn("Дальше:", msgs[0]["content"])
-        self.assertEqual(msgs[-1], {"role": "user", "content": "вопрос"})
+        self.assertTrue(msgs[0]["content"].startswith("SYSTEM"))
+        self.assertIn("Next:", msgs[0]["content"])
+        self.assertEqual(msgs[-1], {"role": "user", "content": "question"})
 
     def test_nudge_can_be_switched_off(self) -> None:
-        """Для реплик не по делу добавка не едет вовсе, а не смягчается."""
-        msgs = local._messages("СИСТЕМА", "привет", None, nudge=False)
-        self.assertEqual(msgs[0]["content"], "СИСТЕМА")
-        self.assertNotIn("Дальше:", msgs[0]["content"])
+        """Smalltalk turns omit the nudge completely rather than softening it."""
+        msgs = local._messages("SYSTEM", "hello", None, nudge=False)
+        self.assertEqual(msgs[0]["content"], "SYSTEM")
+        self.assertNotIn("Next:", msgs[0]["content"])
 
     def test_history_becomes_alternating_turns(self) -> None:
-        msgs = local._messages("С", "новый", [("прошлый", "ответ")])
+        msgs = local._messages("S", "new", [("prev", "reply")])
         self.assertEqual([m["role"] for m in msgs],
                          ["system", "user", "assistant", "user"])
 
 
 class TestSmalltalkSkipsNudge(unittest.TestCase):
-    """Агент решает по вопросу, а не по провайдеру: смолток — без добавки."""
+    """The agent decides based on the question, not the provider: smalltalk skips the nudge."""
 
     def setUp(self) -> None:
         patcher = mock.patch.object(llm, "provider", lambda: "local")
@@ -150,26 +141,27 @@ class TestSmalltalkSkipsNudge(unittest.TestCase):
         return seen["nudge"]
 
     def test_greeting_gets_no_nudge(self) -> None:
-        self.assertFalse(self._asked_nudge("привет"))
+        self.assertFalse(self._asked_nudge("hello"))
 
     def test_real_question_gets_nudge(self) -> None:
-        self.assertTrue(self._asked_nudge("почему этот участок медленный?"))
-class TestCellAnswerGuard(unittest.TestCase):
-    """Сторож на выдуманные числа в подписи под курсором.
+        self.assertTrue(self._asked_nudge("why is this basic block slow?"))
 
-    Появился не из осторожности, а по факту: локальная 3B на вопрос «почему
-    операция здесь» сочинила «блокировала канал 2 на 21 такта» — таких чисел
-    в разборе не было вовсе.
+
+class TestCellAnswerGuard(unittest.TestCase):
+    """Guard against fabricated numbers in cursor-hover cell explanations.
+
+    Added after a local 3B model hallucinated "blocked port 2 for 21 cycles"
+    when none of those numbers existed in the core explanation.
     """
 
-    FACTS = ["выдана в такте 2, результат готов к 13, латентность 11",
-             "ждала операндов: a0 готов к т.1"]
+    FACTS = ["issued in cycle 2, result ready at 13, latency 11",
+             "waited on operands: a0 ready at c.1"]
 
     def test_answer_within_the_facts_passes(self) -> None:
         from vliw.agent import context
 
         ok = context.cell_answer_is_grounded(
-            "Ждала операнд a0 до такта 1, потому и вышла только в такте 2.",
+            "Waited for operand a0 until cycle 1, so it issued in cycle 2.",
             self.FACTS)
         self.assertTrue(ok)
 
@@ -177,27 +169,26 @@ class TestCellAnswerGuard(unittest.TestCase):
         from vliw.agent import context
 
         ok = context.cell_answer_is_grounded(
-            "Блокировала канал 2 на 21 такта.", self.FACTS)
-        self.assertFalse(ok, "21 в разборе нет — обязано отлавливаться")
+            "Blocked channel 2 for 21 cycles.", self.FACTS)
+        self.assertFalse(ok, "21 is not in FACTS — must be caught")
 
     def test_answer_without_numbers_passes(self) -> None:
-        """Фраза без чисел безопасна по построению — её пропускаем."""
+        """A number-free sentence cannot fabricate metrics and passes by construction."""
         from vliw.agent import context
 
         self.assertTrue(context.cell_answer_is_grounded(
-            "Операция ждала операнд и потому вышла позже.", self.FACTS))
+            "The operation waited on an operand and therefore issued later.", self.FACTS))
 
     def test_guard_does_not_catch_wrong_relations(self) -> None:
-        """ЧЕГО СТОРОЖ НЕ УМЕЕТ — записано, чтобы на него не полагались.
+        """Documented limitation: swapping existing numbers between roles passes regex checks.
 
-        Все числа взяты из разбора, а связаны неверно: латентность приписана
-        не тому. Регуляркой это не ловится, только чтением — поэтому разбор
-        ядра всегда висит НАД фразой, а не заменяется ею.
+        Because regex checking only verifies number presence, the deterministic
+        core breakdown always stays displayed ABOVE the model's phrasing.
         """
         from vliw.agent import context
 
         self.assertTrue(context.cell_answer_is_grounded(
-            "Вышла в такте 11, латентность 2.", self.FACTS))
+            "Issued in cycle 11, latency 2.", self.FACTS))
 
 
 if __name__ == "__main__":

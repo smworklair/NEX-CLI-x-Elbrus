@@ -1,21 +1,9 @@
-"""Проверка оракула независимым полным перебором.
+"""Independent brute-force verification of the exact oracle.
 
-Оракул объявляет свои расписания оптимальными. Такому заявлению нельзя верить
-на слово: ошибка в отсечении даст «доказанный оптимум», который оптимумом не
-является, и всё демо превратится в подтасовку. Поэтому здесь лежит второй,
-намеренно тупой планировщик: он перебирает ВСЕ подмножества готовых инструкций
-и ВСЕ назначения каналов, без единого умного отсечения. Медленно — но ломаться
-там нечему.
+Cross-checks oracle optimality claims and `compute_metrics` lower bounds
+against an exhaustive enumerator on small random DAGs and narrow machines.
 
-Проверяется на маленьких случайных графах (5-8 инструкций) и узких машинах
-(2-3 канала), где полный перебор ещё считается:
-
-  * makespan оракула совпадает с перебором, когда оракул заявил оптимальность;
-  * нижняя граница из compute_metrics никогда не превышает истинный оптимум
-    (иначе оракул начал бы поиск выше оптимума и «доказал» не то);
-  * оба расписания проходят валидацию.
-
-Запуск: python -m vliw selfcheck
+Usage: python -m vliw selfcheck
 """
 
 from __future__ import annotations
@@ -33,12 +21,7 @@ INF = 10**9
 
 
 def brute_force_makespan(dag: DAG, model: MachineModel, limit: int) -> int:
-    """Истинный оптимум лобовым перебором.
-
-    Единственные допущения: поиск ограничен сверху заведомо достижимым `limit`
-    (расписание baseline), и такты, в которых ни одна инструкция не готова,
-    просто перематываются — решать там нечего.
-    """
+    """True optimum via exhaustive enumeration bounded above by `limit`."""
     n = len(dag)
     lat = [model.latency(i.op) for i in dag]
     occ = [model.occupancy(i.op) for i in dag]
@@ -92,14 +75,11 @@ def brute_force_makespan(dag: DAG, model: MachineModel, limit: int) -> int:
 
 @dataclass
 class SelfcheckResult:
-    """Результат сверки оракула с полным перебором — ЧИСТЫЕ ДАННЫЕ, без печати.
-
-    Рендерит и печатает это уже ui/cli; сам core ничего не форматирует.
-    """
+    """Pure data result of oracle self-check (formatting lives in ui/cli)."""
 
     checked: int
     failed: int
-    problems: list[tuple[str, list[str]]]  # (тег проверки, список расхождений)
+    problems: list[tuple[str, list[str]]]  # (check_tag, list_of_mismatches)
     seconds: float
     stopped_early: bool
     seeds: int
@@ -118,12 +98,7 @@ def run_selfcheck(
     time_limit: float = 60.0,
     on_failure=None,
 ) -> SelfcheckResult:
-    """Сверить оракул с независимым полным перебором и вернуть результат.
-
-    Ничего не печатает: возвращает SelfcheckResult. Необязательный колбэк
-    `on_failure(tag, problems)` вызывается по мере нахождения расхождений —
-    чтобы ui мог показывать провалы в реальном времени, не таща логику в core.
-    """
+    """Verify oracle against brute-force search and return SelfcheckResult."""
     profiles = [
         get_profile(p).with_width(w)
         for p in ("e2k-v6-measured", "naive_homogeneous")
@@ -147,21 +122,21 @@ def run_selfcheck(
 
                 problems: list[str] = []
                 if truth >= INF:
-                    problems.append("перебор не нашёл ни одного расписания")
+                    problems.append("brute-force search found no valid schedule")
                 else:
                     if orc.optimal and orc.schedule.makespan != truth:
                         problems.append(
-                            f"оракул заявил оптимум {orc.schedule.makespan}, "
-                            f"перебор даёт {truth}"
+                            f"oracle claimed optimum {orc.schedule.makespan}, "
+                            f"brute-force found {truth}"
                         )
                     if orc.schedule.makespan < truth:
                         problems.append(
-                            f"оракул ({orc.schedule.makespan}) быстрее истинного "
-                            f"оптимума ({truth}) — расписание незаконно"
+                            f"oracle ({orc.schedule.makespan}) beat true "
+                            f"optimum ({truth}) — schedule is invalid"
                         )
                     if metrics.lower_bound > truth:
                         problems.append(
-                            f"нижняя граница {metrics.lower_bound} выше оптимума {truth}"
+                            f"lower bound {metrics.lower_bound} exceeds optimum {truth}"
                         )
                 problems += base.schedule.validate() + orc.schedule.validate()
 

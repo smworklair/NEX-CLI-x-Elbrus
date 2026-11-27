@@ -1,14 +1,15 @@
-"""Muse Spark (Meta Model API): OpenAI-совместимый `/v1/chat/completions`.
+"""Muse Spark (Meta Model API): OpenAI-compatible `/v1/chat/completions`.
 
-Проверено по официальной документации (ai.developer.meta.com, dev.meta.ai):
+Verified against official docs (ai.developer.meta.com, dev.meta.ai):
   * base URL — `https://api.meta.ai/v1`;
-  * чат — `POST /v1/chat/completions`, ключ — `Authorization: Bearer`;
-  * каталог — `GET /v1/models` тем же ключом (форма OpenAI: `{"data": [...]}`);
-  * модели — `muse-spark-1.3` (актуальная), `muse-spark-1.2`, `muse-spark-1.1`
-    и `-contributor`-варианты тех же чекпоинтов.
+  * chat — `POST /v1/chat/completions`, key via `Authorization: Bearer`;
+  * model catalog — `GET /v1/models` with the same key (OpenAI shape: `{"data": [...]}`);
+  * models — `muse-spark-1.3` (current), `muse-spark-1.2`, `muse-spark-1.1`,
+    and `-contributor` variants of the same checkpoints.
 
-Muse Spark — рассуждающая модель: думает до ответа, токены размышления
-считаются выходными. Отдельного тумблера мышления в Chat Completions нет.
+Muse Spark is a reasoning model: it thinks before answering, and reasoning
+tokens count toward output tokens. There is no separate reasoning toggle in
+Chat Completions.
 """
 
 from __future__ import annotations

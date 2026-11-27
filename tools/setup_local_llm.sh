@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Поднять локальный запуск обученной модели: движок, база, адаптеры.
+# Set up local LLM inference: llama.cpp binary, base GGUF, and adapters.
 #
-#   tools/setup_local_llm.sh          # всё сразу
-#   tools/setup_local_llm.sh check    # только проверить, что уже есть
+#   tools/setup_local_llm.sh          # install everything
+#   tools/setup_local_llm.sh check    # check existing setup only
 #
-# Зачем скрипт, а не инструкция в README: шагов четыре, три из них качают
-# файлы, и один (конвертация адаптера) требует точного ключа --base-model-id,
-# который легко забыть — без него скрипт llama.cpp ищет базу как локальную
-# папку и падает с FileNotFoundError на строке 'Qwen/Qwen2.5-3B-Instruct'.
+# Automates prebuilt llama.cpp download, base model fetch, and GGUF LoRA conversion
+# without requiring root or a C++ compiler.
 #
-# Ничего не требует root: компилятора на машине может не быть, поэтому берётся
-# ГОТОВЫЙ бинарник ggml-org, а не сборка llama-cpp-python из исходников
-# (готовых колёс у него нет вообще ни под какой Python).
+#
+#
+#
+#
+#
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,24 +19,24 @@ ROOT="$PWD"
 PY="${PY:-$ROOT/.venv/bin/python}"
 VENDOR="$ROOT/vendor"
 BUILD="b10944"
-# Актуальная база агента: Phi-4-mini (MIT, без thinking, ~2.4 ГБ).
-# Переопределяется окружением, если понадобится другая
-# (но LoRA-адаптеры проекта — только под Qwen).
+# Default agent base model: Phi-4-mini (MIT, non-thinking, ~2.4 GB).
+# Overridable via env (note: project LoRA adapters target Qwen only).
+#
 BASE_REPO="${BASE_REPO:-unsloth/Phi-4-mini-instruct-GGUF}"
 BASE_FILE="${BASE_FILE:-Phi-4-mini-instruct-Q4_K_M.gguf}"
-# Адаптеры, обученные в этом проекте — ТОЛЬКО под Qwen2.5-3B (лежат в
-# vendor/models/_qwen_retired/). На чужой базе сервер с ними не стартует,
-# поэтому качаем только когда база — qwen.
+# Project LoRA adapters target Qwen2.5-3B only; skip for non-Qwen bases.
+#
+#
 ADAPTER_REPO="Shmonika/nex-vliw-lora"
 ADAPTERS="lora-merged qwen-vliw-lora lora-eos"
 
 have () { [ -e "$1" ]; }
 
 check () {
-  echo "движок:  $(have "$VENDOR/llama-$BUILD/llama-completion" && echo есть || echo НЕТ)"
-  echo "база:    $(have "$VENDOR/models/$BASE_FILE" && echo "есть ($(du -h "$VENDOR/models/$BASE_FILE" | cut -f1))" || echo НЕТ)"
+  echo "engine:  $(have "$VENDOR/llama-$BUILD/llama-completion" && echo present || echo MISSING)"
+  echo "base:    $(have "$VENDOR/models/$BASE_FILE" && echo "present ($(du -h "$VENDOR/models/$BASE_FILE" | cut -f1))" || echo MISSING)"
   for n in $ADAPTERS; do
-    echo "адаптер $n: $(have "$VENDOR/models/$n-f16.gguf" && echo есть || echo НЕТ)"
+    echo "adapter $n: $(have "$VENDOR/models/$n-f16.gguf" && echo present || echo MISSING)"
   done
 }
 
@@ -44,42 +44,42 @@ if [ "${1:-all}" = "check" ]; then check; exit 0; fi
 
 mkdir -p "$VENDOR/models"
 
-# 1. Движок. Готовый CPU-бинарник, распаковывается как есть.
+# 1. Engine: prebuilt CPU binary.
 if ! have "$VENDOR/llama-$BUILD/llama-completion"; then
-  echo "== качаю движок llama.cpp ($BUILD) =="
+  echo "== downloading llama.cpp ($BUILD) =="
   curl -fsSL -o "$VENDOR/llama.tar.gz" \
     "https://github.com/ggml-org/llama.cpp/releases/download/$BUILD/llama-$BUILD-bin-ubuntu-x64.tar.gz"
   tar xzf "$VENDOR/llama.tar.gz" -C "$VENDOR"
   rm -f "$VENDOR/llama.tar.gz"
 fi
 
-# 2. Квантованная база. Единственная тяжёлая загрузка (~2.4 ГБ).
+# 2. Quantized base model (~2.4 GB).
 if ! have "$VENDOR/models/$BASE_FILE"; then
-  echo "== качаю базу $BASE_FILE (~4.6 ГБ) =="
+  echo "== downloading base $BASE_FILE =="
   curl -fL --progress-bar -o "$VENDOR/models/$BASE_FILE" \
     "https://huggingface.co/$BASE_REPO/resolve/main/$BASE_FILE"
 fi
 
-# 3. Адаптеры — только под Qwen-базу (см. шапку). На Gemma/Phi сервер с ними
-#    не стартует, а планировщик на LoRA заменён крошками (vliw/tiny/).
+# 3. Adapters — Qwen base only (scheduling moved to vliw/tiny/).
+#
 if [[ "$BASE_FILE" == *[Qq]wen* ]]; then
 for n in $ADAPTERS; do
   out="$VENDOR/models/$n-f16.gguf"
-  have "$out" && { echo "== адаптер $n уже на месте =="; continue; }
-  echo "== качаю адаптер $n (~58 МБ) =="
+  have "$out" && { echo "== adapter $n already present =="; continue; }
+  echo "== downloading adapter $n (~58 MB) =="
   curl -fL --progress-bar -o "$out" \
     "https://huggingface.co/$ADAPTER_REPO/resolve/main/gguf/$n-f16.gguf" \
-    || { echo "не скачался: $n"; rm -f "$out"; }
+    || { echo "download failed: $n"; rm -f "$out"; }
 done
 else
-  echo "== база не Qwen — адаптеры пропускаю (они только под Qwen) =="
+  echo "== base is not Qwen — skipping adapters (Qwen-only) =="
 fi
 
-# 4. Конвертация СВОИХ адаптеров — путь автора, не скачавшего. Нужен только
-#    если в training/checkpoints/ лежит адаптер, которого нет в готовых GGUF:
-#    то есть вы обучили новый. Тогда доезжают исходники llama.cpp ради
-#    convert_lora_to_gguf.py (он тянет пакет conversion/, по отдельным файлам
-#    его не собрать) и адаптер конвертируется на месте.
+# 4. Convert custom local adapters in training/checkpoints/ to GGUF.
+#
+#
+#
+#
 for a in "$ROOT"/training/checkpoints/*/adapter_config.json; do
   [ -e "$a" ] || continue
   dir="$(dirname "$a")"; n="$(basename "$dir")"
@@ -87,7 +87,7 @@ for a in "$ROOT"/training/checkpoints/*/adapter_config.json; do
   have "$out" && continue
 
   if ! have "$VENDOR/llama.cpp-$BUILD/convert_lora_to_gguf.py"; then
-    echo "== качаю исходники для конвертера =="
+    echo "== downloading converter sources =="
     curl -fsSL -o "$VENDOR/src.tar.gz" \
       "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$BUILD.tar.gz"
     tar xzf "$VENDOR/src.tar.gz" -C "$VENDOR"
@@ -95,14 +95,14 @@ for a in "$ROOT"/training/checkpoints/*/adapter_config.json; do
   fi
   "$PY" -m pip install -q gguf transformers peft 2>/dev/null || true
 
-  echo "== конвертирую свой адаптер $n =="
-  # --base-model-id, а не --base: качается только config базы, сами 6 ГБ
-  # весов для этого не нужны.
+  echo "== converting local adapter $n =="
+  # --base-model-id fetches only base config without 6 GB weights.
+  #
   base="$("$PY" -c "import json,sys;print(json.load(open(sys.argv[1]))['base_model_name_or_path'])" "$a")"
   "$PY" "$VENDOR/llama.cpp-$BUILD/convert_lora_to_gguf.py" \
     --base-model-id "$base" --outfile "$out" --outtype f16 "$dir"
 done
 
-echo; echo "== готово =="; check
-echo; echo "проверить:  $PY -m vliw learned --status"
-echo "запустить:  $PY -m vliw learned"
+echo; echo "== done =="; check
+echo; echo "check:  $PY -m vliw learned --status"
+echo "run:    $PY -m vliw learned"

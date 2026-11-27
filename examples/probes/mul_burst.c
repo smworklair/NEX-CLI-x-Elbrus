@@ -1,8 +1,8 @@
-/* Разделяем на два блока: сначала ВСЕ загрузки (компилятор сам раскидает их
-   по каналам ,0/,2/,3 — память гибкая), потом ВСЕ умножения одним блоком.
-   Если к моменту начала умножений уже готовы много операндов сразу,
-   планировщику будет что параллелить в одной широкой команде — если
-   аппаратно это возможно. */
+/* Split into two phases: first ALL loads (the compiler distributes them
+   across channels ,0/,2/,3 — memory is flexible), then ALL multiplications together.
+   If many operands are already ready by the time multiplications begin,
+   the scheduler will have work to parallelize in a single wide instruction — if
+   hardware allows it. */
 
 volatile int a[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
 volatile int b[16] = {2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2};

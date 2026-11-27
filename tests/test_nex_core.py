@@ -1,4 +1,4 @@
-"""Ядро NEX: одна нейросеть NNL с составным блоком «планировщик» (крошки + правило границы)."""
+"""NEX core: single NNL network with composite scheduler block (TINY + lower-bound rule)."""
 
 from __future__ import annotations
 
@@ -17,13 +17,13 @@ from nex_core import ядро
 from nex_core.язык import ЯзыкГрафа, текст_из_dag, текст_из_токенов
 
 ROOT = Path(__file__).resolve().parent.parent
-БЛОК = ROOT / "nex_core" / "блоки" / "планировщик"
-АРХ = ROOT / "nex_core" / "архитектуры"
+BLOCK = ROOT / "nex_core" / "блоки" / "планировщик"
+ARCH = ROOT / "nex_core" / "архитектуры"
 
 
-def _session(сценарий):
+def _session(scenario):
     s = cli.Session(args=cli._build_parser().parse_args([]))
-    s.set_scenario(сценарий)
+    s.set_scenario(scenario)
     return s
 
 
@@ -32,10 +32,10 @@ class TestLanguage(unittest.TestCase):
         for sc in cli.SCENARIOS:
             s = _session(sc)
             dag, model = s.dag_obj, s.model()
-            токены = ЯзыкГрафа().перевести(текст_из_dag(dag, model))["токены"]
-            текст, профиль = текст_из_токенов(токены)
-            again = build_dag(parse_graph_entries(текст))
-            self.assertEqual(профиль, model.name)
+            tokens = ЯзыкГрафа().перевести(текст_из_dag(dag, model))["токены"]
+            text, profile = текст_из_токенов(tokens)
+            again = build_dag(parse_graph_entries(text))
+            self.assertEqual(profile, model.name)
             self.assertEqual([(i.op, tuple(i.preds)) for i in again], [(i.op, tuple(i.preds)) for i in dag], sc)
 
 
@@ -46,7 +46,7 @@ class TestBlock(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("nnl_linter", ROOT / "nnl_vliw" / "NNL" / "линтер.py")
         lin = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(lin)
-        r = lin.проверить_блок(str(БЛОК), str(АРХ))
+        r = lin.проверить_блок(str(BLOCK), str(ARCH))
         self.assertEqual(r["статус"], "УСПЕХ", r)
         self.assertEqual(r["ошибки"], [])
 
@@ -54,34 +54,34 @@ class TestBlock(unittest.TestCase):
         from nnl_vliw.NNL.матплата import Матплата
 
         with tempfile.TemporaryDirectory() as t:
-            копия = Path(t) / "планировщик"
-            shutil.copytree(БЛОК, копия)
-            (копия / "веса.npz").write_bytes((копия / "веса.npz").read_bytes() + b"\0")
-            ok, ошибки = Матплата(ЯзыкГрафа(), str(АРХ)).подключить(str(копия))
+            copy_dir = Path(t) / "планировщик"
+            shutil.copytree(BLOCK, copy_dir)
+            (copy_dir / "веса.npz").write_bytes((copy_dir / "веса.npz").read_bytes() + b"\0")
+            ok, errors = Матплата(ЯзыкГрафа(), str(ARCH)).подключить(str(copy_dir))
             self.assertFalse(ok)
-            self.assertTrue(any("sha256" in e for e in ошибки))
+            self.assertTrue(any("sha256" in e for e in errors))
 
     def test_changed_crumb_weights_are_rejected(self):
-        from nex_core.архитектуры import планировщик as П
+        from nex_core.архитектуры import планировщик as SCHED_ARCH
 
         with tempfile.TemporaryDirectory() as t:
-            подмена = Path(t) / "weights.json"
-            подмена.write_text("{}", encoding="utf-8")
-            было = П.файлы_крошек
+            fake = Path(t) / "weights.json"
+            fake.write_text("{}", encoding="utf-8")
+            orig = SCHED_ARCH.файлы_крошек
             try:
-                П.файлы_крошек = lambda: [подмена] + было()[1:]
-                подмена2 = подмена.with_name("weights.json")
-                self.assertTrue(подмена2.exists())
+                SCHED_ARCH.файлы_крошек = lambda: [fake] + orig()[1:]
+                fake2 = fake.with_name("weights.json")
+                self.assertTrue(fake2.exists())
                 with self.assertRaises(ValueError):
-                    П.загрузить(str(БЛОК / "веса.npz"), {})
+                    SCHED_ARCH.загрузить(str(BLOCK / "веса.npz"), {})
             finally:
-                П.файлы_крошек = было
+                SCHED_ARCH.файлы_крошек = orig
 
     def test_garbage_request_means_dont_know(self):
-        from nex_core.архитектуры import планировщик as П
-        obj = П.загрузить(str(БЛОК / "веса.npz"), {})
-        счёты = П.проход2(obj, ["мусор", "у:0:НЕТТАКОЙ"], {})
-        self.assertEqual(set(счёты.values()), {0.0})
+        from nex_core.архитектуры import планировщик as SCHED_ARCH
+        obj = SCHED_ARCH.загрузить(str(BLOCK / "веса.npz"), {})
+        scores = SCHED_ARCH.проход2(obj, ["junk", "u:0:NOSUCH"], {})
+        self.assertEqual(set(scores.values()), {0.0})
 
 
 class TestCore(unittest.TestCase):
@@ -95,10 +95,10 @@ class TestCore(unittest.TestCase):
             d = r["решения"]["планировщик"]
             self.assertEqual(d["статус"], "ответ", sc)
             p = r["payload"]["планировщик"]
-            прямой = TinyScheduler().schedule(dag, model).schedule.makespan
+            direct = TinyScheduler().schedule(dag, model).schedule.makespan
             m = compute_metrics(dag, model)
             self.assertEqual(p["baseline"], base.schedule.makespan, sc)
-            self.assertEqual(p["tiny"], прямой, sc)
+            self.assertEqual(p["tiny"], direct, sc)
             self.assertTrue(p["законно"], sc)
             self.assertEqual(d["ответ"] == "граница_достигнута",
                              base.schedule.makespan <= max(m.critical_path_bound, m.resource_bound), sc)
@@ -106,32 +106,32 @@ class TestCore(unittest.TestCase):
     def test_removing_and_returning_block_changes_nothing(self):
         s = _session("slotclash")
         s.results()
-        до = ядро.выполнить(s.dag_obj, s.model())["решения"]["планировщик"]["ответ"]
-        с = ядро.система()
-        self.assertTrue(с.плата.снять("планировщик"))
+        before = ядро.выполнить(s.dag_obj, s.model())["решения"]["планировщик"]["ответ"]
+        sys_obj = ядро.система()
+        self.assertTrue(sys_obj.плата.снять("планировщик"))
         try:
-            self.assertEqual(с.плата.блоки, {})
+            self.assertEqual(sys_obj.плата.блоки, {})
         finally:
-            ok, _ = с.плата.подключить(str(БЛОК))
+            ok, _ = sys_obj.плата.подключить(str(BLOCK))
             self.assertTrue(ok)
-        после = ядро.выполнить(s.dag_obj, s.model())["решения"]["планировщик"]["ответ"]
-        self.assertEqual(до, после)
+        after = ядро.выполнить(s.dag_obj, s.model())["решения"]["планировщик"]["ответ"]
+        self.assertEqual(before, after)
 
     def test_techcard_without_working_blocks_gives_none(self):
         with tempfile.TemporaryDirectory() as t:
-            тк = json.loads((ROOT / "nex_core" / "техкарта.json").read_text(encoding="utf-8"))
-            тк["блоки"] = [{"имя": "нет", "папка": "блоки/нет"}]
-            путь = Path(t) / "техкарта.json"
-            путь.write_text(json.dumps(тк, ensure_ascii=False), encoding="utf-8")
-            self.assertIsNone(ядро.собрать(путь))
+            cfg = json.loads((ROOT / "nex_core" / "техкарта.json").read_text(encoding="utf-8"))
+            cfg["блоки"] = [{"имя": "missing", "папка": "блоки/missing"}]
+            cfg_path = Path(t) / "техкарта.json"
+            cfg_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+            self.assertIsNone(ядро.собрать(cfg_path))
 
     def test_narrator_gets_phrase_from_techcard(self):
         s = _session("slotclash")
         base, orc, _ = s.results()
-        строки = ядро.факты(s.dag_obj, s.model(), orc.schedule.makespan)
-        self.assertEqual(len(строки), 1)
-        self.assertIn("ядро NEX", строки[0])
-        self.assertIn("23", строки[0])
+        lines = ядро.факты(s.dag_obj, s.model(), orc.schedule.makespan)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("ядро NEX", lines[0])
+        self.assertIn("23", lines[0])
 
 
 if __name__ == "__main__":

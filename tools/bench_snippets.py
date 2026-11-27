@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Бейчмарк NEX CLI на рукописных фрагментах e2k.
+"""Benchmark NEX CLI on hand-written e2k assembly snippets.
 
-Берёт `.s`-файлы (по умолчанию `benchmarks/snippets/`), разбирает их тем же
-разбором, что и настоящий вывод lcc, строит граф зависимостей и прогоняет
-три планировщика:
+Parses `.s` files (default `benchmarks/snippets/`), builds dependency DAGs,
+and runs baseline (greedy), TINY Flash, and oracle (exact search).
 
-  * baseline   — жадный list scheduler;
-  * TINY Flash — быстрый планировщик проекта (тот же makespan, что TINY AI);
-  * oracle     — точный поиск с бюджетом времени.
-
-Для каждого файла печатается makespan, нижняя граница, доля UNKNOWN и
-замечания линтера. Результаты сохраняются в JSON и Markdown.
-
-Запуск:
+Usage:
     python tools/bench_snippets.py
     python tools/bench_snippets.py --budget 5
     python tools/bench_snippets.py benchmarks/snippets/03_predication.s
@@ -108,12 +100,12 @@ def _fmt_gain(baseline: int, best: int) -> str:
 
 
 def print_table(rows: list[dict]) -> None:
-    head = (f"{'файл':<28} {'N':>3} {'автор':>5} {'база':>5} {'TINY':>5} "
-            f"{'oracle':>6} {'опт.':>5} {'UNK':>4} {'ошиб':>5}")
+    head = (f"{'file':<28} {'N':>3} {'orig':>5} {'base':>5} {'TINY':>5} "
+            f"{'oracle':>6} {'opt.':>5} {'UNK':>4} {'errs':>5}")
     print(head)
     print("-" * len(head))
     for r in rows:
-        opt = "да" if r["oracle_optimal"] else "нет"
+        opt = "yes" if r["oracle_optimal"] else "no"
         print(f"{r['file']:<28} {r['ops']:>3} {r['compiler_cycles']:>5} "
               f"{r['baseline']:>5} {r['tiny']:>5} {r['oracle']:>6} {opt:>5} "
               f"{r['unknown']:>4} {r['errors']:>5}")
@@ -123,77 +115,77 @@ def print_details(rows: list[dict]) -> None:
     for r in rows:
         print()
         print(f"{r['file']}  ({r['path']})")
-        print(f"  {r['ops']} операций, {r['bundles']} широких команд, "
-              f"nop-тактов {r['nop_cycles']}; нижняя граница {r['lower_bound']} "
+        print(f"  {r['ops']} ops, {r['bundles']} wide instructions, "
+              f"nop cycles {r['nop_cycles']}; lower bound {r['lower_bound']} "
               f"({r['binding']})")
         if r["compiler_schedule"]:
-            print(f"  расписание компилятора: {r['compiler_cycles']} тактов (принято)")
+            print(f"  compiler schedule: {r['compiler_cycles']} cycles (valid)")
         else:
-            print("  расписание компилятора: не восстановлено — "
+            print("  compiler schedule: not reconstructed — "
                   + (r["compiler_problem"][1] if r["compiler_problem"] else "?"))
         print(f"  baseline {r['baseline']} | TINY Flash {r['tiny']} "
-              f"({r['ms']['tiny']} мс) | oracle {r['oracle']} "
-              f"({'оптимум доказан' if r['oracle_optimal'] else 'не доказан'}, "
-              f"{r['ms']['oracle']} мс)")
-        print(f"  выигрыш TINY Flash: {_fmt_gain(r['baseline'], r['tiny'])}; "
+              f"({r['ms']['tiny']} ms) | oracle {r['oracle']} "
+              f"({'proven optimal' if r['oracle_optimal'] else 'unproven'}, "
+              f"{r['ms']['oracle']} ms)")
+        print(f"  TINY Flash gain: {_fmt_gain(r['baseline'], r['tiny'])}; "
               f"UNKNOWN {r['unknown']} ({100 * r['unknown_share']:.0f}%)")
-        status = ", ".join(f"{k}: {'законно' if v else 'НЕЗАКОННО'}"
+        status = ", ".join(f"{k}: {'valid' if v else 'INVALID'}"
                            for k, v in r["legal"].items())
-        print(f"  проверка расписаний: {status}")
+        print(f"  schedule validation: {status}")
         for p in r["problems"][:4]:
-            print(f"  ! строка {p['line']}: {p['text']}")
+            print(f"  ! line {p['line']}: {p['text']}")
         if len(r["problems"]) > 4:
-            print(f"  ... ещё {len(r['problems']) - 4} замечаний")
+            print(f"  ... {len(r['problems']) - 4} more issues")
 
 
 def write_markdown(rows: list[dict], path: Path, model, budget: float) -> None:
     lines = [
-        "# Бейчмарк фрагментов e2k",
+        "# e2k Snippet Benchmark",
         "",
-        f"Профиль машины: `{model.name}` ({model.width} портов). "
-        f"Точный поиск: бюджет {budget:g} с на файл.",
+        f"Machine profile: `{model.name}` ({model.width} ports). "
+        f"Exact search budget: {budget:g} s per file.",
         "",
-        "| файл | N | автор | baseline | TINY Flash | oracle | оптимум | UNKNOWN | ошибки |",
+        "| file | N | orig | baseline | TINY Flash | oracle | optimal | UNKNOWN | errors |",
         "|---|---:|---:|---:|---:|---:|---|---:|---:|",
     ]
     for r in rows:
         lines.append(
             f"| `{r['file']}` | {r['ops']} | {r['compiler_cycles']} | "
             f"{r['baseline']} | {r['tiny']} | {r['oracle']} | "
-            f"{'да' if r['oracle_optimal'] else 'нет'} | {r['unknown']} | "
+            f"{'yes' if r['oracle_optimal'] else 'no'} | {r['unknown']} | "
             f"{r['errors']} |")
     lines += [
         "",
-        "`автор` — длина расписания, как оно написано в файле. Оно может быть",
-        "короче законного минимума: линтер показывает места, где результат прочитан",
-        "раньше, чем операция его выдаст. `baseline`, `TINY Flash` и `oracle` строят",
-        "расписание заново по графу зависимостей и модели машины.",
+        "`orig` is the schedule length as written in the file. It may be shorter",
+        "than the valid minimum: the linter flags reads issued before producer",
+        "latency elapses. `baseline`, `TINY Flash`, and `oracle` reschedule from",
+        "scratch using the dependency DAG and machine model.",
         "",
-        "## Подробности",
+        "## Details",
         "",
     ]
     for r in rows:
         lines.append(f"### `{r['file']}`")
         lines.append("")
-        lines.append(f"- Нижняя граница: {r['lower_bound']} ({r['binding']}); "
-                     f"критический путь {r['critical_path']}, "
-                     f"ресурсы {r['resource_bound']}.")
-        lines.append(f"- Время: baseline {r['ms']['baseline']} мс, "
-                     f"TINY Flash {r['ms']['tiny']} мс, "
-                     f"oracle {r['ms']['oracle']} мс.")
+        lines.append(f"- Lower bound: {r['lower_bound']} ({r['binding']}); "
+                     f"critical path {r['critical_path']}, "
+                     f"resources {r['resource_bound']}.")
+        lines.append(f"- Time: baseline {r['ms']['baseline']} ms, "
+                     f"TINY Flash {r['ms']['tiny']} ms, "
+                     f"oracle {r['ms']['oracle']} ms.")
         if r["compiler_schedule"]:
-            lines.append(f"- Расписание компилятора: {r['compiler_cycles']} тактов.")
+            lines.append(f"- Compiler schedule: {r['compiler_cycles']} cycles.")
         else:
-            lines.append("- Расписание компилятора не восстановлено: "
+            lines.append("- Compiler schedule not reconstructed: "
                          + (r["compiler_problem"][1] if r["compiler_problem"] else "?"))
         if r["unknown"]:
             names = ", ".join(f"`{k}`" for k in r["unknown_mnemonics"])
-            lines.append(f"- UNKNOWN: {r['unknown']} операций ({names}) — "
-                         "латентность 1 и любой канал, это заглушка, а не замер.")
+            lines.append(f"- UNKNOWN: {r['unknown']} ops ({names}) — "
+                         "latency 1 and any channel (placeholder, not measured).")
         if r["problems"]:
-            lines.append("- Замечания линтера:")
+            lines.append("- Linter diagnostics:")
             for p in r["problems"][:6]:
-                lines.append(f"  - строка {p['line']}: {p['text']}")
+                lines.append(f"  - line {p['line']}: {p['text']}")
         lines.append("")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -204,11 +196,11 @@ def main() -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    ap = argparse.ArgumentParser(description="Бейчмарк NEX CLI на фрагментах .s")
-    ap.add_argument("paths", nargs="*", help="файлы .s или папки (по умолчанию benchmarks/snippets)")
+    ap = argparse.ArgumentParser(description="NEX CLI benchmark on .s snippets")
+    ap.add_argument("paths", nargs="*", help=".s files or directories (default: benchmarks/snippets)")
     ap.add_argument("--profile", default="e2k-v6-measured")
-    ap.add_argument("--budget", type=float, default=1.5, help="бюджет oracle, с")
-    ap.add_argument("--portfolio", type=float, default=0.4, help="бюджет портфеля oracle, с")
+    ap.add_argument("--budget", type=float, default=1.5, help="oracle time budget, s")
+    ap.add_argument("--portfolio", type=float, default=0.4, help="oracle portfolio time budget, s")
     ap.add_argument("--json", default="benchmarks/results.json")
     ap.add_argument("--md", default="benchmarks/RESULTS.md")
     ap.add_argument("--quiet", action="store_true")
@@ -224,7 +216,7 @@ def main() -> int:
         else:
             targets.append(p)
     if not targets:
-        print("нет файлов .s", file=sys.stderr)
+        print("no .s files found", file=sys.stderr)
         return 2
 
     model = get_profile(args.profile)
@@ -255,9 +247,9 @@ def main() -> int:
     total = sum(r["ops"] for r in rows)
     wall = sum(r["ms"]["tiny"] + r["ms"]["oracle"] for r in rows)
     print()
-    print(f"итого: {len(rows)} файлов, {total} операций, "
-          f"TINY Flash + oracle ~ {wall:.0f} мс")
-    print(f"сохранено: {args.json}, {args.md}")
+    print(f"total: {len(rows)} files, {total} ops, "
+          f"TINY Flash + oracle ~ {wall:.0f} ms")
+    print(f"saved: {args.json}, {args.md}")
     return 0
 
 

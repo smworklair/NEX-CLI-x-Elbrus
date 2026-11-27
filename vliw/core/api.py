@@ -1,16 +1,13 @@
-"""Общий контракт планировщика.
+"""Common scheduler contract (extension point for learned models).
 
-ЭТО ТОЧКА ПОДСТАНОВКИ ОБУЧЕННОЙ МОДЕЛИ.
+Baseline heuristic, exact oracle, and learned schedulers all implement the
+same `Scheduler` protocol (`schedule(dag, model) -> SchedulingResult`), so
+validation, metrics, explanations, CLI, and UI work unchanged.
 
-Baseline-эвристика и «оракул» (доказанный оптимум) реализуют один и тот же
-интерфейс `Scheduler`. Когда на Hexagon появится реально обученная модель,
-её достаточно завернуть в класс с тем же `schedule()` — весь остальной код
-(валидация, метрики, объяснения, CLI, визуализация) не меняется.
-
-Минимальная реализация нового планировщика:
+Minimal implementation:
 
     class LearnedScheduler:
-        name = "ИИ-планировщик (обученная модель)"
+        name = "AI scheduler (learned model)"
         kind = "learned"
         short = "learned"
 
@@ -18,9 +15,7 @@ Baseline-эвристика и «оракул» (доказанный оптим
             ...
             return SchedulingResult(schedule=sched, trace=steps, notes=[])
 
-Формат `trace` не обязателен для работы — он нужен только для объяснений.
-Планировщик, который его не заполняет, останется рабочим, но потеряет
-пошаговый разбор в выводе.
+`trace` is optional and used only for step-by-step explanations.
 """
 
 from __future__ import annotations
@@ -36,32 +31,32 @@ from .schedule import Placement, Schedule
 
 @dataclass
 class Candidate:
-    """Одна инструкция-кандидат в решении конкретного такта."""
+    """One candidate instruction in a single cycle decision."""
 
     instr: int
     ready_at: int
-    """С какого такта операнды готовы."""
+    """Earliest cycle when operands are ready."""
     height: int
-    """Длина оставшегося критического пути (приоритет baseline-эвристики)."""
+    """Remaining critical-path length (baseline heuristic priority)."""
     chosen: bool = False
     channel: int | None = None
     reason: str = ""
-    """Почему выбрана / почему нет — то, что печатается человеку."""
+    """Human-readable reason why this instruction was picked or skipped."""
 
 
 @dataclass
 class DecisionStep:
-    """Снимок решения планировщика в одном такте."""
+    """Snapshot of scheduler decisions in one cycle."""
 
     cycle: int
     free_channels: tuple[int, ...]
     candidates: list[Candidate] = field(default_factory=list)
     blocked: list[tuple[int, int]] = field(default_factory=list)
-    """(инструкция, до какого такта она держит канал) — занятые монопольно."""
+    """(instruction, busy_until_cycle) for channels held exclusively."""
     rule: str = ""
-    """Формулировка правила, по которому принято решение."""
+    """Description of the rule applied in this cycle."""
     comment: str = ""
-    """Свободный комментарий к такту."""
+    """Optional cycle commentary."""
 
     @property
     def issued(self) -> list[int]:
@@ -73,9 +68,9 @@ class SchedulingResult:
     schedule: Schedule
     trace: list[DecisionStep] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    """Заметки для отчёта: чем занимался планировщик, что доказал, где сдался."""
+    """Report notes: what the scheduler did, proved, or timed out on."""
     optimal: bool | None = None
-    """True — оптимальность доказана, False — точно нет, None — неизвестно."""
+    """True if proven optimal, False if proven suboptimal, None if unknown."""
     search_stats: dict[str, object] = field(default_factory=dict)
 
 
@@ -89,34 +84,34 @@ class Scheduler(Protocol):
 
 
 # --------------------------------------------------------------------------
-# Поток событий планировщика
+# Scheduler event stream
 # --------------------------------------------------------------------------
 #
-# ЗАЧЕМ ЭТО ПОЯВИЛОСЬ. Контракт выше описывает планировщик, который считает и
-# возвращает результат целиком. Для baseline и «оракула» этого хватало: они
-# считают миллисекунды, и разницы между «идёт» и «готово» человек не замечает.
+# WHY THIS EXISTS: the synchronous contract above works for millisecond
+# baseline/oracle runs, whereas learned models take 30-60 s and stream
+# partial results. An event stream lets any UI render live progress,
 #
-# Обученная модель считает 30..60 секунд и выдаёт ответ ПО ЧАСТЯМ. В прежнем
-# контракте показать это было нечем, поэтому появился сторонний kwarg
-# `on_text=` у `LearnedScheduler.schedule()` — его нет в протоколе, и знает о
-# нём только `cli.py`, который печатает поток прямо в stdout. А полноэкранный
-# интерфейс собирает stdout команды целиком (`vliw/tui/bridge.py`) и показывает
-# в конце — то есть стриминг там невидим ПО ПОСТРОЕНИЮ: экран замирает на
-# полминуты, потом вываливается стена текста.
+# grid fills, and cancellation cleanly while keeping the `Scheduler`
+# protocol backwards-compatible via `stream()`.
 #
-# Поток событий убирает причину, а не следствие: планировщик рассказывает о
-# себе по ходу дела, а интерфейс решает, как это показать — построчной
-# печатью, заливкой решётки или полосой прогресса.
 #
-# ЧТО ЭТО НЕ ЛОМАЕТ. Протокол `Scheduler` остаётся прежним. Планировщик,
-# написанный по старому контракту (одна функция `schedule()`, как обещано в
-# докстринге этого файла и в README), продолжает работать: `stream()` сам
-# обернёт его в переигровку. Baseline и «оракул» не меняются ни строкой.
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
 
 
 @dataclass(frozen=True)
 class Started:
-    """Планировщик представился. Всегда первое событие потока."""
+    """Scheduler identification. Always the first event in the stream."""
 
     who: str
     note: str = ""
@@ -124,11 +119,7 @@ class Started:
 
 @dataclass(frozen=True)
 class Note:
-    """Строка для человека: то, что раньше печаталось как `Style.dim(...)`.
-
-    `level` — роль для раскраски (`dim`, `warning`, `error`, `success`), а не
-    готовый цвет: красить умеет только `vliw.ui`, ядро про цвета не знает.
-    """
+    """Human-readable status line (`level` is a semantic role; coloring lives in `vliw.ui`)."""
 
     text: str
     level: str = "dim"
@@ -136,24 +127,14 @@ class Note:
 
 @dataclass(frozen=True)
 class Token:
-    """Кусок сырого ответа модели, как он пришёл.
-
-    Только для планировщиков, которые ГЕНЕРИРУЮТ текст. Baseline и «оракул»
-    таких событий не производят: им нечего показывать посимвольно.
-    """
+    """Raw model text chunk (emitted only by text-generating schedulers)."""
 
     text: str
 
 
 @dataclass(frozen=True)
 class Step:
-    """Одно решение планировщика (такт, кандидаты, правило).
-
-    `live=False` означает ПЕРЕИГРОВКУ уже готового разбора, а не наблюдение за
-    работой. Флаг едет внутри события намеренно: иначе интерфейс однажды
-    подпишет мгновенную переигровку baseline как «смотрим, как оно думает», и
-    поймать это будет нечем.
-    """
+    """Single cycle decision (`live=False` indicates replay of a completed trace)."""
 
     step: DecisionStep
     live: bool = True
@@ -161,12 +142,7 @@ class Step:
 
 @dataclass(frozen=True)
 class Placed:
-    """Операция встала в (такт, канал).
-
-    Отдельно от `Step` потому, что модель `DecisionStep` не производит вовсе —
-    у неё нет рассуждения по тактам, — но размещения производит. Решётке нужно
-    ровно это событие, и оно одно работает для всех планировщиков.
-    """
+    """An instruction was placed at (cycle, channel); drives live grid updates."""
 
     placement: Placement
     live: bool = True
@@ -174,12 +150,7 @@ class Placed:
 
 @dataclass(frozen=True)
 class Repaired:
-    """Канал переназначен починкой: такт не тронут, канал стал законным.
-
-    Своё событие, а не строчка в заметках: иначе починенная ячейка молча
-    выглядит как работа модели. Ровно то приписывание модели чужого
-    результата, против которого написан докстринг `vliw/learned/scheduler.py`.
-    """
+    """Channel reassigned by repair (cycle unchanged, channel made valid)."""
 
     instr: int
     frm: int
@@ -188,10 +159,7 @@ class Repaired:
 
 @dataclass(frozen=True)
 class Progress:
-    """Сделано `done` из `total`. Для замеров и всего, что идёт минутами.
-
-    `total=0` — когда общее число заранее неизвестно.
-    """
+    """Progress update (`done` of `total`; `total=0` when unknown)."""
 
     done: int
     total: int = 0
@@ -200,21 +168,16 @@ class Progress:
 
 @dataclass(frozen=True)
 class Done:
-    """Терминальное событие: всё получилось."""
+    """Terminal event: scheduling succeeded."""
 
     result: SchedulingResult
 
 
 @dataclass(frozen=True)
 class Failed:
-    """Терминальное событие: не получилось, и это ОЖИДАЕМЫЙ исход.
+    """Terminal event: expected failure (missing weights, timeout, missing binary).
 
-    Сюда идут отказы, которые являются измеряемым результатом или обычным
-    состоянием чужой машины: веса не найдены, модель не уложилась в срок,
-    llama.cpp не собран. Ошибка В КОДЕ планировщика сюда НЕ идёт — она летит
-    исключением и валит команду громко, как и раньше (см. проверку расписаний
-    baseline/«оракула» в `cli.py`: незаконное расписание оттуда — это
-    внутренняя ошибка, а не событие).
+    Internal scheduler bugs still raise exceptions rather than emitting Failed.
     """
 
     error: str
@@ -224,16 +187,11 @@ SchedulerEvent = (Started | Note | Token | Step | Placed | Repaired
                   | Progress | Done | Failed)
 
 TERMINAL = (Done, Failed)
-"""Поток всегда заканчивается ровно одним событием из этих — оно последнее."""
+"""Every stream terminates with exactly one of these events."""
 
 
 def _replay(res: SchedulingResult) -> Iterator[SchedulerEvent]:
-    """Готовый результат — как поток событий, по тактам.
-
-    Порядок «решение такта, затем что в этом такте встало» выбран не для
-    красоты: он позволяет показывать переигровку в той же решётке и тем же
-    кодом, что и живую работу модели.
-    """
+    """Replay a completed SchedulingResult as cycle-ordered events."""
     seen: set[int] = set()
     for st in res.trace:
         yield Step(st, live=False)
@@ -242,32 +200,20 @@ def _replay(res: SchedulingResult) -> Iterator[SchedulerEvent]:
             if p is not None and i not in seen:
                 seen.add(i)
                 yield Placed(p, live=False)
-    # `trace` не обязателен (см. докстринг файла): планировщик без него
-    # остаётся рабочим. Размещения всё равно обязаны доехать до решётки.
+    # `trace` is optional: placements must still reach the grid without it.
+    #
     for i, p in sorted(res.schedule.placements.items()):
         if i not in seen:
             yield Placed(p, live=False)
 
 
 def stream(scheduler, dag: DAG, model: MachineModel) -> Iterator[SchedulerEvent]:
-    """Единый вход для интерфейсов: работа планировщика как поток событий.
+    """Unified UI entry point: stream events from any Scheduler.
 
-    Планировщик, у которого есть `schedule_events()`, рассказывает о себе сам.
-    Планировщику по старому контракту хватает `schedule()` — его результат
-    переигрывается событиями, и снаружи разницы в обращении нет.
-
-    ОТМЕНА. Поток — генератор, поэтому отмена не требует ни флагов, ни
-    отдельного протокола: `gen.close()` бросает `GeneratorExit` в текущей
-    точке `yield`, и планировщик доводит свой `finally` (у обученной модели там
-    убийство подпроцесса llama.cpp). Потребителю достаточно перестать читать.
-
-    ОТСЮДА ПРАВИЛО ДЛЯ АВТОРА `schedule_events()`: `try` обязан начинаться ДО
-    первого `yield`, а не после. `GeneratorExit` прилетает в ту точку, где
-    генератор стоит сейчас; если он стоит на `yield` вне `try`, `finally` не
-    отработает. Отмена сразу после «планировщик представился» — самый частый
-    случай в жизни (человек запустил и передумал), и для обученной модели она
-    оставила бы осиротевший процесс llama.cpp с гигабайтами весов. Правило
-    приколочено тестом `test_try_after_first_yield_leaks_...`.
+    Schedulers with `schedule_events()` stream directly; legacy schedulers
+    with only `schedule()` are replayed via `replay()`. Closing the generator
+    triggers `GeneratorExit` for cleanup; `schedule_events()` implementations
+    must open `try:` BEFORE their first `yield`.
     """
     fn = getattr(scheduler, "schedule_events", None)
     if fn is not None:

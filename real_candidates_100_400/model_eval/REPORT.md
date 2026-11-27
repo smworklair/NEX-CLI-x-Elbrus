@@ -1,28 +1,15 @@
-# Модель на реальном коде: замер OOD + вклад в портфель
+# Model on Real Code: OOD Evaluation + Portfolio Contribution
 
-Вопрос задачи: добавляет ли обученная модель (LoRA поверх Qwen2.5-3B, GGUF
-через llama.cpp, адаптер **lora-merged**) хоть что-нибудь сверх жадного
-планировщика, детерминированного правила и случайного перебора — на графах
-112–386 узлов (обучена на 4–24). Короткий ответ — **нет: L3 строго короче
-L2 на 0 из 13 графов, суммарно +0 тактов. И против L2-fair (равное время)
-тоже 0 из 13.** Ниже — измерения, а не мнение.
+Research question: does the fine-tuned model (LoRA on Qwen2.5-3B, GGUF via llama.cpp, adapter **lora-merged**) add anything beyond the greedy scheduler, a deterministic rule, and random search on graphs of 112–386 nodes (trained on 4–24)? Short answer — **no: L3 is strictly shorter than L2 on 0 of 13 graphs (+0 cycles total). Against L2-fair (equal wall-clock budget), also 0 of 13.** Below are measurements, not opinions.
 
-## 1. Задача A: модель поднята настоящим путём
+## 1. Task A: Model Running Through the Real Path
 
-`runtime.status(None)` сразу рапортовал готовность (бэкенд llama-server,
-база qwen2.5-3b-instruct-q4_k_m.gguf 2.1 ГБ, 6 потоков, ctx 4096). Два барьера:
+`runtime.status(None)` immediately reported ready (`llama-server` backend, base `qwen2.5-3b-instruct-q4_k_m.gguf` 2.1 GB, 6 threads, `ctx 4096`). Two hurdles:
 
-- **libgomp**: `ldd vendor/llama-b10488/llama-server` → `libgomp.so.1 =>
-  not found`; в системе её нет вовсе (нет и gcc), sudo без пароля. Починка
-  без правки кода проекта: `apt-get download libgomp1` (162 КБ) →
-  `dpkg-deb -x` в `~/.local/lib/gomp` → `LD_LIBRARY_PATH` в окружении
-  замерных скриптов и `run.sh`. Проверка: повторный `ldd` — `not found`
-  больше нет, сервер стартует кодом проекта (`shared_server().ensure()`).
-- **Контекст**: проект стартует сервер с фиксированным ctx=4096
-  (`SERVER_CTX`, менять `vliw/**` запрещено — и не менялось). Замер токенов
-  промптов через `/tokenize` живого сервера:
+- **`libgomp`**: `ldd vendor/llama-b10488/llama-server` → `libgomp.so.1 => not found`; absent from the system (no `gcc` either), passwordless `sudo`. Fixed without modifying project code: `apt-get download libgomp1` (162 KB) → `dpkg-deb -x` into `~/.local/lib/gomp` → `LD_LIBRARY_PATH` in benchmark scripts and `run.sh`. Verified: re-running `ldd` shows no `not found`, and the server launches via project code (`shared_server().ensure()`).
+- **Context window**: the project launches the server with fixed `ctx=4096` (`SERVER_CTX`; editing `vliw/**` was forbidden and untouched). Prompt token counts measured via `/tokenize` on the live server:
 
-| граф | n | токены промпта | осталось на ответ |
+| graph | n | prompt tokens | remaining for reply |
 |---|---|---|---|
 | emb_fir | 347 | 3773 | 323 |
 | poly_symm | 386 | 3563 | 533 |
@@ -31,98 +18,68 @@ L2 на 0 из 13 графов, суммарно +0 тактов. И проти�
 | … | … | … | … |
 | cm_mul | 112 | 927 | 3169 |
 
-(полная таблица — в `tokens.py`; все 25 промптов влезают в 4096.)
-Ответу нужно ~12 токенов/строка × n строк: на больших графах места нет
-физически. `max_new_tokens = 12·n`, температура 0. Что модель успела выдать
-до обрыва — это и есть замер задачи B; отдельный «большой контекст» не
-поднимался осознанно: меряется штатный путь проекта, а не hypothetical.
+(full table in `tokens.py`; all 25 prompts fit within 4096.)
+A full completion needs ~12 tokens/line × n lines, so large graphs physically run out of context. `max_new_tokens = 12·n`, temperature 0. Whatever the model emitted before truncation is the Task B measurement; a separate "large context" server was intentionally not spun up — we evaluate the project's actual production path, not a hypothetical.
 
-Генерация: `gen_one.py` — `training.encode.encode_prompt` +
-`runtime.make_backend(lora-merged).generate(...)` при temperature=0,
-сырой текст байт-в-байт в `raw/<graph>.txt` (+ `.meta.json` с временами и
-токенами). Скорость 1.5–6.5 ток/с (длинные промпты медленнее), 178–395 с
-на граф. Порядок: 13 целей от меньших к большим, затем 12 контрольных.
+Generation: `gen_one.py` — `training.encode.encode_prompt` + `runtime.make_backend(lora-merged).generate(...)` at `temperature=0`, raw text saved byte-for-byte to `raw/<graph>.txt` (+ `.meta.json` with timings and token counts). Speed: 1.5–6.5 tok/s (longer prompts slower), 178–395 s per graph. Order: 13 target graphs from smallest to largest, then 12 control graphs.
 
-## 2. Задача B: что модель выдала (OOD-замер)
+## 2. Task B: What the Model Output (OOD Evaluation)
 
-| граф | ptok | otok | t,c | строк | совпало | размещ. | extra | dup | miss | 1я битая | обрыв | raw |
+| graph | ptok | otok | t,s | lines | matched | placed | extra | dup | miss | 1st bad | trunc | raw |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| covariance | 1945 | 2151 | 370 | 182 | 149 | 149 | 0 | 32 | 37 | 1 | да | незаконен |
-| gemm | 1540 | 2280 | 385 | 185 | 0 | 0 | 0 | 0 | 190 | 1 | да | — |
-| tsvc | 2457 | 1639 | 361 | 140 | 0 | 0 | 0 | 0 | 243 | 1 | да | — |
-| adi | 2371 | 1725 | 366 | 143 | 0 | 0 | 0 | 0 | 251 | 1 | да | — |
-| gesummv | 2675 | 1421 | 339 | 118 | 0 | 0 | 0 | 0 | 255 | 1 | да | — |
-| iir | 2253 | 1843 | 391 | 152 | 0 | 0 | 0 | 0 | 256 | 1 | да | — |
-| floyd | 2361 | 1735 | 368 | 145 | 0 | 0 | 0 | 0 | 265 | 1 | да | — |
-| heat3d | 3166 | 930 | 300 | 79 | 0 | 0 | 0 | 0 | 284 | 1 | да | — |
-| gramschmidt | 2781 | 1315 | 323 | 110 | 0 | 0 | 0 | 0 | 313 | 1 | да | — |
-| fdtd | 2882 | 1214 | 313 | 103 | 0 | 0 | 0 | 0 | 340 | 1 | да | — |
-| fir | 3773 | 323 | 214 | 28 | 0 | 0 | 0 | 0 | 347 | 1 | да | — |
-| jacobi2d | 3417 | 679 | 253 | 58 | 0 | 0 | 0 | 0 | 349 | 1 | да | — |
-| symm | 3563 | 533 | 234 | 46 | 0 | 0 | 0 | 0 | 386 | 1 | да | — |
-| trisolv_int | 975 | 1404 | 220 | 121 | 119 | 116 | 3 | 0 | 1 | 1 | да | незаконен |
-| cm_vect | 937 | 1356 | 209 | 119 | 117 | 112 | 5 | 0 | 1 | 1 | да | незаконен |
-| остальные 10 | … | … | … | … | 0 | 0 | 0 | 0 | n | 1 | да* | — |
+| covariance | 1945 | 2151 | 370 | 182 | 149 | 149 | 0 | 32 | 37 | 1 | yes | invalid |
+| gemm | 1540 | 2280 | 385 | 185 | 0 | 0 | 0 | 0 | 190 | 1 | yes | — |
+| tsvc | 2457 | 1639 | 361 | 140 | 0 | 0 | 0 | 0 | 243 | 1 | yes | — |
+| adi | 2371 | 1725 | 366 | 143 | 0 | 0 | 0 | 0 | 251 | 1 | yes | — |
+| gesummv | 2675 | 1421 | 339 | 118 | 0 | 0 | 0 | 0 | 255 | 1 | yes | — |
+| iir | 2253 | 1843 | 391 | 152 | 0 | 0 | 0 | 0 | 256 | 1 | yes | — |
+| floyd | 2361 | 1735 | 368 | 145 | 0 | 0 | 0 | 0 | 265 | 1 | yes | — |
+| heat3d | 3166 | 930 | 300 | 79 | 0 | 0 | 0 | 0 | 284 | 1 | yes | — |
+| gramschmidt | 2781 | 1315 | 323 | 110 | 0 | 0 | 0 | 0 | 313 | 1 | yes | — |
+| fdtd | 2882 | 1214 | 313 | 103 | 0 | 0 | 0 | 0 | 340 | 1 | yes | — |
+| fir | 3773 | 323 | 214 | 28 | 0 | 0 | 0 | 0 | 347 | 1 | yes | — |
+| jacobi2d | 3417 | 679 | 253 | 58 | 0 | 0 | 0 | 0 | 349 | 1 | yes | — |
+| symm | 3563 | 533 | 234 | 46 | 0 | 0 | 0 | 0 | 386 | 1 | yes | — |
+| trisolv_int | 975 | 1404 | 220 | 121 | 119 | 116 | 3 | 0 | 1 | 1 | yes | invalid |
+| cm_vect | 937 | 1356 | 209 | 119 | 117 | 112 | 5 | 0 | 1 | 1 | yes | invalid |
+| other 10 | … | … | … | … | 0 | 0 | 0 | 0 | n | 1 | yes* | — |
 
-(`*` cm_mul: 927+1149 < 4096 — единственный не обрезанный контекстом ответ,
-и всё равно 0 совпадений: поломка формата систематическая, а не обрезка.)
+(`*` `cm_mul`: 927+1149 < 4096 — the only non-truncated completion, and still 0 matches: format collapse is systematic, not caused by truncation.)
 
-Диагноз формата: модель пишет строки вида `расписание: такт=1 канал=2` —
-**без id инструкции** (похоже, эхом тянет хвостовое `расписание:` промпта),
-поэтому `decode_completion` (`(\d+): такт=...`) находит ноль. Первая же
-строка битая везде (у covariance первая строка ` такт=0 канал=1` — потерян
-id `0:`, дальше 149 строк с id). Дубли id: только covariance (32). Вне
-диапазона: trisolv 3, cm_vect 5. Полных законных сырых ответов: **0 из 25**.
-Детерминизм: повторная генерация covariance при temperature=0 —
-побайтово идентично (SHA256 совпал), замер воспроизводим.
+Format diagnosis: the model emits lines like `расписание: такт=1 канал=2` — **omitting the instruction ID** (apparently echoing the trailing prompt header), so `decode_completion` (`(\d+): ...`) matches zero lines. The very first line is malformed everywhere (for `covariance`, line 1 drops ID `0:`, followed by 149 lines with IDs). Duplicate IDs: `covariance` only (32). Out-of-range IDs: `trisolv` 3, `cm_vect` 5. Complete valid raw schedules: **0 of 25**.
+Determinism: re-generating `covariance` at `temperature=0` produced byte-identical output (matching SHA-256), confirming reproducibility.
 
-Про температуру 0.8 (3×2–3 графа): **не делалось, осознанно**. Поломка
-формата наблюдается на 12/13 temp-0 прогонах и на единственном
-необрезанном ответе — это систематика OOD, а не дисперсия сэмплирования;
-стохастические повторы нельзя перепроверить детерминированно и они не
-могут изменить вердикт L3 (см. раздел 3). Бюджет ушёл в 12 контрольных
-генераций для V5 вместо этого.
+Regarding `temperature=0.8` (3×2–3 graphs): **intentionally omitted**. Format breakdown occurs on 12/13 `temp=0` runs and on the sole non-truncated completion — this is systematic OOD failure, not sampling variance; stochastic retries cannot be deterministically re-verified and cannot flip the L3 verdict (Section 3). Compute budget was spent on the 12 control generations for V5 instead.
 
-## 3. Задача C: слои и главная цифра
+## 3. Task C: Layers and Headline Number
 
-| граф | L0 | L1 | L2 10/100/1000 | L2-fair (T, попыток) | L3 (победитель) | порядок@покрытие |
+| graph | L0 | L1 | L2 10/100/1000 | L2-fair (T, trials) | L3 (winner) | order@coverage |
 |---|---|---|---|---|---|---|
-| gemm | 35 | 34 | 35/34/33 | 33 (385с, 42k) | 35 жадный | 35@0.00 |
-| gesummv | 56 | 53 | 54/54/53 | 53 (339с, 29k) | 56 жадный | 56@0.00 |
-| symm | 72 | 66 | 71/68/68 | 67 (234с, 6k) | 72 жадный | 72@0.00 |
-| gramschmidt | 82 | 75 | 78/77/75 | 75 (323с, 10k) | 82 жадный | 82@0.00 |
-| jacobi2d | 68 | 66 | 64/64/63 | 62 (253с, 10k) | 68 жадный | 68@0.00 |
-| adi | 114 | 113 | 114/113/113 | 113 (366с, 29k) | 114 жадный | 114@0.00 |
-| fdtd | 61 | 59 | 60/60/59 | 58 (313с, 10k) | 61 жадный | 61@0.00 |
-| floyd | 47 | 47 | 47/47/46 | 46 (368с, 18k) | 47 жадный | 47@0.00 |
-| heat3d | 54 | 52 | 54/53/53 | 52 (300с, 23k) | 54 жадный | 54@0.00 |
-| covariance | 93 | 92 | 93/91/91 | 90 (370с, 47k) | 93 жадный | 94@0.80 |
-| fir | 61 | 60 | 61/60/60 | 60 (214с, 12k) | 61 жадный | 61@0.00 |
-| iir | 44 | 43 | 43/43/43 | 43 (391с, 28k) | 44 жадный | 44@0.00 |
-| tsvc | 51 | 45 | 48/47/46 | 46 (361с, 29k) | 51 жадный | 51@0.00 |
+| gemm | 35 | 34 | 35/34/33 | 33 (385s, 42k) | 35 greedy | 35@0.00 |
+| gesummv | 56 | 53 | 54/54/53 | 53 (339s, 29k) | 56 greedy | 56@0.00 |
+| symm | 72 | 66 | 71/68/68 | 67 (234s, 6k) | 72 greedy | 72@0.00 |
+| gramschmidt | 82 | 75 | 78/77/75 | 75 (323s, 10k) | 82 greedy | 82@0.00 |
+| jacobi2d | 68 | 66 | 64/64/63 | 62 (253s, 10k) | 68 greedy | 68@0.00 |
+| adi | 114 | 113 | 114/113/113 | 113 (366s, 29k) | 114 greedy | 114@0.00 |
+| fdtd | 61 | 59 | 60/60/59 | 58 (313s, 10k) | 61 greedy | 61@0.00 |
+| floyd | 47 | 47 | 47/47/46 | 46 (368s, 18k) | 47 greedy | 47@0.00 |
+| heat3d | 54 | 52 | 54/53/53 | 52 (300s, 23k) | 54 greedy | 54@0.00 |
+| covariance | 93 | 92 | 93/91/91 | 90 (370s, 47k) | 93 greedy | 94@0.80 |
+| fir | 61 | 60 | 61/60/60 | 60 (214s, 12k) | 61 greedy | 61@0.00 |
+| iir | 44 | 43 | 43/43/43 | 43 (391s, 28k) | 44 greedy | 44@0.00 |
+| tsvc | 51 | 45 | 48/47/46 | 46 (361s, 29k) | 51 greedy | 51@0.00 |
 
-(L2: свежие сиды 500001+i, S1-сетка; L2-fair: сиды 510001+i, бюджет = T(g)
-генерации; L3: `decode_completion → repair-зеркало → variants/choose` на
-сохранённом тексте. Победитель портфеля везде «жадный».)
+(L2: fresh seeds `500001+i`, S1 grid; L2-fair: seeds `510001+i`, time budget = generation time `T(g)`; L3: `decode_completion → repair-mirror → variants/choose` on saved text. Portfolio winner is "greedy" everywhere.)
 
-**Главная цифра: L3 строго короче L2 — на 0 из 13 графов, суммарно +0
-тактов. Против L2-fair (равное время: перебор за те же минуты находит
-90/33/46/…) — тоже 0 из 13.** Модель не добавляет ничего даже там, где её
-кандидат формально в портфеле: портфель всегда выбирает жадного.
+**Headline result: L3 is strictly shorter than L2 on 0 of 13 graphs (+0 cycles total). Against L2-fair (equal wall-clock time: random search in the same minutes finds 90/33/46/…), also 0 of 13.** The model contributes nothing even when its candidate enters the portfolio: the portfolio always picks greedy.
 
-Подвопрос про порядок: при покрытии 0.00 кандидат «порядок» равен жадному
-по построению (12 случаев); единственное ненулевое покрытие —
-covariance 0.80 → **94, на такт ХУЖЕ жадного 93**; trisolv 0.99 → 140 против
-128 (+12), cm_vect 0.99 → 24 против 19 (+5). Наблюдение: чем больше модель
-разметила, тем хуже её порядок относительно height — префикс не несёт
-полезного сигнала, он несёт вред. Зависимости «доля разметки → качество»
-с положительным наклоном нет ни в одной точке.
+Ordering sub-question: at 0.00 coverage, the "order" candidate equals greedy by construction (12 cases); the only non-zero coverage is `covariance` 0.80 → **94, 1 cycle WORSE than greedy's 93**; `trisolv` 0.99 → 140 vs. 128 (+12); `cm_vect` 0.99 → 24 vs. 19 (+5). Observation: the more nodes the model annotates, the worse its ordering becomes relative to height — the prefix carries no useful signal, only harm. There is no positive slope anywhere in "coverage → quality".
 
-## 4. Задача D: опорная таблица (25 графов)
+## 4. Task D: Reference Table (25 Graphs)
 
-L0/L1/L2(10/100/1000)/лучшее известное из `search/best_known.json`:
+L0 / L1 / L2 (10/100/1000) / best known from `search/best_known.json`:
 
-| граф | L0 | L1 | 10/100/1000 | best |
+| graph | L0 | L1 | 10/100/1000 | best |
 |---|---|---|---|---|
 | gemm | 35 | 34 | 35/34/33 | 33 |
 | gesummv | 56 | 53 | 54/54/53 | 53 |
@@ -139,10 +96,9 @@ L0/L1/L2(10/100/1000)/лучшее известное из `search/best_known.js
 | tsvc | 51 | 45 | 48/47/46 | 46 |
 | syrk/trmm/durbin/trisolv/seidel/jacobi1d/gemver/lu/oblas/cm_* | =L0 | =L0 | =L0 | =L0 |
 
-(контроль: все слои равны жадному — там граница; L2-fair на контроле нет:
-бюджет честности привязан к генерации, которой в L-слое нет.)
+(controls: all layers equal greedy — already at the lower bound; L2-fair is omitted on controls since the fairness budget ties to generation time.)
 
-## 5. Вывод VERIFY.sh (exit 0)
+## 5. `VERIFY.sh` Output (exit 0)
 
 ```
 PASS  base-25  25/25 == 25/25
@@ -175,34 +131,17 @@ PASS  L2-fair-poly_fdtd  T=313s/K=10163 == exp~10519
 PASS  L2-fair-emb_fir  T=214s/K=12111 == exp~12920
 PASS  L2-fair-poly_jacobi2d  T=253s/K=10318 == exp~10793
 PASS  L2-fair-poly_symm  T=234s/K=6071 == exp~6191
-ИТОГО PASS=30 FAIL=0
+TOTAL PASS=30 FAIL=0
 VERIFY OK
 ```
 
-Проверки: V1 база 25/25; V2 правило 13/13; V3 переигрывание модели из
-сохранённого текста (decode + портфель + raw) 13/13; V4 заголовок + реплей
-L2-победителей; V5 контроль 12/12 (ни один слой не короче жадного); V6
-L2-fair: реплей вектора + согласованность K с T/t (полоса 0.2–5, по факту
-0.91–0.98). Без модели, ~2 мин.
+Checks: V1 baseline 25/25; V2 rule 13/13; V3 model replay from saved text (decode + portfolio + raw) 13/13; V4 headline + replay of L2 winners; V5 controls 12/12 (no layer shorter than greedy); V6 L2-fair: vector replay + consistency of K with T/t (band 0.2–5, observed 0.91–0.98). Runs without the model in ~2 min.
 
-## 6. Цена и файлы
+## 6. Cost and Files
 
-Генерация: ~75 мин (13 целей) + ~70 мин (12 контрольных) + повторы; скорость
-1.5–6.5 ток/с. Слои без модели: ~6 мин (fixed) + ~25 мин стена (fair,
-76 CPU-мин). Итого стендового времени около 3 часов.
-Файлы: `raw/*.txt` (25) + `raw/*.meta.json`, `decode.json`, `results.json`
-(L0/L1/L2/L2-fair/L3/order/raw/best_known), `layers/` (промежуточное),
-`VERIFY.sh` + `verify_impl.py`, `run.sh` (всё кроме генерации; сиды
-500001+/510001+ зафиксированы), скрипты `gen_one.py`, `layers_fixed.py`,
-`fair_one.py`, `replay*.py`, `merge_*.py`, `tokens.py`, `probe_runtime.py`,
-`dump_decode.py`. `search/finds.jsonl` и `rule/` не тронуты
-(`git status` — только `model_eval/`).
+Generation: ~75 min (13 targets) + ~70 min (12 controls) + repeats; speed 1.5–6.5 tok/s. Model-free layers: ~6 min (fixed) + ~25 min wall-clock (fair, 76 CPU-min). Total wall-clock time ~3 hours.
+Files: `raw/*.txt` (25) + `raw/*.meta.json`, `decode.json`, `results.json` (L0/L1/L2/L2-fair/L3/order/raw/best_known), `layers/` (intermediate), `VERIFY.sh` + `verify_impl.py`, `run.sh` (everything except generation; seeds `500001+`/`510001+` pinned), scripts `gen_one.py`, `layers_fixed.py`, `fair_one.py`, `replay*.py`, `merge_*.py`, `tokens.py`, `probe_runtime.py`, `dump_decode.py`. `search/finds.jsonl` and `rule/` are untouched (`git status` shows only `model_eval/`).
 
-## 7. Самое слабое место (честно)
+## 7. Weakest Points (Honestly)
 
-Два. Первое: модель измерена ровно в одной точке (temp 0, ctx 4096,
-lora-merged) — вывод «бесполезна» относится к этой точке, а не к модели
-вообще; больший контекст или дообучение на длинных графах — другие точки,
-здесь не измеренные. Второе: fair-сравнение привязано к wall-clock (попытки
-плавают ±% между запусками), и V6 проверяет лишь грубую согласованность,
-а не побайтовое воспроизведение поиска.
+Two. First: the model was evaluated at exactly one operating point (`temp=0`, `ctx=4096`, `lora-merged`) — the conclusion "useless" applies to this point, not to LLMs in general; larger context or fine-tuning on long graphs are different points not measured here. Second: the fair comparison is tied to wall-clock time (trial counts fluctuate ±% across runs), and V6 checks only coarse consistency rather than byte-exact search reproduction.

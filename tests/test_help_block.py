@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""NNL-блок помощи: линтер, веса, ответы и отказ от посторонних вопросов."""
+"""NNL help block: linter, weights, answers, and off-topic rejection."""
 
 from __future__ import annotations
 
@@ -9,59 +9,61 @@ from pathlib import Path
 
 from vliw import help_answers, help_nnl
 
-КОРЕНЬ = Path(__file__).resolve().parent.parent
-БЛОК = КОРЕНЬ / "nnl_vliw" / "блоки_помощь" / "Помощь_ассистент"
-АРХИТЕКТУРЫ = КОРЕНЬ / "nnl_vliw" / "архитектуры"
-ПАСПОРТ = json.loads((БЛОК / "паспорт.json").read_text(encoding="utf-8"))
-ЛЁГКИЕ = json.loads((КОРЕНЬ / "vliw" / "help_weights.json").read_text(encoding="utf-8"))
+ROOT = Path(__file__).resolve().parent.parent
+BLOCK = ROOT / "nnl_vliw" / "блоки_помощь" / "Помощь_ассистент"
+ARCHITECTURES = ROOT / "nnl_vliw" / "архитектуры"
+PASSPORT = json.loads((BLOCK / "паспорт.json").read_text(encoding="utf-8"))
+LIGHTWEIGHT = json.loads((ROOT / "vliw" / "help_weights.json").read_text(encoding="utf-8"))
 
 
 class TestBlock(unittest.TestCase):
     def test_linter_accepts_block(self):
         from nnl_vliw.NNL import линтер
 
-        отчёт = линтер.проверить_блок(str(БЛОК), str(АРХИТЕКТУРЫ))
-        self.assertEqual(отчёт["статус"], "УСПЕХ", отчёт["ошибки"])
-        self.assertEqual(отчёт["имя_блока"], "Помощь_ассистент")
-        self.assertEqual(отчёт["чисел"], ПАСПОРТ["веса"]["чисел"])
+        report = линтер.проверить_блок(str(BLOCK), str(ARCHITECTURES))
+        self.assertEqual(report["статус"], "УСПЕХ", report["ошибки"])
+        self.assertEqual(report["имя_блока"], "Помощь_ассистент")
+        self.assertEqual(report["чисел"], PASSPORT["веса"]["чисел"])
 
     def test_passport_declares_same_topics_as_weights(self):
         import numpy as np
 
-        with np.load(БЛОК / "веса.npz", allow_pickle=False) as z:
-            ответы = [str(x) for x in z["ответы"]]
-            self.assertEqual(int(z["E"].shape[0]), ПАСПОРТ["настройки"]["корзины"])
-            self.assertEqual(int(z["E"].shape[1]), ПАСПОРТ["настройки"]["размер"])
+        with np.load(BLOCK / "веса.npz", allow_pickle=False) as z:
+            answers = [str(x) for x in z["ответы"]]
+            self.assertEqual(int(z["E"].shape[0]), PASSPORT["настройки"]["корзины"])
+            self.assertEqual(int(z["E"].shape[1]), PASSPORT["настройки"]["размер"])
             self.assertEqual(list(z["пишет"]), [])
             self.assertEqual(list(z["читает"]), [])
-        self.assertEqual(ответы, ПАСПОРТ["ответы"])
+        self.assertEqual(answers, PASSPORT["ответы"])
 
     def test_light_copy_is_the_same_block(self):
-        """JSON для чистого Python — не «похожие» числа, а те же самые."""
+        """Pure-Python JSON weights must match the trained npz block exactly."""
         import numpy as np
 
-        with np.load(БЛОК / "веса.npz", allow_pickle=False) as z:
-            for ключ in ("E", "U", "b"):
+        with np.load(BLOCK / "веса.npz", allow_pickle=False) as z:
+            for key in ("E", "U", "b"):
                 np.testing.assert_allclose(
-                    z[ключ].astype("float64"),
-                    np.asarray(ЛЁГКИЕ[ключ], dtype="float64"),
-                    rtol=0, atol=1e-4, err_msg=ключ,
+                    z[key].astype("float64"),
+                    np.asarray(LIGHTWEIGHT[key], dtype="float64"),
+                    rtol=0, atol=1e-4, err_msg=key,
                 )
-        self.assertEqual(ЛЁГКИЕ["ответы"], ПАСПОРТ["ответы"])
-        self.assertEqual(ЛЁГКИЕ["sha256"], ПАСПОРТ["веса"]["sha256"])
-        self.assertEqual(ЛЁГКИЕ["соль"], ПАСПОРТ["настройки"]["соль"])
+        self.assertEqual(LIGHTWEIGHT["ответы"], PASSPORT["ответы"])
+        self.assertEqual(LIGHTWEIGHT["sha256"], PASSPORT["веса"]["sha256"])
+        self.assertEqual(LIGHTWEIGHT["соль"], PASSPORT["настройки"]["соль"])
 
     def test_block_says_what_it_can(self):
-        сведения = help_nnl.сведения()
-        self.assertIn("Помощь_ассистент", сведения)
-        self.assertIn("4096", сведения)
+        info = help_nnl.сведения()
+        self.assertIn("Help_assistant", info)
+        self.assertIn("4096", info)
         self.assertTrue(help_nnl.доступно())
         self.assertNotIn(help_nnl.НЕ_ТЕМА, help_nnl.темы())
 
 
 class TestAssistant(unittest.TestCase):
     def test_typical_installation_questions(self):
-        ожидание = {
+        # The underlying NNL classifier weights are trained on Russian phrasings
+        # and topic IDs, so we test the trained routing vocabulary directly.
+        expected = {
             "как установить": "установка",
             "как поставить nex cli на новый компьютер": "установка",
             "что такое textual": "textual",
@@ -83,19 +85,19 @@ class TestAssistant(unittest.TestCase):
             "хай": "беседа",
             "hello": "беседа",
         }
-        for вопрос, тема in ожидание.items():
-            with self.subTest(вопрос=вопрос):
-                результат = help_nnl.спросить(вопрос)
-                self.assertIsNotNone(результат, вопрос)
-                self.assertEqual(результат[0], тема)
+        for question, topic in expected.items():
+            with self.subTest(question=question):
+                result = help_nnl.спросить(question)
+                self.assertIsNotNone(result, question)
+                self.assertEqual(result[0], topic)
 
     def test_nnl_answer_explains_no_dialogue_memory(self):
-        ответ = " ".join(help_answers.ответ("nnl") or [])
-        self.assertIn("обучен", ответ)
-        self.assertIn("контекст", ответ.lower())
+        answer = " ".join(help_answers.ответ("nnl") or [])
+        self.assertIn("trained", answer.lower())
+        self.assertIn("dialogue context", answer.lower())
 
     def test_off_topic_questions_are_rejected(self):
-        for вопрос in (
+        for question in (
             "сколько будет два плюс два",
             "расскажи про погоду",
             "как приготовить борщ",
@@ -103,35 +105,35 @@ class TestAssistant(unittest.TestCase):
             "посоветуй фильм на вечер",
             "какая столица франции",
         ):
-            with self.subTest(вопрос=вопрос):
-                self.assertIsNone(help_nnl.спросить(вопрос))
+            with self.subTest(question=question):
+                self.assertIsNone(help_nnl.спросить(question))
 
     def test_every_topic_has_an_answer(self):
-        for тема in help_nnl.темы():
-            with self.subTest(тема=тема):
-                ответ = help_answers.ответ(тема)
-                self.assertTrue(ответ, f"нет ответа для темы {тема}")
-                self.assertTrue(any(строка.strip() for строка in ответ))
+        for topic in help_nnl.темы():
+            with self.subTest(topic=topic):
+                answer = help_answers.ответ(topic)
+                self.assertTrue(answer, f"no answer for topic {topic}")
+                self.assertTrue(any(line.strip() for line in answer))
 
     def test_every_topic_has_a_short_answer(self):
-        """Ассистент сначала говорит коротко, полный текст — за «Подробнее»."""
-        for тема in help_nnl.темы():
-            with self.subTest(тема=тема):
-                кратко = help_answers.кратко(тема)
-                полный = help_answers.ответ(тема) or []
-                self.assertTrue(кратко, f"нет короткого ответа для темы {тема}")
-                self.assertLessEqual(len(кратко), max(2, len(полный)),
-                                     "короткий ответ не должен быть длиннее полного")
+        """The assistant replies concisely first; full details are behind 'More'."""
+        for topic in help_nnl.темы():
+            with self.subTest(topic=topic):
+                short = help_answers.кратко(topic)
+                full = help_answers.ответ(topic) or []
+                self.assertTrue(short, f"no short answer for topic {topic}")
+                self.assertLessEqual(len(short), max(2, len(full)),
+                                     "short answer must not exceed full answer")
 
     def test_short_answer_for_launch_is_actionable(self):
-        текст = " ".join(help_answers.кратко("запуск"))
-        self.assertIn("NEX CLI", текст)
-        self.assertLessEqual(len(текст.splitlines()), 2)
+        text = " ".join(help_answers.кратко("запуск"))
+        self.assertIn("NEX CLI", text)
+        self.assertLessEqual(len(text.splitlines()), 2)
 
     def test_fallback_does_not_leave_user_without_options(self):
-        текст = "\n".join(help_answers.не_понял())
-        self.assertIn("Не уверен", текст)
-        self.assertIn("меню", текст)
+        text = "\n".join(help_answers.не_понял())
+        self.assertIn("not sure", text.lower())
+        self.assertIn("menu", text.lower())
 
 
 if __name__ == "__main__":

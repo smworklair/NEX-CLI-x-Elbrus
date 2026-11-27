@@ -1,10 +1,10 @@
-"""Генератор набора «настоящий код» (tools/make_eval_real.py).
+"""Real-code evaluation dataset generator tests (tools/make_eval_real.py).
 
-Проверяется то, на чём набор держится: что записанное читается ТЕМ ЖЕ кодом проекта,
-которым его будут читать (`vliw/tiny/eval.py`, `tools/validate_jsonl.py`), что
-«доказанный оптимум» в файле — действительно оптимум (сверка с эвалом, где он
-доказан независимо), что повторы сливаются, а то, что формат проекта записать не
-умеет, не пишется молча.
+Verifies the dataset's core guarantees: generated JSONL rows round-trip through
+the project's own readers (`vliw/tiny/eval.py`, `tools/validate_jsonl.py`),
+proven optima match independent CP-SAT proofs, duplicate graphs are merged, and
+operations unsupported by the serialization format are explicitly reported
+rather than silently corrupted.
 """
 
 import importlib.util
@@ -17,7 +17,7 @@ from pathlib import Path
 
 try:
     from tests.test_blocks import SAMPLE, chain_asm
-except ImportError:                      # запуск из каталога tests/
+except ImportError:                      # running directly from tests/
     from test_blocks import SAMPLE, chain_asm
 from vliw.core.baseline import GreedyListScheduler
 from vliw.core.dag import DagBuilder
@@ -51,7 +51,7 @@ class TestRoundtrip(unittest.TestCase):
     def test_plain_graph_survives_writing_and_reading(self):
         b = DagBuilder("g", "g")
         a = b.op("LOAD", "a")
-        c = b.op("ADD", "c", a, a)          # операнд читается дважды
+        c = b.op("ADD", "c", a, a)          # operand read twice
         b.op("STORE", "s", c)
         dag = b.build()
         back, why = mer.roundtrip(dag, MODEL)
@@ -60,9 +60,7 @@ class TestRoundtrip(unittest.TestCase):
         self.assertEqual(mer.missing_symbols(dag), set())
 
     def test_format_limit_is_reported_not_hidden(self):
-        """Операция без знака в `_SYMBOL`: формат проекта её записать не может, и
-        генератор обязан это сказать, а не записать мусор. Тест не привязан к тому,
-        каких знаков сейчас нет: он проверяет согласованность двух функций."""
+        """Ops missing from `_SYMBOL` cannot be serialized and must be reported explicitly."""
         from vliw.core import dag as dag_module
         absent = [op for op in ("FMA", "MOVA", "CONV", "INCR")
                   if op not in dag_module._SYMBOL]
@@ -80,7 +78,7 @@ class TestRoundtrip(unittest.TestCase):
     def test_unreadable_prompt_is_a_refusal_not_a_crash(self):
         class Boom:
             def __iter__(self):
-                raise ValueError("сломан")
+                raise ValueError("broken")
 
         back, why = mer.roundtrip(Boom(), MODEL)
         self.assertIsNone(back)
@@ -97,15 +95,14 @@ class TestCollect(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = self._file(d, "sample.s", SAMPLE)
             items, dups = mer.collect([p], min_ops=2, windows=False, win_min=12, win_max=56)
-        # блоки .L1 (цикл) и .L2 одинаковы: две операции ADD с зависимостью
+        # Blocks .L1 (loop) and .L2 are structurally identical: two dependent ADDs
         self.assertEqual([it.dag.key for it in items], ["sample#0", "sample#1"])
         self.assertEqual(dups, 1)
         self.assertEqual(items[1].seen, 2)
         self.assertEqual(items[0].seen, 1)
 
     def test_same_operations_different_edges_do_not_merge(self):
-        """Слияние по операциям И связям: одинаковый набор операций с другими
-        зависимостями — другой граф."""
+        """Deduplication keys on both ops AND DAG edges: different dependencies stay distinct."""
         dep = "\t.text\na:\n\t{\n\t  adds,0\t%r0, %r1, %r2\n\t}\n\t{\n\t  adds,0\t%r2, %r2, %r3\n\t  ct\t%ctpr1\n\t}\n"
         ind = "\t.text\nb:\n\t{\n\t  adds,0\t%r0, %r1, %r2\n\t}\n\t{\n\t  adds,0\t%r0, %r1, %r3\n\t  ct\t%ctpr1\n\t}\n"
         with tempfile.TemporaryDirectory() as d:
@@ -121,7 +118,7 @@ class TestCollect(unittest.TestCase):
             p = self._file(d, "b.s", chain_asm(12))
             items, dups = mer.collect([p], min_ops=10, windows=True, win_min=12, win_max=56)
         self.assertEqual([it.kind for it in items], ["block"])
-        self.assertEqual(dups, 4)                     # окна целей 16/24/32/48 совпали с блоком
+        self.assertEqual(dups, 4)                     # target 16/24/32/48 windows match the block
         self.assertEqual(items[0].seen, 5)
 
     def test_kinds(self):
@@ -135,7 +132,7 @@ class TestCollect(unittest.TestCase):
 
 
 class TestSolve(unittest.TestCase):
-    """`solve` против эвала, где оптимум доказан независимо (CP-SAT, `eval_hard.jsonl`)."""
+    """Verify `solve` against `eval_hard.jsonl` where optima are independently proven (CP-SAT)."""
 
     @classmethod
     def setUpClass(cls):
@@ -145,14 +142,14 @@ class TestSolve(unittest.TestCase):
         with open(ROOT / "eval_hard.jsonl", encoding="utf-8") as f:
             for line in f:
                 ex = json.loads(line)
-                if ex["meta"]["gap"] >= 2:            # жадный явно не оптимален
+                if ex["meta"]["gap"] >= 2:            # greedy is clearly suboptimal
                     rows.append(ex)
                 if len(rows) == 6:
                     break
         cls.rows = rows
 
     def test_the_sample_is_not_empty(self):
-        """Без этого циклы ниже могли бы молча не выполнить ни одной проверки."""
+        """Guard against silently skipping all assertions below."""
         self.assertEqual(len(self.rows), 6)
 
     def test_proven_optimum_equals_the_independent_one(self):
@@ -160,14 +157,13 @@ class TestSolve(unittest.TestCase):
             dag = build_dag(parse_graph_entries(ex["prompt"]))
             with self.subTest(n=ex["meta"]["n"], opt=ex["meta"]["makespan"]):
                 r = mer.solve(dag, MODEL, self.fast, self.greedy, oracle_budget=20)
-                self.assertIsNotNone(r["by"], "оптимум должен доказываться за бюджет")
+                self.assertIsNotNone(r["by"], "optimum should be proven within budget")
                 self.assertEqual(r["ms"], ex["meta"]["makespan"])
                 self.assertEqual(r["base"], ex["meta"]["baseline"])
                 self.assertLessEqual(r["lb"], r["ms"])
 
     def test_row_fields_match_the_independent_eval(self):
-        """Строка файла для графа с разрывом: makespan, baseline и gap — те же, что в
-        эвале, где они посчитаны независимо."""
+        """Row metadata (makespan, baseline, gap, n) must match the independent eval."""
         for ex in self.rows:
             dag = build_dag(parse_graph_entries(ex["prompt"]))
             it = mer.Item("eval_hard", "window", "k", False, dag)
@@ -180,8 +176,7 @@ class TestSolve(unittest.TestCase):
                 self.assertEqual(row["prompt"], ex["prompt"])
 
     def test_a_search_that_ran_out_of_time_proves_nothing(self):
-        """Бюджет точного поиска ничтожен. Что бы ни попало в файл как «доказанное»,
-        оно обязано совпасть с независимо доказанным оптимумом."""
+        """With a negligible budget, any proven result must still match the true optimum."""
         for ex in self.rows:
             dag = build_dag(parse_graph_entries(ex["prompt"]))
             r = mer.solve(dag, MODEL, self.fast, self.greedy, oracle_budget=1e-9)
@@ -191,14 +186,13 @@ class TestSolve(unittest.TestCase):
                 self.assertLessEqual(r["ms"], r["base"])
 
     def test_without_the_exact_search_nothing_false_is_claimed(self):
-        """Бюджет 0: доказательство только границей. Не доказано — `by` пусто, но
-        расписание всё равно законное и не хуже жадного."""
+        """With budget=0, only lower-bound proofs are allowed; unproven rows leave `by=None`."""
         for ex in self.rows:
             dag = build_dag(parse_graph_entries(ex["prompt"]))
             r = mer.solve(dag, MODEL, self.fast, self.greedy, oracle_budget=0)
             if r["by"] == "bound":
                 self.assertEqual(r["ms"], r["lb"])
-                self.assertEqual(r["ms"], ex["meta"]["makespan"])    # граница не врёт
+                self.assertEqual(r["ms"], ex["meta"]["makespan"])    # bound is sound
             else:
                 self.assertIsNone(r["by"])
                 self.assertGreater(r["ms"], r["lb"])
@@ -226,7 +220,7 @@ class TestRowsAndVerification(unittest.TestCase):
         self.assertEqual(m["proven_by"], "bound")
 
     def test_unproven_row_cannot_be_mistaken_for_an_optimum(self):
-        r = dict(self.r, by=None, ms=self.r["ms"] + 1)          # как будто не доказан
+        r = dict(self.r, by=None, ms=self.r["ms"] + 1)          # simulate unproven result
         row = mer.make_row(self.it, r, MODEL)
         self.assertNotIn("makespan", row["meta"])
         self.assertFalse(row["meta"]["proven"])
@@ -243,17 +237,17 @@ class TestRowsAndVerification(unittest.TestCase):
             self.assertEqual(mer.verify_file(p, MODEL, True), [])
 
     def test_verifier_is_not_vacuous(self):
-        """Испорченные строки обязаны быть пойманы: иначе проверка ничего не стоит."""
+        """Corrupted rows must be caught; otherwise the verifier is vacuous."""
         good = mer.make_row(self.it, self.r, MODEL)
         cases = {
-            "makespan не тот": lambda r: r["meta"].__setitem__("makespan", r["meta"]["makespan"] + 1),
-            "расписание сломано": lambda r: r.__setitem__("completion", "0: такт=0 канал=2\n1: такт=0 канал=2\n2: такт=0 канал=2"),
-            "канал занят дважды, makespan прежний": lambda r: r.__setitem__(
+            "wrong makespan": lambda r: r["meta"].__setitem__("makespan", r["meta"]["makespan"] + 1),
+            "broken schedule": lambda r: r.__setitem__("completion", "0: такт=0 канал=2\n1: такт=0 канал=2\n2: такт=0 канал=2"),
+            "port double-booked, same makespan": lambda r: r.__setitem__(
                 "completion", "0: такт=0 канал=2\n1: такт=0 канал=2\n2: такт=4 канал=2"),
-            "расписание неполное": lambda r: r.__setitem__("completion", "0: такт=0 канал=2"),
-            "граф укорочен": lambda r: r.__setitem__("prompt", r["prompt"].replace("2 ADD <- 0 1\n", "")),
-            "граница выше": lambda r: r["meta"].__setitem__("lb", r["meta"]["makespan"] + 3),
-            "жадный лучше": lambda r: r["meta"].__setitem__("baseline", r["meta"]["makespan"] - 1),
+            "incomplete schedule": lambda r: r.__setitem__("completion", "0: такт=0 канал=2"),
+            "truncated graph": lambda r: r.__setitem__("prompt", r["prompt"].replace("2 ADD <- 0 1\n", "")),
+            "lower bound too high": lambda r: r["meta"].__setitem__("lb", r["meta"]["makespan"] + 3),
+            "greedy beats optimum": lambda r: r["meta"].__setitem__("baseline", r["meta"]["makespan"] - 1),
         }
         with tempfile.TemporaryDirectory() as d:
             for name, spoil in cases.items():
@@ -261,7 +255,7 @@ class TestRowsAndVerification(unittest.TestCase):
                 spoil(row)
                 p = self._write(d, [row], f"{abs(hash(name))}.jsonl")
                 with self.subTest(name):
-                    self.assertTrue(mer.verify_file(p, MODEL, True), "порча не замечена")
+                    self.assertTrue(mer.verify_file(p, MODEL, True), "corruption went undetected")
 
 
 class TestCli(unittest.TestCase):
@@ -273,15 +267,15 @@ class TestCli(unittest.TestCase):
             r = _run(TOOL, src, "--min-ops", "2", "--no-windows", "--oracle", "0",
                      "--out", out, "--out-open", out_open)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn("проверка записанного", r.stdout)
+            self.assertIn("written file verification", r.stdout)
             rows = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([x["meta"]["n"] for x in rows], [3, 2])
             self.assertEqual(out_open.read_text(encoding="utf-8"), "")
-            # настоящий валидатор проекта
+            # Project JSONL validator
             v = _run(ROOT / "tools" / "validate_jsonl.py", out)
             self.assertEqual(v.returncode, 0, v.stdout + v.stderr)
-            self.assertIn("ИТОГ: ОК", v.stdout)
-            # настоящий эвал крошек
+            self.assertIn("RESULT: OK", v.stdout)
+            # TINY Flash evaluation runner
             e = _run(ROOT / "vliw" / "tiny" / "eval.py", "--eval", out)
             self.assertEqual(e.returncode, 0, e.stdout + e.stderr)
             self.assertIn("n=2 valid=2/2", e.stdout)
@@ -307,9 +301,9 @@ class TestCli(unittest.TestCase):
             self.assertEqual(outs[0], outs[1])
 
 
-@unittest.skipUnless((ROOT / "eval_real.jsonl").exists(), "нет eval_real.jsonl")
+@unittest.skipUnless((ROOT / "eval_real.jsonl").exists(), "eval_real.jsonl not present")
 class TestShippedFiles(unittest.TestCase):
-    """Файлы, которые лежат в репозитории, проходят ту же проверку, что и при генерации."""
+    """Shipped repository datasets must pass the same verification as newly generated files."""
 
     def test_eval_real_is_consistent(self):
         self.assertEqual(mer.verify_file(ROOT / "eval_real.jsonl", MODEL, True), [])
@@ -317,7 +311,7 @@ class TestShippedFiles(unittest.TestCase):
     def test_eval_real_open_is_consistent(self):
         p = ROOT / "eval_real_open.jsonl"
         if not p.exists():
-            self.skipTest("нет eval_real_open.jsonl")
+            self.skipTest("eval_real_open.jsonl not present")
         self.assertEqual(mer.verify_file(p, MODEL, False), [])
 
     def test_validate_jsonl_accepts_eval_real(self):

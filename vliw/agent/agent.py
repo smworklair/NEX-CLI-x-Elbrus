@@ -1,17 +1,17 @@
-"""Агент: понимает вопрос на обычном языке, сам смотрит данные, отвечает.
+"""Agent: understands natural-language questions, inspects live data, and answers.
 
-Схема одного хода:
+Single-turn flow:
 
-    вопрос → (1) распознать действие → (2) выполнить его ядром →
-    (3) собрать ФАКТЫ → (4) языковая модель объясняет → ответ + следующий шаг
+    question -> (1) detect action -> (2) execute in core ->
+    (3) assemble FACTS -> (4) LLM explains -> answer + next step
 
-Пункты 1–3 детерминированные: файлы грузит парсер, расписание считает точный
-поиск, потери находит `core.doctor`. Языковая модель отвечает только за
-формулировку и рассуждение поверх готовых чисел — поэтому ответ можно
-перепроверить командой и он не «плывёт» от запуска к запуску.
+Steps 1–3 are deterministic: the parser loads files, exact search computes
+schedules, and `core.doctor` pinpoints losses. The LLM only phrases and reasons
+over verified numbers — so every answer can be cross-checked with a command and
+never drifts between runs.
 
-Если сети нет или ключ не принят, агент не ломается: он отвечает офлайн,
-опираясь на те же факты, просто без свободной формулировки.
+If offline or the key is rejected, the agent degrades gracefully and answers
+deterministically from the same computed facts.
 """
 
 from __future__ import annotations
@@ -21,24 +21,25 @@ from dataclasses import dataclass, field
 
 from . import context, llm
 
-# --- распознавание действий ------------------------------------------------
-# Не «понимание языка вообще», а узкий набор намерений предметной области.
-# Работает и без сети, и служит подсказкой для модели.
+# --- action detection -----------------------------------------------------
+# Not general NLU, just a narrow set of domain intents. Works offline and
+# also serves as a grounded hint for the language model.
 
 _ACTIONS = [
-    ("load",     r"(загруз|открой|прочит|разбер|load)\w*\s+([\w./\\-]+\.s)\b"),
-    ("scenario", r"(прогони|запусти|покажи|возьми|run)\w*\s+(\w+)"),
-    ("doctor",   r"(диагност|что не так|где теря|почему медлен|проблем|доктор|потер)"),
-    ("compare",  r"(сравн|разниц|baseline\s*(vs|против)|оракул\w*\s+против)"),
-    ("bounds",   r"(предел|нижн\w*\s+границ|быстрее\s+нельзя|теоретическ)"),
-    ("path",     r"(критическ\w*\s+пут|critical\s*path)"),
-    ("asm",      r"(широк\w*\s+команд|\.s\b|ассемблер|asm|как\s+в\s+lcc)"),
-    ("model",    r"(модель\s+машин|порт\w*|матриц\w*\s+возможн|монопол)"),
-    ("explain",  r"(такт\w*\s+(\d+)|в\s+такте\s+(\d+))"),
+    ("load",     r"(load|open|read|parse|analyze|загруз|открой|прочит|разбер)\w*\s+([\w./\\-]+\.s)\b"),
+    ("scenario", r"(run|show|switch|use|try|прогони|запусти|покажи|возьми)\w*\s+(\w+)"),
+    ("doctor",   r"(diagnos|doctor|what.?s wrong|where.*lost|why.*slow|problem|loss|stall|диагност|что не так|где теря|почему медлен|проблем|доктор|потер)"),
+    ("compare",  r"(compar|diff|baseline\s*(vs|versus|against|против)|oracle\s*(vs|versus|against)|сравн|разниц|оракул\w*\s+против)"),
+    ("bounds",   r"(lower\s*bound|bound|limit|theoret|can.?t.*faster|предел|нижн\w*\s+границ|быстрее\s+нельзя|теоретическ)"),
+    ("path",     r"(critical\s*path|критическ\w*\s+пут)"),
+    ("asm",      r"(wide\s+instruct|\.s\b|assemb|asm|lcc|широк\w*\s+команд|ассемблер|как\s+в\s+lcc)"),
+    ("model",    r"(machine\s+model|port\w*|capabilit|monopol|модель\s+машин|порт\w*|матриц\w*\s+возможн|монопол)"),
+    ("explain",  r"(cycle\s+(\d+)|at\s+cycle\s+(\d+)|такт\w*\s+(\d+)|в\s+такте\s+(\d+))"),
 ]
 
-# Ключи сценариев берём из самого реестра, чтобы новые (seqreduce, divstrength,
-# unroll4 …) распознавались в вопросах без правки этого файла.
+
+# Pull scenario keys directly from the registry so new scenarios are recognized
+# automatically without editing this file.
 def _scenario_hint() -> re.Pattern:
     from ..core import SCENARIOS
 
@@ -48,16 +49,18 @@ def _scenario_hint() -> re.Pattern:
 
 _SCENARIO_HINT = _scenario_hint()
 
-#: Реплики не по делу. Список шире приветствий намеренно: «спасибо» и «ок»
-#: получали такой же нелепый хвост «Дальше: /explain 13», потому что под
-#: правило приветствия не подпадали, а системный промпт требует заканчивать
-#: командой. Проверять в благодарности нечего ровно так же, как в «привет».
+#: Small-talk turns that should not trigger scheduling or append a "Next:" command.
 _SMALLTALK = re.compile(
-    r"^(привет|прив|здравствуй(те)?|хай|hello|hi|hey|"
+    r"^(hello|hi|hey|good\s+(morning|afternoon|evening)|"
+    r"thanks|thank\s+you|thx|cheers|"
+    r"bye|goodbye|see\s+you|"
+    r"ok|okay|got\s+it|understood|sure|cool|nice|"
+    r"how\s+are\s+you|what\s+can\s+you\s+do|who\s+are\s+you|"
+    r"привет|прив|здравствуй(те)?|хай|"
     r"добр(ый|ого)\s+(день|вечер|утро)|йоу|"
-    r"спасибо|спс|благодарю|thanks|thank\s+you|"
-    r"пока|до\s+свидания|бывай|bye|"
-    r"ок|окей|ok|okay|ясно|понял|понятно|угу|ага|"
+    r"спасибо|спс|благодарю|"
+    r"пока|до\s+свидания|бывай|"
+    r"ок|окей|ясно|понял|понятно|угу|ага|"
     r"как\s+дела|что\s+умеешь|кто\s+ты)[\s!.?)]*$",
     re.I,
 )
@@ -67,29 +70,23 @@ def _is_smalltalk(q: str) -> bool:
     return bool(_SMALLTALK.match(q.strip()))
 
 
-#: Вопросы НЕ про участок, а про сам ответ: «уверен?», «точно?», «не врёшь?».
+#: Questions about provenance / certainty of the previous answer ("are you sure?").
 _DOUBT = re.compile(
-    r"^(а\s+)?(ты\s+)?(точно|уверен[аы]?|правда|серьёзно|не\s+врёшь|"
-    r"не\s+ошиб(аешься|ся)|проверь|перепроверь|откуда|почему\s+так\s+решил)"
+    r"^(are\s+you\s+)?(sure|certain|really|truly|proven|verify|double[- ]?check|"
+    r"how\s+do\s+you\s+know|source|prove\s+it|"
+    r"(а\s+)?(ты\s+)?(точно|уверен[аы]?|правда|серьёзно|не\s+врёшь|"
+    r"не\s+ошиб(аешься|ся)|проверь|перепроверь|откуда|почему\s+так\s+решил))"
     r"[\s!?.]*$",
     re.I,
 )
 
 
 def _is_doubt(q: str) -> bool:
-    """Сомнение в предыдущем ответе.
+    """Doubt about the previous answer.
 
-    Отдельная ветка нужна потому, что системный промпт целиком построен на
-    «отвечай по ФАКТАМ участка», а у вопроса «уверен?» предмет другой — не
-    участок, а происхождение уже сказанного. Модели на 3B ответить нечем, и
-    она хватается за единственное разрешённое ей окончание: выдаёт голую
-    строку «Дальше: /compare» и всё. Воспроизводится стабильно.
-
-    Замалчивать этот вопрос — худшее, что можно сделать именно в ЭТОМ
-    проекте: вся его дисциплина стоит на «у каждого числа проставлен
-    источник». Человек, спрашивающий «уверен?», задаёт самый уместный
-    вопрос из возможных, и ответ на него у инструмента есть — надо только
-    достать его из того же места, где лежат источники чисел.
+    Handled deterministically because the system prompt focuses on block FACTS,
+    whereas "are you sure?" asks about provenance of the computed numbers —
+    something the tool tracks directly and answers better than any LLM.
     """
     return bool(_DOUBT.match(q.strip()))
 
@@ -105,13 +102,13 @@ class Turn:
 
 @dataclass
 class Agent:
-    """Диалоговая сессия поверх текущего состояния исследования."""
+    """Conversational session layered over the current analysis state."""
 
     session: object
     history: list[Turn] = field(default_factory=list)
     last_error: str = ""
 
-    # --- действия ---------------------------------------------------------
+    # --- actions ----------------------------------------------------------
 
     def _detect(self, q: str) -> list[tuple[str, str]]:
         ql = q.lower()
@@ -128,7 +125,7 @@ class Agent:
         return found
 
     def _run_actions(self, q: str) -> list[str]:
-        """Выполнить то, что вытекает из вопроса, ДО обращения к модели."""
+        """Run deterministic actions implied by the question BEFORE calling the LLM."""
         from ..core import asm_parser, get_scenario
 
         done: list[str] = []
@@ -139,41 +136,33 @@ class Agent:
                     if parsed.ops:
                         dag = asm_parser.build_dag(parsed, key=f"asm:{arg}", title=arg)
                         self.session.set_dag(dag, f"asm:{arg.split('/')[-1]}")
-                        done.append(f"разобрал {arg}: {len(parsed.ops)} операций, "
-                                    f"{parsed.bundles} широких команд")
+                        done.append(f"parsed {arg}: {len(parsed.ops)} ops, "
+                                    f"{parsed.bundles} wide instructions")
                 elif kind == "scenario" and arg:
                     self.session.set_scenario(arg)
-                    done.append(f"переключился на сценарий {arg}")
+                    done.append(f"switched to scenario {arg}")
             except Exception as e:
-                done.append(f"не смог выполнить {kind} {arg}: {e}")
-        # Приветствие не требует расписания — иначе «привет» гоняет оракул.
+                done.append(f"failed to run {kind} {arg}: {e}")
+        # Small talk does not need scheduling — avoid running the oracle on "hi".
         if _is_smalltalk(q):
             return done
-        # Любой содержательный вопрос требует посчитанного расписания.
+        # Any substantive question requires a computed schedule.
         if self.session.peek() is None:
             try:
                 self.session.results()
-                done.append("посчитал расписание (baseline и точный поиск)")
+                done.append("computed schedule (baseline and exact oracle)")
             except Exception as e:
-                done.append(f"не смог посчитать расписание: {e}")
+                done.append(f"failed to compute schedule: {e}")
         return done
 
-    # --- ответ -------------------------------------------------------------
+    # --- answering --------------------------------------------------------
 
     def _needs_layout(self, q: str) -> bool:
-        """Раскладку в факты — всегда, если расписание уже посчитано.
+        """Always include the schedule layout once computed.
 
-        Раньше здесь стоял отбор по словам («такт|расписан|разлож|порядок|
-        когда|выдал»), и это был источник выдуманных чисел: вопрос «на каком
-        КАНАЛЕ стоит z0?» под шаблон не подходил, раскладка в факты не
-        попадала — а ответить модель всё равно пыталась. Взять такт и канал ей
-        было неоткуда, кроме как из головы. Тот же провал у «где размещена g1»,
-        «в какой широкой команде идёт m0», «почему dc позже».
-
-        Дописывать слова в шаблон бессмысленно: список формулировок открыт, а
-        цена промаха — уверенно названное неверное число. Раскладка стоит
-        десяток строк, поэтому она просто идёт всегда. Единственное условие —
-        чтобы её было откуда взять.
+        Previously this used keyword matching, which caused hallucinated cycle
+        and channel numbers whenever a question phrased layout queries without
+        matching keywords. Including the compact layout costs only a dozen lines.
         """
         return self.session.peek() is not None
 
@@ -187,16 +176,12 @@ class Agent:
 
     def ask_stream(self, question: str,
                    panel: tuple[str, list[str]] | None = None):
-        """Ответ по частям. Отдаёт кортежи ('action'|'text'|'error', значение).
+        """Stream response as ('action'|'text'|'error', value) tuples.
 
-        `panel` — (заголовок, факты) открытой панели, если спрашивают ИЗ
-        всплывающей строки конкретной панели, а не из общего диалога АГЕНТА.
-        Это НЕ отдельный урезанный режим: действия (переключить сценарий,
-        загрузить файл, посчитать расписание) выполняются те же самые — то
-        есть спросить «переключись на wide_ilp и сравни» можно из всплывающей
-        строки МАШИНЫ в РАЗБОРЕ точно так же, как из ДИАЛОГА в АГЕНТЕ.
-        `panel` лишь сужает, о чём говорить в ответе, и идёт суффиксом
-        промпта (см. `context.system_prompt`), не ломая кэш префикса.
+        `panel` is (title, facts) of a specific open pane when invoked from an
+        inline pane prompt rather than the main AGENT chat. Actions still run
+        identically; `panel` only narrows the answer via a prompt suffix
+        (preserving llama.cpp prefix cache).
         """
         turn = Turn(question=question)
         self.history.append(turn)
@@ -205,10 +190,7 @@ class Agent:
             turn.actions.append(note)
             yield ("action", note)
 
-        # «Уверен?» — вопрос не про участок, а про происхождение сказанного.
-        # Отвечаем сами и точно: у инструмента ЕСТЬ этот ответ, потому что
-        # он всюду хранит источник каждого числа. Отдавать такой вопрос
-        # модели на 3B значит получить голое «Дальше: /compare».
+        # Provenance question ("are you sure?") is answered directly from core data.
         if _is_doubt(question) and self.history[:-1]:
             answer = self._provenance()
             turn.answer = answer
@@ -226,7 +208,7 @@ class Agent:
                 yield ("text", piece)
             turn.answer = "".join(chunks).strip()
             if not turn.answer:
-                raise llm.LLMError("пустой ответ модели")
+                raise llm.LLMError("empty model response")
         except llm.LLMError as e:
             turn.offline = True
             turn.error = str(e)
@@ -237,20 +219,14 @@ class Agent:
             yield ("text", fallback)
 
     def _provenance(self) -> str:
-        """Откуда взялись числа предыдущего ответа — по-честному, с оговорками.
-
-        Это самый уместный вопрос, который можно задать этому инструменту, и
-        единственный, на который он отвечает ЛУЧШЕ любой модели: происхождение
-        каждого числа у него записано.
-        """
+        """Honest provenance of the computed numbers, with explicit caveats."""
         got = self.session.peek()
         lines: list[str] = []
         if not got:
-            return ("Расписание ещё не считалось — проверять нечего. "
-                    "Посчитайте: /run или F5.\n\nДальше: /run")
+            return ("No schedule has been computed yet — nothing to verify. "
+                    "Run one first: /run or F5.\n\nNext: /run")
 
-        # peek() отдаёт (baseline, оракул, метрики): нас интересует оракул —
-        # именно он что-то ДОКАЗЫВАЕТ, у жадного доказывать нечего.
+        # peek() returns (baseline, oracle, metrics): only the oracle proves optimality.
         _base, orc, _met = got
         proven = getattr(orc, "optimal", None)
         stats = getattr(orc, "search_stats", {}) or {}
@@ -258,25 +234,23 @@ class Agent:
 
         if proven:
             lines.append(
-                f"Да, в той части, которую можно доказать. {makespan} тактов — "
-                "это ДОКАЗАННЫЙ оптимум: точный поиск перебрал все более "
-                "короткие расписания и показал, что их не существует.")
+                f"Yes, for the provable part. {makespan} cycles is a PROVEN "
+                "optimum: exact search ruled out every shorter schedule.")
             if stats.get("nodes"):
-                lines.append(f"Разобрано узлов перебора: {stats['nodes']}.")
+                lines.append(f"Search nodes explored: {stats['nodes']}.")
         else:
             lb = stats.get("lower_bound")
             lines.append(
-                f"Не полностью. {makespan} тактов — лучшее НАЙДЕННОЕ, а не "
-                "доказанное: точный поиск не уложился в бюджет."
-                + (f" Доказано лишь, что короче {lb} тактов не бывает."
+                f"Not completely. {makespan} cycles is the best FOUND, not "
+                "proven optimal: exact search hit its budget."
+                + (f" Only proven that nothing shorter than {lb} cycles exists."
                    if lb else ""))
 
-        # Главная оговорка проекта: модель машины проще настоящей.
+        # Key project caveat: the machine model is simpler than real silicon.
         lines.append(
-            "Но всё это — относительно МОДЕЛИ машины, а она заведомо проще "
-            "настоящей: в ней нет зависимостей через память, межкластерных "
-            "задержек и штрафа на передачу между целочисленными и "
-            "вещественными операциями.")
+            "All of this holds relative to the MACHINE MODEL, which is simpler "
+            "than real silicon: it excludes memory-carried dependencies, "
+            "inter-cluster latencies, and int/fp transfer penalties.")
 
         try:
             from ..core.isa import collect
@@ -284,19 +258,19 @@ class Agent:
             guessed = [r.name for r in rows if not r.latency_measured]
             if guessed:
                 lines.append(
-                    f"Латентность измерена у {len(rows) - len(guessed)} классов "
-                    f"из {len(rows)}; у остальных стоит допущение "
+                    f"Latency is measured for {len(rows) - len(guessed)} of "
+                    f"{len(rows)} op classes; the rest use assumptions "
                     f"({', '.join(guessed[:5])}"
                     + ("…" if len(guessed) > 5 else "") + ").")
         except Exception:
             pass
 
-        lines.append("Перепроверить: /isa — источник у каждого числа, "
-                     "/selfcheck — сверка оракула независимым перебором.")
-        return "\n".join(lines) + "\n\nДальше: /isa"
+        lines.append("Cross-check: /isa — provenance of every number, "
+                     "/selfcheck — verify the oracle with an independent search.")
+        return "\n".join(lines) + "\n\nNext: /isa"
 
     def ask(self, question: str) -> Turn:
-        """Ответ целиком (для разового вызова из скрипта)."""
+        """One-shot full response (for CLI/script invocation)."""
         turn = Turn(question=question)
         self.history.append(turn)
         turn.actions = self._run_actions(question)
@@ -310,27 +284,27 @@ class Agent:
             turn.answer = self.offline_answer(question)
         return turn
 
-    # --- офлайновый запасной ответ ----------------------------------------
+    # --- offline fallback -------------------------------------------------
 
     def offline_answer(self, question: str) -> str:
-        """Ответ без сети: те же факты, только без свободной формулировки."""
+        """Offline response using the same computed facts without LLM prose."""
         from ..core.doctor import diagnose
 
         if _is_smalltalk(question):
-            return ("Модель сейчас недоступна. Наберите /ai — там видно, "
-                    "какой ключ отвечает, и повторите вопрос.")
+            return ("The model is currently unavailable. Type /ai to check "
+                    "which key is active, then try again.")
 
         s = self.session
         cached = s.peek()
-        lines = ["Модель недоступна — отвечаю по посчитанным данным."]
+        lines = ["Model unavailable — answering from computed data."]
         if cached is None:
-            lines.append("Расписание ещё не считалось: наберите /run.")
+            lines.append("Schedule not computed yet: run /run.")
             return "\n".join(lines)
 
         base, orc, met = cached
         b, o = base.schedule.makespan, orc.schedule.makespan
-        lines.append(f"Участок {s.scenario}: baseline {b} т., точный поиск {o} т., "
-                     f"предел {met.lower_bound} т.")
+        lines.append(f"Block {s.scenario}: baseline {b} cyc, exact oracle {o} cyc, "
+                     f"lower bound {met.lower_bound} cyc.")
         try:
             from .context import tiny_facts
 
@@ -342,14 +316,14 @@ class Agent:
             losses = [f for f in d.findings if f.recoverable]
             if losses:
                 f = losses[0]
-                lines.append(f"Главная потеря: −{f.cycles_lost} т. — {f.title}.")
-                lines.append(f"Почему: {f.why}")
-                lines.append(f"Решение: {f.fix}")
+                lines.append(f"Primary loss: −{f.cycles_lost} cyc — {f.title}.")
+                lines.append(f"Why: {f.why}")
+                lines.append(f"Fix: {f.fix}")
             else:
-                lines.append("Потерь из-за порядка выдачи нет — упирается в предел машины.")
+                lines.append("No ordering losses — limited by machine lower bound.")
         except Exception:
             pass
-        lines.append("Дальше: /doctor — полный разбор.")
+        lines.append("Next: /doctor — full diagnostics.")
         return "\n".join(lines)
 
 

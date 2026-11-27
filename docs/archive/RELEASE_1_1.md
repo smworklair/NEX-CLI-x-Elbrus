@@ -1,71 +1,71 @@
-# Релиз 1.1 beta: от одиночного ИИ к оркестру
+# Release 1.1 beta: From a Solo AI to an Orchestra
 
-Коротко: сначала был один ИИ (диалог с моделью), потом к нему добавилось
-API (провайдеры, ключи, каталог), а теперь это оркестр — диалог, штаб,
-подключение и крошки, работающие вместе. Проверка версии:
+In short: first there was a solo AI (chatting with a model), then an API layer was added
+(providers, keys, catalog), and now it is an orchestra — dialog, headquarters,
+connection, and tiny schedulers working together. Version check:
 `python -m vliw --version` → `NEX CLI 1.1 beta (1.1.0b1)`.
 
-Сухие цифры — в [`CHANGELOG.md`](../../CHANGELOG.md), устройство оркестра —
-в [`ORCHESTRA.md`](../ORCHESTRA.md). Здесь — что изменилось для человека.
+Dry numbers are in [`CHANGELOG.md`](../../CHANGELOG.md); the orchestra architecture is
+in [`ORCHESTRA.md`](../ORCHESTRA.md). Here is what changed for a human user.
 
-## Путь: ИИ → API → оркестр
+## The path: AI → API → orchestra
 
-1. **ИИ-одиночка.** Агент отвечал текстом в ту же ленту, где печатались
-   отчёты, — и было непонятно, на чём ответ основан. Ключ вставлялся
-   неведомо куда, провайдер был один.
-2. **API.** Появились 15 провайдеров (`vliw/agent/backends/` — по файлу
-   на API: Mistral, Gemini, OpenAI, DeepSeek, Qwen, Kimi, Grok, Anthropic,
-   GLM, Muse, OpenRouter, Vercel, GigaChat, Yandex, локальный сервер),
-   живой каталог моделей и ключ строго на сессию (закрыл терминал —
-   ключа нет, на диск ничего не пишется).
-3. **Оркестр (этот релиз).** Части связаны: диалог спрашивает, штаб
-   посылает фоновых агентов на проверенных подключениях, подключение
-   чинится в два клика, а крошки считают без модели вообще — и агент
-   объясняет их число, а не выдумывает своё.
+1. **Solo AI.** The agent replied with text in the same feed where reports were
+   printed — and it was unclear what the answer was based on. The key was pasted
+   into who-knows-where, and there was only one provider.
+2. **API.** Added 15 providers (`vliw/agent/backends/` — one file per API:
+   Mistral, Gemini, OpenAI, DeepSeek, Qwen, Kimi, Grok, Anthropic,
+   GLM, Muse, OpenRouter, Vercel, GigaChat, Yandex, local server),
+   a live model catalog, and a session-only key (close the terminal —
+   the key is gone; nothing is written to disk).
+3. **Orchestra (this release).** The parts are connected: the dialog asks questions,
+   headquarters dispatches background agents over verified connections, the connection
+   is fixed in two clicks, and the tiny schedulers compute with no model at all — while
+   the agent explains their numbers instead of inventing its own.
 
-## Блок агента обновлён колоссально
+## The agent block has been massively overhauled
 
-Было: один чат + свалка настроек модели внутри него. Стало: четыре блока,
-каждый разворачивается двойным кликом на весь экран.
+Before: one chat + a dumping ground of model settings inside it. Now: four blocks,
+each expandable to full screen with a double-click.
 
-| блок | мини (всегда видно) | полный экран |
+| block | mini (always visible) | full screen |
 |---|---|---|
-| **ДИАЛОГ** | лента разговора | история вопросов с таймерами (клик — повторить), `^L` очистить, `^R` повторить |
-| **ШТАБ** (главный) | сводка (подключения · миссии · последняя) + поле задачи, Enter отправляет | подключения (на каком пойдёт задача), участок работы (потери / сравнение / предел / раскладка / свой вопрос), скрипт-дописка к промпту, список миссий (ещё раз / убрать / убрать выполненные) |
-| **ПОДКЛЮЧЕНИЕ** | провайдер, 5 кнопок API, поле ключа + «подключить» | 3 шага: провайдер → ключ → каталог; поиск подписан честно (только фильтр списка); ручной ID с платной проверкой; пресеты локального сервера |
-| **ЧТО ВИДИТ АГЕНТ / ТРАССА** | сводка чисел / последние действия | дословный контекст модели / все шаги с командами перепроверки |
+| **DIALOG** | conversation feed | question history with timers (click to repeat), `^L` clear, `^R` repeat |
+| **HQ** (primary) | summary (connections · missions · latest) + task input, Enter sends | connections (which one runs the task), focus area (losses / comparison / lower bound / layout / custom question), prompt addendum script, mission list (retry / remove / clear completed) |
+| **CONNECTION** | provider, 5 API buttons, key field + "connect" | 3 steps: provider → key → catalog; search is labeled honestly (list filter only); manual ID with a paid probe; local server presets |
+| **WHAT THE AGENT SEES / TRACE** | number summary / recent actions | verbatim model context / all steps with reproduction commands |
 
-Правила честности прежние и строже: модель не считает (числа — только
-из фактов), трасса повторяется руками, ключи только в памяти.
+The honesty rules remain the same and stricter: the model does not compute (numbers
+come only from facts), the trace is reproducible by hand, and keys live only in memory.
 
-## Крошки: 219 → 284/300
+## Tiny schedulers: 219 → 284/300
 
-Обученный планировщик без LLM вырос в портфель из 9 мнений (хуже baseline
-не бывает по построению):
+The trained non-LLM scheduler grew into a 9-opinion portfolio (never worse than
+baseline by construction):
 
-- `greedy` → `prio` (порядок MLP) → `prio_defer` / `prio_hold` (держки
-  двух голов) → `rule_hold` / `rule_hold_far` (ручные держки монопольного
-  порта — закрыли класс «дырка под DIV») → `beam_t/h/d` (веер).
-- `eval_hard`: **284/300** в оптимуме (было 219), гэп 0.270 → **0.053**,
-  побед 203 → 267. Остаток — 16 графов, все перебор ровно 1 такт.
-- Настоящий код: 5/13 → **7/13**, 0 поражений. Скорость та же по порядку:
-  ~75 мс синтетика, ~2.5 с граф в 386 узлов.
-- Конвейер весов: supervised → ES-доводка (`es.py --mode prio|hold`).
-- Отвергнуто с цифрами (подробности — `docs/TINY.md`): 20 фич, подмес
-  hard, веса 140К, gap-гейт, ES-доводка hold.
+- `greedy` → `prio` (MLP ordering) → `prio_defer` / `prio_hold` (two-head
+  holds) → `rule_hold` / `rule_hold_far` (handcrafted monopoly-port holds —
+  closed the "slot gap for DIV" class) → `beam_t/h/d` (beam fan).
+- `eval_hard`: **284/300** optimal (was 219), gap 0.270 → **0.053**,
+  wins 203 → 267. The remaining 16 graphs are all off by exactly 1 cycle.
+- Real code: 5/13 → **7/13**, 0 losses. Speed is the same order of magnitude:
+  ~75 ms synthetic, ~2.5 s for a 386-node graph.
+- Weight pipeline: supervised → ES fine-tuning (`es.py --mode prio|hold`).
+- Rejected with numbers (details in `docs/TINY.md`): 20 features, mixing in
+  hard examples, 140K weights, gap-gate, ES fine-tuning of hold.
 
-## Код почищен
+## Codebase cleanup
 
-- Удалён `.presentation/` (маркетинг, в репозитории ни на что не ссылался).
-- Концы строк нормализованы в LF (Windows писал CRLF и пачкал `git status`).
-- Мусор (`Zone.Identifier`, выхлоп генераторов) — в `.gitignore`.
-- Заведены `CHANGELOG.md` и первый тег `v1.1.0b1`.
+- Removed `.presentation/` (marketing material; nothing in the repo referenced it).
+- Normalized line endings to LF (Windows wrote CRLF and dirtied `git status`).
+- Junk (`Zone.Identifier`, generator output) added to `.gitignore`.
+- Created `CHANGELOG.md` and the first tag `v1.1.0b1`.
 
-## Как проверить за 5 минут
+## How to verify in 5 minutes
 
 ```bash
 python -m vliw --version            # 1.1 beta
-python -m vliw tiny slotclash       # крошки против baseline и oracle
+python -m vliw tiny slotclash       # tiny schedulers vs. baseline and oracle
 python -m vliw.tiny.eval --eval eval_hard.jsonl --limit 20
 python -m unittest tests.test_tiny tests.test_hq -v
 ```

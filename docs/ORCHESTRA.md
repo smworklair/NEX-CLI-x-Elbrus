@@ -1,80 +1,72 @@
-# Оркестр: диалог, штаб, подключение, крошки
+# Orchestra: Dialogue, HQ, Connections, TINY AI
 
-> Этап 8 из 13 · [← Агент](AGENT_PROMPTS.md) · [Маршрут](README.md) · [TINY AI →](TINY.md)
+> Stage 8 of 13 · [← Agent](AGENT_PROMPTS.md) · [Roadmap](README.md) · [TINY AI →](TINY.md)
 
-Числа считает ядро, агент их объясняет. Оркестр — всё, что вокруг модели:
-с кем говоришь, кого посылаешь, через что подключён и кто считает без модели.
+The core computes the numbers; the agent explains them. The orchestra is everything around the model: who you talk to, who you dispatch, how you connect, and what computes without an LLM.
 
-Готовые вопросы — в [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md).
+Ready-to-use prompts: [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md).
 
-## Быстрый старт
+## Quick Start
 
-1. Вставьте API-ключ прямо в строку диалога. Ключ живёт до закрытия терминала и никуда не сохраняется.
-   Без ключа агент тоже работает — отвечает по уже посчитанным числам.
-2. Спросите обычным языком. Что агент сделал перед ответом, видно в трассе справа.
-3. Нужно несколько мнений — отправьте миссию из ШТАБА: подключение, участок, задача.
+1. Paste an API key directly into the chat input. The key lives until the terminal closes and is never saved to disk. Without a key, the agent still works — answering from already computed numbers.
+2. Ask in plain language. Whatever the agent executed before answering appears in the trace on the right.
+3. Need multiple perspectives? Dispatch a mission from HQ: pick a connection, a focus area, and a task.
 
-## Диалог
+## Dialogue
 
-Один разговор на сессию. Вкладка в КОДЕ, колонка и экран АГЕНТА показывают одно и то же.
-История вопросов — в развороте диалога; клик повторяет вопрос. `/clear` чистит ленту, но не историю.
+One conversation per session. The tab in CODE, the side column, and the AGENT screen all show the same thread.
+Prompt history lives in the expanded dialogue view; clicking an entry repeats the question. `/clear` clears the feed without erasing history.
 
-## Штаб
+## HQ
 
-Фоновые агенты на выбранных подключениях. У каждого свой backend, свой участок работы и свой
-дополнительный текст к промпту. Агент только читает состояние: сессию не переключает, файлы не грузит,
-ничего не пишет.
+Background agents running on selected connections. Each has its own backend, focus area, and extra prompt instructions. An agent is read-only with respect to session state: it does not switch scenarios, load files, or write anything.
 
-Участки: потери, сравнение, предел, раскладка, свой вопрос. Разворот панели показывает подключения,
-скрипт и список миссий.
+Focus areas: losses, comparison, lower bound, layout, custom question. Expanding the panel shows connections, the script, and the mission list.
 
-## Подключение моделей
+## Connecting Models
 
-Правило простое: без ключа списка моделей нет.
+Simple rule: no key, no model list.
 
-1. Вставьте ключ.
-2. Нажмите «подключить» — сервер отдаёт живой каталог.
-3. Клик применяет модель к сессии.
+1. Paste your key.
+2. Click "connect" — the provider returns a live model catalog.
+3. Click a model to activate it for the session.
 
-Поиск фильтрует список. Там, где каталога нет (например, Yandex), ID вводится вручную.
-Локальный сервер (Ollama / LM Studio / llama.cpp) задаётся пресетом или своим URL; модели
-скачиваются и запускаются вручную, не здесь.
+Search filters the list. Where no catalog endpoint exists (e.g., Yandex), enter the model ID manually.
+Local servers (Ollama / LM Studio / llama.cpp) are configured via preset or custom URL; downloading and starting local models is handled outside this tool.
 
-Всё хранится в памяти процесса: смена ключа даёт свежий список, перезапуск всё забывает.
+Everything stays in process memory: changing the key fetches a fresh catalog, and restarting clears all state.
 
-## Крошки
+## TINY AI
 
-Обученный планировщик без LLM (`vliw/tiny/`):
+The learned scheduler without an LLM (`vliw/tiny/`):
 
-- крошка-1 — порядок из скоров MLP;
-- крошка-2 — запреты «не раньше»;
-- крошка-3 — веер вариантов и точный выбор по makespan.
+- net 1 — priority ordering from MLP scores;
+- net 2 — "not earlier than" defer constraints;
+- net 3 — beam of candidates with exact makespan selection.
 
-Хуже жадного не бывает по построению. Цифры и переобучение — в [`TINY.md`](TINY.md).
+Never worse than greedy by construction. Numbers and retraining: [`TINY.md`](TINY.md).
 
-Связь с оркестром односторонняя: факты крошек попадают в контекст агента, агент их объясняет.
-Обратное — «модель подсказывает планировщику» — запрещено правилом честности.
+The link to the orchestra is one-way: TINY AI facts flow into the agent's context so the agent can explain them. The reverse — letting an LLM guide the scheduler — is forbidden by the honesty rule.
 
-## Правила честности
+## Honesty Rules
 
-1. Модель не видит исходник, решётку и не умеет считать. Она пересказывает факты из «что видит агент».
-   Числа, которых нет в этом списке, выдуманы.
-2. Ничьи в портфеле отдаются жадному, а не модели: алгоритму не приписывается чужое.
-3. Каждый шаг агента повторяется руками командами из ответа.
+1. The model does not see raw source code or the grid, and cannot do arithmetic. It narrates facts from "what the agent sees". Any number absent from that list is fabricated.
+2. Ties in the portfolio go to greedy, not the model: the algorithm never takes credit for a tie.
+3. Every step the agent took can be reproduced manually using the commands printed in its response.
 
-## Где что лежит
+## File Map
 
-| файл | роль |
+| file | role |
 |---|---|
-| `vliw/agent/agent.py` | диалог и действия до ответа |
-| `vliw/agent/context.py` | факты для модели |
-| `vliw/agent/llm.py` | провайдеры, ключи, активная модель |
-| `vliw/agent/models.py` | живой каталог моделей |
-| `vliw/agent/hq.py` | штаб и миссии |
-| `vliw/agent/local.py` | локальный подъём обученной модели |
-| `vliw/tui/screens/agent_screen.py` | экран АГЕНТА |
+| `vliw/agent/agent.py` | dialogue and pre-response actions |
+| `vliw/agent/context.py` | facts supplied to the model |
+| `vliw/agent/llm.py` | providers, keys, active model |
+| `vliw/agent/models.py` | live model catalog |
+| `vliw/agent/hq.py` | HQ and missions |
+| `vliw/agent/local.py` | local learned-model launcher |
+| `vliw/tui/screens/agent_screen.py` | AGENT screen |
 
-## Проверки
+## Checks
 
 ```bash
 python -m unittest tests.test_tui_smoke.TestHeadquartersPanel \
@@ -82,4 +74,4 @@ python -m unittest tests.test_tui_smoke.TestHeadquartersPanel \
     tests.test_agent_backends
 ```
 
-Ни один тест не пишет на диск и не ходит в сеть: каталог замокан.
+No test writes to disk or hits the network: the catalog is mocked.

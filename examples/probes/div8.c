@@ -1,4 +1,4 @@
-/* Пропускная способность делителя: 8 НЕзависимых делений. */
+/* Divider throughput: 8 independent divisions. */
 volatile int a[8] = {100,200,300,400,500,600,700,800};
 volatile int b[8] = {3,3,3,3,3,3,3,3};
 volatile int out[8];

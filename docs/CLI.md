@@ -1,35 +1,35 @@
-# CLI: установка и команды
+# CLI: Installation and Commands
 
-> Этап 2 из 13 · [← Быстрый старт](../QUICKSTART.md) · [Маршрут](README.md) · [Методика →](METHOD.md)
+> Stage 2 of 13 · [← Quick Start](../QUICKSTART.md) · [Roadmap](README.md) · [Methodology →](METHOD.md)
 
-Краткий справочник по `vliw`. Подробности о режимах — в отдельных файлах:
-[КОД](CODE_MODE.md), [РАЗБОР](LAB_MODE.md), [ЯДРО](CORE_MODE.md), [АГЕНТ](AGENT_PROMPTS.md).
+Quick reference for `vliw`. Mode-specific workflows live in dedicated guides:
+[CODE](CODE_MODE.md), [LAB](LAB_MODE.md), [CORE](CORE_MODE.md), [AGENT](AGENT_PROMPTS.md).
 
-## Требования
+## Requirements
 
-- Python 3.10 или новее.
-- Обязательных зависимостей нет: ядро и построчный режим работают на стандартной библиотеке.
-- Для полноэкранного рабочего места нужны `rich` и `textual`.
-- `lcc`, QEMU и железо не требуются.
-
-```bash
-python3 --version          # Windows: python --version или py --version
-```
-
-## Установка
+- Python 3.10 or newer.
+- Zero mandatory dependencies: the core scheduler and plain-text mode run on the standard library.
+- `rich` and `textual` are required for the fullscreen workspace.
+- `lcc`, QEMU, and Elbrus hardware are not required.
 
 ```bash
-pip install -e .           # ядро + команда vliw
-pip install -e ".[tui]"    # + полноэкранный интерфейс (рекомендуется)
-pip install -e ".[learned]" # + обученная LLM (torch/transformers, тяжёлое)
+python3 --version          # Windows: python --version or py --version
 ```
 
-Без установки всё работает из папки проекта: `python -m vliw ...`.
-Если `textual` не установлен, `python -m vliw` открывает экран-помощник и предлагает поставить его.
+## Installation
 
-## Два способа запуска
+```bash
+pip install -e .           # core + vliw command
+pip install -e ".[tui]"    # + fullscreen interface (recommended)
+pip install -e ".[learned]" # + learned LLM (torch/transformers, heavy)
+```
 
-**Разово** — команда выполняется и программа завершается:
+Without installation, everything runs from the repository root via `python -m vliw ...`.
+If `textual` is not installed, `python -m vliw` opens the setup assistant and offers to install it.
+
+## Two Ways to Run
+
+**One-shot** — runs a command and exits:
 
 ```bash
 python -m vliw run slotclash
@@ -37,45 +37,45 @@ python -m vliw compare --no-color
 python -m vliw all
 ```
 
-**Интерактивно** — открывается рабочее место:
+**Interactive** — opens the workspace:
 
 ```bash
-python -m vliw                 # экран выбора режимов
-python -m vliw --mode code     # сразу КОД
-python -m vliw lab             # сразу РАЗБОР
-python -m vliw --plain         # построчный режим без полноэкранных панелей
+python -m vliw                 # mode selector
+python -m vliw --mode code     # straight into CODE
+python -m vliw lab             # straight into LAB
+python -m vliw --plain         # line-by-line mode without fullscreen panels
 ```
 
-Внутри рабочего места команды пишутся со слэшем: `/run slotclash`, `/compare`, `/help`.
+Inside the workspace, commands take a leading slash: `/run slotclash`, `/compare`, `/help`.
 
-## Глобальные флаги
+## Global Flags
 
-| флаг | смысл |
+| flag | meaning |
 |---|---|
-| `--version` | версия и выход |
-| `--profile {e2k-v6-measured,e2k-v6-firstprobe,naive_homogeneous}` | модель машины |
-| `--width N` | переопределить число портов |
-| `--budget С` | бюджет точного поиска, секунды |
-| `--portfolio С` | бюджет запасного поиска, секунды |
-| `--color` / `--no-color` | включить / выключить цвет |
-| `--theme ИМЯ` | тема: `nex-dark`, `atlas`, `classic`, `kilo`, `nnl-purple` |
-| `--mode {work,lab,mind,code,explore,chat}` | пропустить экран выбора |
-| `--plain` | построчный режим без полноэкранного интерфейса |
+| `--version` | print version and exit |
+| `--profile {e2k-v6-measured,e2k-v6-firstprobe,naive_homogeneous}` | machine model profile |
+| `--width N` | override issue-slot / functional-unit width |
+| `--budget S` | exact solver time budget, seconds |
+| `--portfolio S` | fallback portfolio search time budget, seconds |
+| `--color` / `--no-color` | enable / disable color |
+| `--theme NAME` | theme: `nex-dark`, `atlas`, `classic`, `kilo`, `nnl-purple` |
+| `--mode {work,lab,mind,code,explore,chat}` | skip the mode selector |
+| `--plain` | line-by-line mode without fullscreen TUI |
 
-`explore` — псевдоним РАЗБОРа, `chat` — псевдоним АГЕНТа.
+`explore` is an alias for LAB; `chat` is an alias for AGENT.
 
-## Команды
+## Commands
 
-### Расписание
+### Scheduling
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `run <сценарий>` | прогнать сценарий: расписание точного поиска и вердикт |
-| `compare [сценарий] [--model]` | жадный и точный поиск рядом; `--model` добавляет обученную LLM |
-| `tiny [сценарий]` | TINY AI против жадного и точного поиска |
-| `play [base\|oracle]` | воспроизвести расписание такт за тактом |
-| `asm [base\|oracle]` | расписание в виде широких команд `e2k { … }` |
-| `explain <такт>` | почему в этом такте выбрали именно это |
+| `run <scenario>` | run a scenario: exact solver schedule and verdict |
+| `compare [scenario] [--model]` | greedy list scheduler and exact solver side by side; `--model` adds the learned LLM |
+| `tiny [scenario]` | TINY AI vs. greedy baseline and exact solver |
+| `play [base\|oracle]` | step through the schedule cycle by cycle |
+| `asm [base\|oracle]` | emit the schedule as `e2k { … }` VLIW bundles |
+| `explain <cycle>` | explain why those operations were bundled into that cycle |
 
 ```bash
 python -m vliw run slotclash
@@ -83,116 +83,116 @@ python -m vliw compare --no-color
 python -m vliw tiny
 ```
 
-### Граф и диагноз
+### Graph and Diagnostics
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `path` | граф с подсветкой критического пути |
-| `bounds` | две нижние границы makespan |
-| `doctor [base\|oracle]` | где теряются такты и почему; `doctor N` — подробности находки |
-| `analyze` | типизированный разбор: вердикт, причина, план |
+| `path` | data-dependency graph (DAG) with critical path highlighted |
+| `bounds` | theoretical makespan lower bounds (critical-path length vs. resource bound) |
+| `doctor [base\|oracle]` | pinpoint where cycles are lost and why; `doctor N` for finding details |
+| `analyze` | structured analysis: verdict, root cause, remediation plan |
 
-### Модель машины
+### Machine Model
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `model [профиль]` | матрица возможностей портов; смена профиля |
-| `probe` | как `probe.c` измерял модель e2k |
-| `isa [--out ФАЙЛ]` | справочник: каналы, латентности, темп приёма, источники |
-| `verify [--show]` | переснять матрицу портов у ассемблера прямо сейчас |
+| `model [profile]` | functional-unit capability matrix; switch profile |
+| `probe` | how `probe.c` calibrated the `e2k` machine model |
+| `isa [--out FILE]` | reference: issue slots (channels), latencies, occupancy, sources |
+| `verify [--show]` | re-probe the issue-slot matrix directly against the assembler |
 
-### Прогоны
+### Runs and Benchmarks
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `scenarios` | список сценариев |
-| `random [N] [seed]` | случайный граф на N инструкций и прогон |
-| `all` | сводная таблица по всем 17 сценариям |
-| `sweep [--seeds N]` | массовый прогон по случайным графам |
-| `selfcheck [--seeds N]` | сверить точный поиск независимым перебором |
-| `hard [--survey N] [--harvest N] [--jobs N]` | есть ли на графе что выигрывать и где брать трудные графы |
+| `scenarios` | list built-in scenarios |
+| `random [N] [seed]` | generate and schedule a random DAG of N instructions |
+| `all` | summary table across all 17 scenarios |
+| `sweep [--seeds N]` | batch sweep across random graphs |
+| `selfcheck [--seeds N]` | cross-check the exact branch-and-bound oracle against an independent brute-force solver |
+| `hard [--survey N] [--harvest N] [--jobs N]` | check whether a graph has scheduling headroom (recoverable cycles) and harvest hard graphs |
 
-### Агент и обучение
+### Agent and Training
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `ask <вопрос>` | задать вопрос агенту |
-| `ai [провайдер] [key=…] [model=…]` | состояние и настройка модели на сессию |
-| `key <ключ>` | вставить API-ключ на сессию, никуда не сохраняя |
-| `learned [--cab] [--constrained] [--bench N] [--data ФАЙЛ] [--pure]` | запустить обученную LLM на текущем графе |
-| `agent` | куда встраивается обученная модель |
+| `ask <question>` | ask the agent a question |
+| `ai [provider] [key=…] [model=…]` | view status and configure model for the current session |
+| `key <key>` | set API key for the current session without writing to disk |
+| `learned [--cab] [--constrained] [--bench N] [--data FILE] [--pure]` | run the learned LLM on the current graph |
+| `agent` | show where a learned model plugs into the scheduling pipeline |
 
-Ключи и провайдеры — в [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md) и [`ORCHESTRA.md`](ORCHESTRA.md).
+Keys and providers: [`AGENT_PROMPTS.md`](AGENT_PROMPTS.md) and [`ORCHESTRA.md`](ORCHESTRA.md).
 
-### Данные
+### Data
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `code [run\|show\|save\|load\|clear]` | буфер исходника e2k |
-| `load <файл.s>` | загрузить настоящий `.s` от `lcc` и разобрать |
-| `validate <файл.jsonl…>` | прогнать jsonl через `Schedule.validate()` |
-| `report [--dir …]` | свести дампы прогонов в таблицу |
-| `kaggle [step0\|run1\|all\|pull\|status]` | залить / забрать / проверить Kaggle |
+| `code [run\|show\|save\|load\|clear]` | `e2k` source buffer |
+| `load <file.s>` | load and parse a real `.s` file from `lcc` |
+| `validate <file.jsonl…>` | verify jsonl records with `Schedule.validate()` |
+| `report [--dir …]` | aggregate run dumps into a summary table |
+| `kaggle [step0\|run1\|all\|pull\|status]` | upload / pull / check Kaggle jobs |
 
-### Сессия
+### Session
 
-| команда | что делает |
+| command | what it does |
 |---|---|
-| `status` | контекст сессии: сценарий, машина, результат |
-| `theme [имя]` | список и переключение тем |
-| `work` | справка интерпретатора |
-| `docs` | что это за прототип и зачем |
-| `mode [work\|lab\|mind\|code]` | сменить фокус панели |
-| `clear` | очистить экран и вернуться к выбору |
-| `help [команда]` | список команд или подробности |
+| `status` | session context: scenario, machine model, result |
+| `theme [name]` | list and switch UI themes |
+| `work` | interpreter reference |
+| `docs` | what this prototype is and why it exists |
+| `mode [work\|lab\|mind\|code]` | switch panel focus |
+| `clear` | clear screen and return to mode selector |
+| `help [command]` | list commands or show detailed help |
 
-Псевдонимы: `ls` → `scenarios`, `cmp` → `compare`, `r` → `run`, `cls` → `clear`.
+Aliases: `ls` → `scenarios`, `cmp` → `compare`, `r` → `run`, `cls` → `clear`.
 
-## Ввод в интерактивном режиме
+## Interactive Input
 
-- `/` в начале строки — команда; без слэша строка уходит в текущий режим.
-- `Tab` — дополнение команд и аргументов.
-- `↑` / `↓` — история команд (кроме Windows без `readline`).
-- `help <команда>` — подробная справка.
-- `Ctrl+C` — прервать; код возврата 130.
+- Leading `/` runs a command; without a slash, input goes to the active mode.
+- `Tab` — autocomplete commands and arguments.
+- `↑` / `↓` — command history (except on Windows without `readline`).
+- `help <command>` — detailed help.
+- `Ctrl+C` — interrupt; exit code 130.
 
-## Коды возврата
+## Exit Codes
 
-| код | значение |
+| code | meaning |
 |---|---|
-| `0` | успех |
-| `1` | ошибка: неизвестная команда, сценарий или файл, исключение |
-| `130` | прервано `Ctrl+C` |
+| `0` | success |
+| `1` | error: unknown command, scenario, or file, or unhandled exception |
+| `130` | interrupted via `Ctrl+C` |
 
-Удобно для скриптов и CI:
+Handy for scripts and CI:
 
 ```bash
-python -m vliw validate eval_real.jsonl && echo "всё законно"
+python -m vliw validate eval_real.jsonl && echo "all valid"
 ```
 
-## Переменные окружения
+## Environment Variables
 
-Для агента и скриптов (ключи в файлы не пишутся):
+For the agent and scripts (keys are never written to disk):
 
-| переменная | смысл |
+| variable | meaning |
 |---|---|
-| `NEX_PROVIDER` | провайдер, по умолчанию `mistral` |
-| `NEX_API_KEY` | общий ключ |
-| `NEX_MODEL` | имя модели |
-| `NEX_BASE_URL` | адрес OpenAI-совместимого сервера |
-| `NEX_LOCAL_URL`, `NEX_LOCAL_MODEL` | локальный сервер (Ollama / LM Studio / llama.cpp) |
+| `NEX_PROVIDER` | provider name, defaults to `mistral` |
+| `NEX_API_KEY` | generic API key |
+| `NEX_MODEL` | model name |
+| `NEX_BASE_URL` | OpenAI-compatible server base URL |
+| `NEX_LOCAL_URL`, `NEX_LOCAL_MODEL` | local server (Ollama / LM Studio / llama.cpp) |
 
-Полный список — в [`.env.example`](../.env.example).
+Full list: [`.env.example`](../.env.example).
 
-## Частые проблемы
+## Common Issues
 
-| проблема | решение |
+| issue | fix |
 |---|---|
-| `No module named vliw` | запускайте из папки проекта или поставьте `pip install -e .` |
-| `python3` не найден | на Windows используйте `python` или `py` |
-| нет цветного вывода | проверьте `--color`; в пайпе цвет отключается сам |
-| вместо интерфейса — помощник | установите `.[tui]` или запустите с `--plain` |
-| нет истории команд | на Windows нет `readline`; это касается только `--plain` |
-| ассемблер не найден в `verify` | задайте `E2K_AS` или добавьте `lcc` в `PATH` |
+| `No module named vliw` | run from the repository root or install with `pip install -e .` |
+| `python3` not found | on Windows, use `python` or `py` |
+| no colored output | check `--color`; color disables automatically when piped |
+| setup assistant opens instead of TUI | install `.[tui]` or launch with `--plain` |
+| no command history | Windows lacks `readline`; affects `--plain` only |
+| assembler not found in `verify` | set `E2K_AS` or add `lcc` to `PATH` |
 
-Windows-особенности — [`WINDOWS.md`](WINDOWS.md).
+Windows specifics: [`WINDOWS.md`](WINDOWS.md).

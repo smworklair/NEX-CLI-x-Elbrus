@@ -1,56 +1,47 @@
-# Путеводитель для тех, кто хочет покопаться
+# Guide for Contributors and Tinkerers
 
-> Этап 13 из 13 · [← Обученная LLM](LEARNED.md) · [Маршрут](README.md) · [Архив →](archive/README.md)
+> Stage 13 of 13 · [← Learned LLM](LEARNED.md) · [Roadmap](README.md) · [Archive →](archive/README.md)
 
-Проект отдаётся как есть, вместе с отрицательным результатом: обученная LLM не обгоняет случайный
-перебор на настоящем коде. Слабый результат — не повод закрывать код, но карта нужна.
+The project is shared as-is, negative results included: the fine-tuned LLM does not beat random search on real code. A weak result is no reason to hide the code, though a map helps.
 
-## Что хотите сделать
+## What Do You Want to Do?
 
-### Поменять интерфейс
+### Change the Interface
 
-→ [`../vliw/tui/README.md`](../vliw/tui/README.md) — карта экранов, что безопасно менять,
-что можно выкинуть целиком и где граница с алгоритмом.
+→ [`../vliw/tui/README.md`](../vliw/tui/README.md) — screen map, what is safe to modify, what can be ripped out wholesale, and where the boundary with the scheduling algorithm lies.
 
-Поведение экранов описано отдельно: [`CODE_MODE.md`](CODE_MODE.md), [`LAB_MODE.md`](LAB_MODE.md).
+Screen behavior is documented separately: [`CODE_MODE.md`](CODE_MODE.md), [`LAB_MODE.md`](LAB_MODE.md).
 
-### Обучить свою модель
+### Train Your Own Model
 
-Два пути, от дешёвого к дорогому:
+Two paths, from cheap to expensive:
 
-1. **TINY AI** → [`TINY.md`](TINY.md): MLP на ~21 тыс. параметров, обучение за минуты на CPU,
-   инференс на стандартной библиотеке. Это рабочий планировщик, а не эксперимент.
-2. **LoRA поверх LLM** → [`LEARNED.md`](LEARNED.md): тяжёлый исторический трек на гигабайты весов
-   и GPU. Результат на настоящем коде отрицательный.
+1. **TINY AI** → [`TINY.md`](TINY.md): an MLP with ~21K parameters, trains in minutes on CPU, runs inference on the Python standard library. This is the production scheduler, not an experiment.
+2. **LoRA on an LLM** → [`LEARNED.md`](LEARNED.md): heavy historical track with gigabytes of weights and GPU requirements. Negative result on real code.
 
-### Написать свой скрипт
+### Write Your Own Script
 
-→ [`../tools/README.md`](../tools/README.md) — готовые скрипты и контракт: принимают `argv`,
-возвращают код, самодостаточны.
+→ [`../tools/README.md`](../tools/README.md) — existing scripts and their contract: accept `argv`, return an exit code, stay self-contained.
 
-### Понять, как считается расписание
+### Understand How Schedules Are Computed
 
-→ [`ISA.md`](ISA.md) — модель машины; [`TINY.md`](TINY.md) — как работает обученный планировщик.
+→ [`ISA.md`](ISA.md) — machine model; [`TINY.md`](TINY.md) — how the learned scheduler works.
 
-## Куда не лезть
+## Where Not to Touch
 
-`vliw/core/` — жадный планировщик и точный поиск — не предлагается к переделке. Не потому что жалко:
-отрицательный результат проекта измерен на этой конкретной реализации. Поменять её без разбора значит
-незаметно обесценить измерение, на которое ссылается вся документация.
+`vliw/core/` — the greedy scheduler and exact search — is not meant for casual rewrites. Not out of possessiveness: the project's negative result was measured against this exact implementation. Changing it without care silently invalidates the measurements referenced throughout the documentation.
 
-Если нужен свой планировщик — используйте контракт [`../vliw/core/api.py`](../vliw/core/api.py),
-класс `Scheduler`. Этого достаточно, чтобы построить свой вариант и сравнить с готовыми, не трогая ядро.
+If you want your own scheduler, implement the `Scheduler` contract in [`../vliw/core/api.py`](../vliw/core/api.py). That is enough to build your own variant and benchmark it against the built-ins without touching the core.
 
-## Проверки
+## Checks
 
 ```bash
 pip install -e ".[tui]"
 python -m unittest discover -s tests
 ```
 
-Пропуски без `torch` и `textual` — норма. Новое поведение должно приходить с регрессионным тестом.
+Skips when `torch` or `textual` are absent are normal. New behavior should ship with a regression test.
 
-## Если пригодилось
+## Support
 
-Проект бесплатный и остаётся таким. Если помог — [pay.cloudtips.ru/p/7809ff65](https://pay.cloudtips.ru/p/7809ff65).
-Донат не покупает поддержку или приоритет правок.
+The project is free for personal and educational use and remains so. If it helped you: [pay.cloudtips.ru/p/7809ff65](https://pay.cloudtips.ru/p/7809ff65). Donations do not buy support or priority fixes.

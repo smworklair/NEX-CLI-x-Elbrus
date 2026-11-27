@@ -1,260 +1,251 @@
-# Журнал исследования
+# Research Journal
 
-Хронология по датам: что проверяли, что оказалось неверным и почему приняли
-именно такое решение. Записи писались по ходу работы, а не задним числом,
-поэтому местами резкие — это рабочий журнал, а не отчёт. Отчёты лежат рядом:
-[`CAB.md`](CAB.md), [`REAL_VS_SYNTH.md`](../REAL_VS_SYNTH.md),
+Chronology by date: what was tested, what turned out to be wrong, and why each decision
+was made. Entries were written as work progressed rather than in hindsight, so they are
+blunt in places — this is a working journal, not a polished report. Reports sit next to
+it: [`CAB.md`](CAB.md), [`REAL_VS_SYNTH.md`](../REAL_VS_SYNTH.md),
 [`DIAG2.md`](DIAG2.md), [`DIAG3.md`](DIAG3.md).
 
-## 30–31 августа 2026: эвал оказался пустым, CAB, SEED закрыт замером
+## August 30–31, 2026: the eval turned out to be empty, CAB, SEED closed by measurement
 
-**Главное. Обе выборки проекта не содержали задачи.** Жадная эвристика стоит
-в ДОКАЗАННОМ оптимуме на 298 графах из 300 в `eval_wide.jsonl` и на всех 300
-в `eval.jsonl`. То есть все прежние сравнения обученной модели — DIAG2,
-DIAG3, спор про третий прогон — шли против пустоты: baseline там законен
-всегда и оптимален почти всегда, за миллисекунды против сотен секунд у
-модели. Сверено: `meta.makespan` — доказанный оптимум CP-SAT, профиль машины
-совпадает (оракул проекта дал ровно `meta.makespan` 15 раз из 15).
+**Headline. Neither project benchmark contained an actual problem.** The greedy
+heuristic sits at the PROVEN optimum on 298 out of 300 graphs in `eval_wide.jsonl` and
+on all 300 in `eval.jsonl`. That means every previous comparison of the trained model —
+DIAG2, DIAG3, the debate over Run 3 — was running against thin air: baseline is always
+legal and almost always optimal there, in milliseconds versus hundreds of seconds for
+the model. Cross-checked: `meta.makespan` is the proven CP-SAT optimum, and the machine
+profile matches (the project's oracle matched `meta.makespan` 15 times out of 15).
 
-Разбор целиком — [`CAB.md`](CAB.md), 380 строк. Не переоткрывать
-это заново.
+Full analysis — [`CAB.md`](CAB.md), 380 lines. Do not rediscover this from scratch.
 
-**Что построено.**
+**What was built.**
 
-* `vliw/learned/portfolio.py` — CAB: из одного ответа модели несколько
-  ЗАКОННЫХ расписаний, выбор точным критерием. `/learned --cab`.
-* `vliw/core/hardness.py` + `/hard` — фильтр по зазору «жадный > оптимум»,
-  параллельный сбор (`--jobs`). Трудность делает не размер графа, а
-  конкуренция за монопольный порт `,5`.
-* `eval_hard.jsonl` — 300 трудных примеров, проверены целиком.
-* `vliw/core/oracle.py:Hint` + `vliw/learned/seed.py` — SEED, подсказка
-  точному поиску.
-* `/learned --bench N --data ФАЙЛ` — замер отвязан от `eval_wide.jsonl`.
+* `vliw/learned/portfolio.py` — CAB: multiple LEGAL schedules from a single model
+  response, selected by an exact criterion. `/learned --cab`.
+* `vliw/core/hardness.py` + `/hard` — filter by the "greedy > optimum" gap, parallel
+  harvesting (`--jobs`). Hardness comes not from graph size, but from contention on the
+  monopoly port `,5`.
+* `eval_hard.jsonl` — 300 hard examples, verified in full.
+* `vliw/core/oracle.py:Hint` + `vliw/learned/seed.py` — SEED, hinting exact search.
+* `/learned --bench N --data FILE` — benchmark decoupled from `eval_wide.jsonl`.
 
-**Числа на трудном эвале (300 графов, СИНТЕТИКА — генератор проекта, внутри
-распределения обучения):** жадный 1.030 такта до оптимума, модель+CAB — 0.82,
-точно в оптимум 59/300. Модель обыгрывает эвристику на 20% графов, на 75% не
-добавляет ничего. Без CAB законна в 17% случаев (против 97% на лёгком эвале —
-это была особенность данных, а не модели). На настоящем коде `lcc`, вне
-распределения обучения, итог другой и отрицательный — 0 из 13, см.
-[`model_eval/REPORT.md`](../../real_candidates_100_400/model_eval/REPORT.md);
-это не противоречие этим числам, а разница условий.
+**Numbers on the hard eval (300 graphs, SYNTHETIC — project generator, in-distribution
+for training):** greedy is 1.030 cycles from optimum, model+CAB is 0.82, exact optimum
+on 59/300. The model beats the heuristic on 20% of graphs and adds nothing on 75%.
+Without CAB it is legal 17% of the time (vs. 97% on the easy eval — that was a property
+of the data, not the model). On real `lcc` code, out of distribution, the outcome is
+different and negative — 0 out of 13, see
+[`model_eval/REPORT.md`](../../real_candidates_100_400/model_eval/REPORT.md); this does
+not contradict these numbers, it reflects different conditions.
 
-**SEED-1 закрыт замером.** Потолок — 5% узлов при ИДЕАЛЬНОЙ подсказке,
-потому что углубление идёт снизу вверх и верхняя граница обрезает только
-дешёвый хвост. Механизм оставлен в коде, работать начнёт только если поиск
-переделают на движение сверху вниз. SEED-2 (векторы портфеля) непроверяем на
-этих данных: точный поиск укладывается в бюджет всегда.
+**SEED-1 closed by measurement.** The ceiling is 5% of nodes even with a PERFECT hint,
+because iterative deepening goes bottom-up and an upper bound only trims the cheap tail.
+The mechanism stays in the code and will only start working if search is rewritten to
+go top-down. SEED-2 (portfolio vectors) is untestable on this dataset: exact search
+always finishes within budget.
 
-**Два бага по дороге:** `--constrained` терялся при передаче в замер (все
-прежние «по грамматике» числа из bench неверны); `valid` считался по сырому
-ответу, а не по итоговому расписанию.
+**Two bugs caught along the way:** `--constrained` was being dropped when passed into
+the benchmark (all previous "grammar-constrained" bench numbers were wrong); `valid`
+was counted on the raw response rather than on the final schedule.
 
-**Что решать дальше.**
+**What to decide next.**
 
-1. Трудная ОБУЧАЮЩАЯ выборка. Механизм готов (`/hard --harvest --jobs`),
-   ~сутки CPU на 20 000, без GPU. Сейчас модель ни одного трудного графа в
-   обучении не видела — её учили воспроизводить эвристику, а потом мерили,
-   обыгрывает ли она эвристику.
-2. Пропорция смешивания. `PRESSURE_WEIGHTS` даёт DIV ~20% операций против
-   единиц процентов в настоящем `lcc`. Трудную выборку держать ОТДЕЛЬНЫМ
-   эвалом, а не подменять ею `eval_wide`.
-3. SEED-2 на настоящем коде `lcc` — там оракул безнадёжен всегда и
-   портфельный движок работает по-настоящему. Засада: модель обучена на
-   n=4..24 и на графах в сотни операций вне распределения.
+1. A hard TRAINING dataset. The tooling is ready (`/hard --harvest --jobs`), ~1 CPU-day
+   for 20,000 examples, no GPU needed. Right now the model has never seen a single hard
+   graph in training — it was trained to imitate a heuristic and then evaluated on
+   whether it beats that heuristic.
+2. Mixing ratio. `PRESSURE_WEIGHTS` gives ~20% DIV operations versus single-digit
+   percentages in real `lcc` output. Keep the hard set as a SEPARATE eval rather than
+   replacing `eval_wide` with it.
+3. SEED-2 on real `lcc` code — there the oracle is always hopeless and the portfolio
+   engine actually runs. The catch: the model was trained on n=4..24 and is out of
+   distribution on graphs of hundreds of operations.
 
 
-## 17–18 августа 2026: репозиторий, EOS, два прогона, сборка команд
+## August 17–18, 2026: repository, EOS, two runs, CLI consolidation
 
-**Репозиторий поднят с нуля.** История переписана: в `vliw/agent/llm.py`
-жили два ключа API строкой в коде (`EMBEDDED_KEYS`), они утекли в git. Теперь
-секрет живой строкой в код не идёт вообще, формат — в `.env.example`.
-Первый коммит истории — `Инициализация репозитория`.
+**Repository rebuilt from scratch.** History was rewritten: `vliw/agent/llm.py` held
+two API keys as literal strings in code (`EMBEDDED_KEYS`), which leaked into git. Now
+no live secret ever enters code; the format is in `.env.example`. First commit of the
+history — initial repository setup.
 
-**Найден и исправлен главный дефект обучения — модель не умела заканчивать
-ответ.** Три четверти ошибок адаптера оказались не ошибками планирования, а
-отсутствием одного токена в обучающих данных. Полный разбор —
-[`EOS_INCIDENT.md`](EOS_INCIDENT.md), порядок прогонов —
-[`RUNBOOK_EOS.md`](RUNBOOK_EOS.md). Мораль там же: категория ошибки
-в отчёте — гипотеза классификатора, а не факт.
+**Found and fixed the main training defect — the model did not know how to end its
+response.** Three-quarters of the adapter's errors turned out not to be scheduling
+errors, but a single missing token in the training data. Full post-mortem —
+[`EOS_INCIDENT.md`](EOS_INCIDENT.md), run order — [`RUNBOOK_EOS.md`](RUNBOOK_EOS.md).
+The moral is there too: an error category in a report is a classifier's hypothesis, not
+a fact.
 
-**Прогоны 0 и 1 отработали на Kaggle.** Прогон 2 (с нуля на слитых данных)
-ещё нет — он дорогой по квоте и запускается отдельным решением.
+**Runs 0 and 1 completed on Kaggle.** Run 2 (from scratch on merged data) has not run
+yet — it is expensive in quota and requires a separate decision.
 
-| прогон | eval.jsonl (6..14) | eval_wide.jsonl (4..24) |
+| run | eval.jsonl (6..14) | eval_wide.jsonl (4..24) |
 |---|---|---|
-| 0. текущий адаптер (без EOS) | 26.7% | 9.7% |
-| 1. + EOS, старые данные | **97.7%** | 32.7% |
-| 2. + EOS, слитые данные, с нуля | — | — |
+| 0. current adapter (no EOS) | 26.7% | 9.7% |
+| 1. + EOS, old data | **97.7%** | 32.7% |
+| 2. + EOS, merged data, from scratch | — | — |
 
-Диагноз подтверждён: «хвост» ушёл из состава почти целиком (было 54.3%),
-разрыв до оптимума среди законных префиксов упал с 0.48 до **0.02** такта.
-На крупных графах (16..24) сдвига нет — там доминирует не остановка, а
-`ресурс` (модель путает матрицу каналов), и чинит это прогон 2.
+Diagnosis confirmed: "tail" vanished almost entirely (was 54.3%), and the optimality
+gap among legal prefixes fell from 0.48 to **0.02** cycles. On large graphs (16..24)
+there is no movement — `resource` dominates there (the model confuses the channel
+matrix), not stopping, and Run 2 is what fixes that.
 
-**Всё лишнее из `tools/` заведено командами CLI** (18.08). Диспетчер
-слэш-команд в `vliw/cli.py` — единственная точка входа, снаружи и внутри
-цикла одинаково. Добавлены `/verify`, `/validate`, `/report`, `/kaggle`;
-логика осталась в `tools/`, CLI их только вызывает. Подробности —
+**Everything useful from `tools/` wired into CLI commands** (18.08). The slash-command
+dispatcher in `vliw/cli.py` is the single entry point, identical outside and inside the
+REPL loop. Added `/verify`, `/validate`, `/report`, `/kaggle`; the logic stayed in
+`tools/`, and the CLI only invokes it. Details —
 [`CLI.md`](../CLI.md#обслуживание-проекта).
 
-**Измерено то, чего в модели нет: запреты на СОЧЕТАНИЯ операций в широкой
-команде.** Ассемблер знает ровно два — запись в `,2` не сочетается с
-загрузкой в `,3`, запись в `,5` — с загрузкой в `,0`. Это «швы» между
-кластерами каналов, то есть кластерность машины существует и наблюдаема, но
-как структурный запрет, а не как межкластерная задержка. Задержку локальным
-тулчейном снять нельзя — проверено, почему именно, написано в
-[`examples/probes/README.md`](../../examples/probes/README.md). В модель запреты
-намеренно НЕ заведены: смена профиля обесценит адаптер и обе колонки таблицы
-выше (см. RUNBOOK, «Чего в этом прогоне НЕТ»). Сначала замер, потом смена
-модели мира.
+**Measured what is missing from the model: bans on OPERATION COMBINATIONS in a wide
+instruction.** The assembler knows exactly two — a store on `,2` cannot pair with a
+load on `,3`, and a store on `,5` cannot pair with a load on `,0`. These are the
+"seams" between channel clusters, meaning machine clustering exists and is observable,
+but as a structural ban rather than an inter-cluster latency. Inter-cluster latency
+cannot be extracted with a local toolchain — why is verified and documented in
+[`examples/probes/README.md`](../../examples/probes/README.md). The bans were
+intentionally NOT added to the model: changing the profile would invalidate the adapter
+and both columns of the table above (see RUNBOOK, "What is NOT in this run"). Measure
+first, change the world model second.
 
-**Полноэкранный интерфейс закрыт тестом.** `tests/test_tui_smoke.py` гоняет
-приложение headless (`App.run_test()`) — экраны монтируются, нажатия доходят
-до строки ввода, команды выполняются ядром. Раньше это не проверялось никак:
-`vliw.tui.available()` требует tty, поэтому в скрипте TUI молча откатывался
-в построчный режим. Всего тестов 81.
+**Fullscreen UI covered by tests.** `tests/test_tui_smoke.py` drives the app headless
+(`App.run_test()`) — screens mount, keystrokes reach the input line, commands execute
+in the core. Previously this had zero test coverage: `vliw.tui.available()` requires a
+tty, so in scripts the TUI silently fell back to line mode. Total tests: 81.
 
-## Переделка интерфейса (16 августа 2026) — версия 0.7 alpha
+## UI Overhaul (August 16, 2026) — version 0.7 alpha
 
-Версия поднята с 0.6 до `0.7.0a1` (`vliw/__init__.py`). Рядом лежит
-`VERSION_LABEL = "0.7 alpha"` — человеческая запись для баннера и подписей;
-машинная нужна, чтобы версию можно было сравнивать как версию. Показывается
-на экране выбора режима, в баннере построчного режима и по `--version`.
-Альфа — потому что интерфейс обкатан на одном терминале и раскладки ещё
-будут меняться.
+Version bumped from 0.6 to `0.7.0a1` (`vliw/__init__.py`). Next to it sits
+`VERSION_LABEL = "0.7 alpha"` — the human-readable string for banners and labels; the
+machine version exists so versions can be compared programmatically. Displayed on the
+mode picker screen, in the line-mode banner, and via `--version`. Alpha because the UI
+has only been tested on one terminal and layouts will still change.
 
+The interface was rewritten in [Textual](https://github.com/Textualize/textual) —
+new package `vliw/tui/`. The old single-window curses screen (`vliw/ui/tui.py`) was
+kept as a fallback when Textual is not installed.
 
-Интерфейс переписан на [Textual](https://github.com/Textualize/textual) —
-новый пакет `vliw/tui/`. Прежний однооконный экран на curses (`vliw/ui/tui.py`)
-оставлен как запасной и работает, если Textual не установлен.
+Substantive changes:
 
-Что изменилось по существу:
+1. **The three modes became three screens with their own layouts**, rather than three
+   tabs of one window. No on-the-fly switching: exit a mode with `/clear` (or `^O`) to
+   return to the picker. Side benefit — digits `1 2 3` stopped being hotkeys inside a
+   mode and can be typed again (`2+2` in the interpreter used to switch tabs first).
+2. **CORE** — workbench: evaluation tape on the left; live NAMES, MEMORY, and PROGRAM
+   (block DAG) on the right. Expression values preview before Enter — evaluation runs
+   on a copy of the workspace.
+3. **LAB** — "cycles × channels" grid with a cursor; the WHY HERE panel explains the
+   cell under the cursor, including empty cells (what we are waiting on, who holds the
+   channel). On the right: NUMBERS, DIAGNOSIS, MACHINE; command reports in a separate
+   panel.
+4. **AGENT** — dialog with streaming output; on the right, WHAT THE AGENT SEES (the
+   exact same numbers as in LAB) and a TRACE of actions it ran before answering.
+5. Long computations (oracle, model requests) moved to background threads — the UI no
+   longer freezes.
 
-1. **Три режима стали тремя экранами со своей раскладкой**, а не тремя
-   вкладками одного окна. Переключения на лету нет: выход из режима — `/clear`
-   (или `^O`), открывается экран выбора. Побочная выгода — цифры `1 2 3`
-   перестали быть горячими клавишами внутри режима и снова печатаются
-   (`2+2` в интерпретаторе начинался с переключения вкладки).
-2. **ЯДРО** — верстак: лента вычислений слева, справа живые ИМЕНА, ПАМЯТЬ и
-   ПРОГРАММА (граф участка). Значение выражения показывается до Enter — счёт
-   идёт на копии рабочего пространства.
-3. **РАЗБОР** — решётка «такты × каналы» с курсором; панель ПОЧЕМУ ЗДЕСЬ
-   отвечает про клетку под курсором, включая пустую (чего ждём, кто держит
-   канал). Справа ЧИСЛА, ДИАГНОЗ, МАШИНА; отчёты команд — в отдельной панели.
-4. **АГЕНТ** — диалог с потоковым ответом; справа ЧТО ВИДИТ АГЕНТ (те же
-   числа, что в РАЗБОРЕ) и ТРАССА действий, которые он выполнил до ответа.
-5. Долгий счёт (оракул, запросы к модели) вынесен в отдельные потоки —
-   интерфейс не замирает.
+**Fixed a core bug along the way** (`vliw/core/interp.py`) exposed by the PROGRAM
+panel: the block DAG was built in a second pass over the string with a regex, so
+`x=load 0` added LOAD twice and `t=x*a+b` did not enter the graph at all (the regex
+only knew one binary op). Now evaluation and DAG construction are a single recursion:
+`_expr/_term/_factor` return both value and node. Values did not change; `selfcheck`
+passes.
 
-**Попутно исправлена ошибка в ядре** (`vliw/core/interp.py`), которую обнажила
-панель ПРОГРАММА: граф участка собирался вторым проходом по строке регулярным
-выражением, и поэтому `x=load 0` добавлял LOAD дважды, а `t=x*a+b` не попадал
-в граф вообще (регулярное выражение знало только одну бинарную операцию).
-Теперь вычисление и сборка графа — одна рекурсия: `_expr/_term/_factor`
-возвращают значение и узел. Значения не изменились, `selfcheck` проходит.
+Separately on color: WSL sets `TERM=xterm-256color` without `COLORTERM`, so the UI
+dropped to 256 colors and all surfaces merged into solid black.
+`vliw/tui/__init__.py:prefer_truecolor()` injects `COLORTERM=truecolor` when the
+terminal looks capable and leaves the variable untouched on `TERM=linux`/`dumb`. In
+addition, surfaces are spaced so they remain distinct even in 256 colors (mapping to
+grays 233/234/236/239).
 
-Отдельно про цвет: WSL выставляет `TERM=xterm-256color` и не выставляет
-`COLORTERM`, поэтому интерфейс уходил в 256 цветов и все поверхности
-сливались в один чёрный. `vliw/tui/__init__.py:prefer_truecolor()` подставляет
-`COLORTERM=truecolor`, если терминал на это похож, и не трогает переменную на
-`TERM=linux`/`dumb`. Плюс сами поверхности разведены так, чтобы оставаться
-различимыми и в 256 цветах (ложатся на серые 233/234/236/239).
+The Elbrus emblem in the logo was redrawn to match the brand mark: two wings plus a
+peak between them (`vliw/ui/logo.py:_MARK`), muted wings, accented peak. The sidebar
+and hint bar toggle from the keyboard (`^B`, `^T`), and the input line sits in its own
+bordered box.
 
-Знак Эльбруса в логотипе перерисован под фирменную марку: два крыла плюс
-вершина между ними (`vliw/ui/logo.py:_MARK`), крылья приглушённые, вершина
-акцентом. Боковая колонка и полоса подсказок убираются с клавиатуры (`^B`,
-`^T`), строка ввода вынесена в отдельное поле в рамке.
-
-Запуск: `python3 -m venv .venv && .venv/bin/pip install textual`, дальше
-`.venv/bin/python -m vliw`. Без Textual — прежний экран, с `--plain` —
-построчный режим.
+Launch: `python3 -m venv .venv && .venv/bin/pip install textual`, then
+`.venv/bin/python -m vliw`. Without Textual — the old screen; with `--plain` —
+line-by-line mode.
 
 
-## Что это
+## What this is
 
-`vliw-ai-scheduler-demo` — CLI-инструмент, демонстрирующий разрыв между
-жадной эвристикой планирования VLIW-инструкций и точным поиском оптимума
-(oracle, branch-and-bound), откалиброванный под реальный процессор Эльбрус
-e2k-v6. Плюс — в процессе — обученная (LoRA) модель-планировщик поверх Qwen.
+`vliw-ai-scheduler-demo` is a CLI tool demonstrating the gap between a greedy VLIW
+instruction-scheduling heuristic and exact optimal search (oracle, branch-and-bound),
+calibrated to the real Elbrus `e2k-v6` processor. Plus — in progress — a trained
+(LoRA) scheduler model on top of Qwen.
 
-Путь: `~/vliw-ai-scheduler-demo` (WSL Ubuntu).
+Path: `~/vliw-ai-scheduler-demo` (WSL Ubuntu).
 
-## Что было сделано 16 августа (по порядку)
+## What was done on August 16 (in order)
 
-1. **Починили запуск `/clear`** в TUI — раньше не возвращал к выбору
-   приложения, теперь возвращает (`vliw/ui/tui.py`, `vliw/cli.py`).
-2. **Добавили 7 новых сценариев** приёмов оптимизации (`vliw/core/dag.py`) —
-   пары «как написано» → «как надо» (seqreduce/treereduce, divpressure/
-   divstrength и т.д.).
-3. **Нашли и исправили ошибку в модели машины.** Первая версия считала
-   умножитель монопольным (порт `,0`, держит 8 тактов) — это оказалось
-   неверно. Проверили ассемблером lcc напрямую (не по выводу компилятора,
-   а спрашивая ассемблер, какие каналы физически принимают инструкцию):
-   умножение исполнимо на 4 каналах, латентность 4, конвейеризовано.
-   Единственная настоящая монополия — делитель (порт `,5`), но латентность
-   11 (не 13), темп приёма — раз в 2 такта (не 13). Загрузка — латентность 5
-   (не 2), 4 канала. Запись — только 2 канала.
-   - Обновлено: `vliw/core/model.py`, README, docs/CLI.md, сценарии.
-   - Опровергнутая версия оставлена как профиль `e2k-v6-firstprobe` — для
-     контраста.
-   - Реальные пробы и вывод lcc лежат в `examples/probes/` (README там же
-     объясняет методику).
-4. **Инженеры МЦСТ (реальный чат) проверяли и поправляли** — там же поймали
-   ошибку в умножителе (запрос Alex Bolt), это и запустило пункт 3.
-5. **Запустили обучение планировщика** (`training/`):
-   - `generate_dataset.py` — генерирует пары граф→оптимальное расписание
-     через сам оракул проекта (только CPU, без ML-зависимостей).
-   - `train_qlora.py` — QLoRA-дообучение Qwen2.5-3B-Instruct. Переписан
-     БЕЗ `trl` (после каскада несовместимостей transformers/trl/numpy) —
-     обычный `transformers.Trainer`.
-   - Обучили на Kaggle (бесплатный GPU T4×2), адаптер скачан в
+1. **Fixed `/clear`** in TUI — previously did not return to the app picker; now it
+   does (`vliw/ui/tui.py`, `vliw/cli.py`).
+2. **Added 7 new optimization-technique scenarios** (`vliw/core/dag.py`) — "as written"
+   → "as it should be" pairs (`seqreduce`/`treereduce`, `divpressure`/`divstrength`,
+   etc.).
+3. **Found and fixed an error in the machine model.** The first version treated the
+   multiplier as a monopoly (port `,0`, held for 8 cycles) — that turned out to be
+   wrong. Probed the `lcc` assembler directly (not by reading compiler output, but by
+   asking the assembler which channels physically accept an instruction): multiply
+   executes on 4 channels, latency 4, pipelined. The only true monopoly is the divider
+   (port `,5`), with latency 11 (not 13) and issue rate once every 2 cycles (not 13).
+   Load has latency 5 (not 2), 4 channels. Store has only 2 channels.
+   - Updated: `vliw/core/model.py`, README, `docs/CLI.md`, scenarios.
+   - Refuted version kept as profile `e2k-v6-firstprobe` for contrast.
+   - Actual probes and `lcc` output live in `examples/probes/` (the README there
+     explains the methodology).
+4. **MCST engineers (real chat) reviewed and corrected** — that is where the multiplier
+   error was caught (Alex Bolt's query), which triggered item 3.
+5. **Launched scheduler training** (`training/`):
+   - `generate_dataset.py` — generates DAG → optimal schedule pairs using the project's
+     own oracle (CPU-only, no ML dependencies).
+   - `train_qlora.py` — QLoRA fine-tuning of Qwen2.5-3B-Instruct. Rewritten WITHOUT
+     `trl` (after a cascade of transformers/trl/numpy incompatibilities) — plain
+     `transformers.Trainer`.
+   - Trained on Kaggle (free T4×2 GPU); adapter downloaded to
      `training/checkpoints/qwen-vliw-lora/`.
-   - `validate_kaggle.py` — самодостаточная оценка (без импорта vliw.core,
-     т.к. на Kaggle этого пакета нет). Патчена под два бага окружения:
-     несовместимая `torchao` (отключена точечно) и `IndexError` на
-     галлюцинированных id инструкций (теперь просто помечается невалидным).
-   - Оценка тогда шла в фоне и выглядела провальной («36% валидно»). Через
-     день выяснилось, что три четверти «провала» — это EOS-баг, а не
-     качество планирования. См. раздел за 17–18 августа выше.
+   - `validate_kaggle.py` — self-contained evaluation (without importing `vliw.core`,
+     since Kaggle does not have the package). Patched for two environment bugs:
+     incompatible `torchao` (disabled surgically) and `IndexError` on hallucinated
+     instruction IDs (now simply marked invalid).
+   - At the time, evaluation ran in the background and looked like a failure ("36%
+     valid"). A day later it turned out three-quarters of the "failure" was the EOS
+     bug, not scheduling quality. See the August 17–18 section above.
 
-## Что НЕ сделано / открытые хвосты
+## What is NOT done / open loose ends
 
-- **Прогон 2** (с нуля на `train_merged.jsonl`) не запускался — дорогой по
-  квоте, решение отдельное. Именно он должен закрыть провал на крупных
-  графах (16..24), где доминирует `ресурс`, а не остановка.
-- **Запреты на сочетания в широкой команде измерены, но в модель не
-  заведены.** Работа не косметическая: точный поиск в `vliw/core/oracle.py`
-  опирается на «паросочетание существует ⟺ набор выдаваем», а запрет на пары
-  это свойство ломает. Конструктивно чинится (записей в такте максимум две —
-  перебрать их раскладку и убрать запрещённый канал загрузки перед обычным
-  паросочетанием), проверяется `/selfcheck` на новом профиле. Порядок при
-  этом важен: сначала прогон 2, потом смена модели мира — иначе обесценятся
-  и адаптер, и таблица прогонов.
-- `docs/RUNBOOK_EOS.md` ссылается на файл
-  `08_sverka_s_oficialnoy_tablicey_MCST.md` (сверка с официальной таблицей
-  МЦСТ) — **этого файла в репозитории нет**, ссылка висячая.
-- `vliw/learned/scheduler.py` — всё ещё `NotImplementedError`. Интеграция
-  обученного адаптера в сам CLI не начата, ждёт результата оценки.
-- `vliw/agent/llm.py` — ключ берётся из `NEX_API_KEY` или `~/.config/nex/key`,
-  провайдер — из `NEX_PROVIDER` (`mistral` | `lechat` | `gemini`), формат в
-  `.env.example`. Встроенных ключей в коде БОЛЬШЕ НЕТ: прежние
-  `EMBEDDED_KEYS` утекли в git, история переписана 17.08.
-- Стиль текста в CLI — часть команд/описаний звучит «по-ИИшному» (внешний
-  отзыв: калька с английского, капс, «не X, а Y» конструкции). Починили
-  `wrap()` (перенос по абзацам) и переписали 2 сценария как образец,
-  остальные ~12 не трогали — сознательно отложено на потом.
-- SSH-доступ к настоящему Эльбрусу (выдан МЦСТ на 6 мес, порт 8206) —
-  так и не заработал, пропал/не найден приватный ключ. Латентности модели
-  сняты с ПОВЕДЕНИЯ КОМПИЛЯТОРА (lcc), не подтверждены на живом железе.
-- Следующий кандидат на замену базовой модели, если Qwen2.5-3B будет
-  плохо справляться: `Qwen/Qwen3-4B` (тот же размерный класс, лучше на
-  STEM/coding-бенчмарках) или `Qwen2.5-Coder` — обе даже без AI-опыта
-  вставляются как drop-in `--base` в тот же `train_qlora.py`.
+- **Run 2** (from scratch on `train_merged.jsonl`) has not been launched — expensive in
+  quota, separate decision. It is what should close the gap on large graphs (16..24),
+  where `resource` dominates rather than stopping.
+- **Wide-instruction combination bans are measured, not yet in the model.** Not a
+  cosmetic change: exact search in `vliw/core/oracle.py` relies on "a matching exists
+  ⟺ the bundle is issuable", and pair bans break that property. Constructively fixable
+  (at most two stores per cycle — enumerate their placements and strip the banned load
+  channel before standard matching), verifiable via `/selfcheck` on the new profile.
+  Order matters: Run 2 first, world-model change second — otherwise both the adapter
+  and the run table become invalid.
+- `docs/RUNBOOK_EOS.md` references `08_sverka_s_oficialnoy_tablicey_MCST.md` (audit
+  against the official MCST table) — **that file is not in the repository**, dangling
+  reference.
+- `vliw/learned/scheduler.py` is still `NotImplementedError`. Integration of the
+  trained adapter into the CLI itself has not started; waiting on evaluation results.
+- `vliw/agent/llm.py` reads the key from `NEX_API_KEY` or `~/.config/nex/key`, and the
+  provider from `NEX_PROVIDER` (`mistral` | `lechat` | `gemini`), format in
+  `.env.example`. No more embedded keys in code: the old `EMBEDDED_KEYS` leaked into
+  git, history rewritten 17.08.
+- CLI prose style — some commands/descriptions sound "AI-written" (external feedback:
+  English calques, ALL CAPS, "not X, but Y" phrasing). Fixed `wrap()` (paragraph
+  wrapping) and rewrote 2 scenarios as examples; the other ~12 were left untouched —
+  deliberately deferred.
+- SSH access to a real Elbrus machine (granted by MCST for 6 months, port 8206) never
+  worked; the private key went missing / was not found. Model latencies were extracted
+  from COMPILER BEHAVIOR (`lcc`), not confirmed on live silicon.
+- Next base-model candidates if Qwen2.5-3B struggles: `Qwen/Qwen3-4B` (same size class,
+  stronger on STEM/coding benchmarks) or `Qwen2.5-Coder` — both plug in as a drop-in
+  `--base` to the same `train_qlora.py`.
 
-## Отдельный, не связанный проект — тоже на контроле
+## Separate, unrelated project — also tracked
 
-`betaNEX` (`C:\betaNEX`, Go-платформа, «модульный монолит», хакатон-заявка
-на OpenAI Hackathon) — в README/DEVPOST написано «Built with Codex &
-GPT-5.6», но по признанию автора это неправда, приписано задним числом
-для подачи заявки. Договорились поправить «потом» — ещё не поправлено.
+`betaNEX` (`C:\betaNEX`, Go platform, "modular monolith", OpenAI Hackathon submission) —
+the README/DEVPOST states "Built with Codex & GPT-5.6", which by the author's own
+admission is untrue, added retroactively for the submission. Agreed to fix it "later" —
+not yet fixed.

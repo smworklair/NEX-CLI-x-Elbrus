@@ -1,264 +1,250 @@
-# Редизайн КОДа: что отложено на следующий заход
+# CODE Redesign: What Was Deferred to the Next Pass
 
-Здесь лежит то, что **не сделано намеренно**: идеи, у которых есть смысл, но
-нет ни законченной формы, ни ответа на вопрос «зачем это в планировщике
-широких команд». Всё, что попадает сюда, обязано быть подписано ценой и
-риском — иначе список превращается в свалку хотелок.
+This document tracks what was **deliberately not built**: ideas that have merit, but
+have neither a finished shape nor an answer to "why does this belong in a VLIW bundle
+scheduler". Everything added here must carry its cost and risk — otherwise the list
+turns into a wish-list dumping ground.
 
-Сделанное живёт в коде и в `git log`; этот файл про несделанное.
+What was built lives in the code and in `git log`; this file is about what was not.
 
-## Помечено АЛЬФОЙ и уже стоит в интерфейсе
+## Marked ALPHA and already in the UI
 
-### Проводник справа (^E)
+### Right-hand explorer (^E)
 
-Есть: одна папка списком, вход внутрь, `..` наверх, поиск по имени вглубь
-(4 уровня, до 60 находок), удаление своего файла через ✕ с подтверждением.
-Закрыт по умолчанию.
+Present: single folder listing, entering subdirectories, `..` up, recursive name search
+(4 levels deep, up to 60 hits), deleting your own file via ✕ with confirmation. Closed
+by default.
 
-Почему альфа: это первый шаг к «принести свой `.s`, не зная команд». Пока
-нет ни истории посещённых папок, ни закладок, ни фильтра по типу, ни
-открытия по Enter с клавиатуры — только мышью. Поиск обходит дерево на
-каждый набранный знак; на большом каталоге это заметно.
+Why alpha: it is the first step toward "bring your own `.s` without knowing commands".
+There is not yet any folder history, bookmarks, type filter, or opening with Enter from
+the keyboard — mouse only. Search walks the tree on every keystroke; on a large
+directory that is noticeable.
 
-Чего в нём НЕ должно появиться: полноценного файлового менеджера.
-Инструмент про расписание, а не про файлы; постоянная колонка папок отбирает
-ширину у того, ради чего экран открывают.
+What must NOT appear in it: a full-featured file manager. The tool is about schedules,
+not files; a permanent folder column steals horizontal space from what the screen is
+actually opened for.
 
-**Пересмотрено 05.09.2026, см. «Новая философия» ниже.** Это ограничение
-писалось до появления идеи «контент определяет инструмент» и ей прямо
-противоречит: там открытая папка меняет весь набор доступных инструментов,
-а не только показывает список файлов. Держать здесь как памятку о том, что
-старая формулировка больше не действует сама по себе — решение отменено
-явно, не потому что кто-то забыл про него сверить.
+**Revised on 05.09.2026, see "New philosophy" below.** That restriction was written
+before the "content determines the tool" idea and directly contradicts it: there, the
+opened folder changes the entire set of available tools rather than merely listing
+files. Kept here as a reminder that the old rule no longer applies on its own — the
+decision was explicitly overturned, not forgotten.
 
-## Новая философия: контент определяет инструмент, а не наоборот
+## New philosophy: content determines the tool, not the other way around
 
-«Одна вкладка, поиск по файлам,
-открываешь файл, система смотрит что это за файл и открывает
-соответствующие инструменты... Открыл папку с тактами — у тебя выходит
-функционал разбора. Открыл питон на новой — у тебя только питон-файлы без
-мусора. Захотел — добавил окно. Захотел — совместил для просмотра сразу два
-окна. Захотел — добавил компилятор: слева компилятор, справа NEX CLI
-считает такты.»
+"One tab, file search, you open a file, the system looks at what kind of file it is and
+opens the corresponding tools... Open a folder with cycles — you get the analysis
+toolkit. Open Python in a new one — you only see Python files without clutter. Want to —
+add a window. Want to — dock two windows side by side for viewing. Want to — add a
+compiler: compiler on the left, NEX CLI counting cycles on the right."
 
-Отправная точка была Steam (ранняя, более масштабная концепция Valve , не до конца понятая, но вдохновившая). Ближе
-и точнее по факту — два известных прецедента из UNIX-мира, оба стоит знать
-перед тем, как проектировать это заново:
+The starting point was Steam (Valve's earlier, broader concept, not fully understood,
+but inspiring). Closer and more accurate in practice are two well-known precedents from
+the UNIX world, both worth knowing before designing this from scratch:
 
-* **Acme** (Роб Пайк, Plan 9). Демон `plumber`: выделенный кусок текста
-  (путь к файлу, `file.go:42`, URL) сам маршрутизируется в нужный
-  обработчик — не пользователь выбирает программу, система решает по
-  содержимому. Уровень гранулярности там — строка/выделение; здесь
-  предлагается уровень папки/типа контента, тот же принцип.
-* **Джеф Раскин**, «The Humane Interface», проект `Archy`. Тезис: приложение
-  — это тюрьма для контента; система обязана сама решать, какие
-  возможности приложимы к файлу, а не заставлять сперва выбирать программу.
-  Прямой ответ на «почему редакторы и IDE не добавили это в полной мере» —
-  Раскин утверждал, что не додуматься, а архитектура и бизнес-модель
-  IDE (продукт = «инструмент А») этому сопротивляются структурно.
+* **Acme** (Rob Pike, Plan 9). The `plumber` daemon: a selected text span (file path,
+  `file.go:42`, URL) routes itself to the right handler — the user does not pick a
+  program, the system decides from the content. Granularity there is a line/selection;
+  here we propose folder/content-type granularity on the same principle.
+* **Jef Raskin**, *The Humane Interface*, the `Archy` project. Thesis: an application
+  is a prison for content; the system should decide which capabilities apply to a file
+  rather than forcing you to choose a program first. A direct answer to "why haven't
+  editors and IDEs fully added this" — Raskin argued it is not lack of imagination, but
+  that IDE architecture and business models (product = "Tool A") structurally resist it.
 
-### Что именно предлагается
+### What is actually proposed
 
-* классификатор контента: не по расширению файла, а по смыслу («это папка
-  с тактами/расписаниями» отличается от «это просто .txt»);
-* реестр подключаемых инструментов на тип контента (сейчас есть один
-  инструмент — разбор расписания; питон-файл должен получать голый
-  редактор без вкладок КОДа, которые к нему не относятся);
-* компоновка окон по требованию: открыть, совместить два вида, закрыть —
-  а не фиксированный набор панелей, как сейчас.
+* a content classifier: not by file extension, but by meaning ("a folder with
+  cycles/schedules" differs from "just a `.txt`");
+* a registry of pluggable tools per content type (currently there is one tool —
+  schedule analysis; a Python file should get a bare editor without CODE tabs that do
+  not apply to it);
+* on-demand window layout: open, dock two views together, close — instead of the fixed
+  panel set we have now.
 
-### Честно про размер работы
+### Honestly about the scope of work
 
-Это не расширение проводника, а два новых архитектурных слоя: система
-подключаемых обработчиков (сегодня зашит один — разбор расписания) и
-менеджер компоновки окон (сегодня раскладка фиксирована). Делать это надо
-один раз и правильно, иначе каждый новый тип контента будет пришиваться
-руками — тем же способом расползлись шесть режимов, от которых сейчас
-хотят избавиться (см. выше «Отказ от отдельных экранов»).
+This is not an explorer extension, but two new architectural layers: a pluggable handler
+system (today one is hardcoded — schedule analysis) and a window layout manager (today
+the layout is fixed). This has to be built once and properly, otherwise every new
+content type gets stitched on by hand — the exact way the six modes sprawled out that
+we now want to get rid of (see "Dropping separate screens" below).
 
-### С чего начинать, если браться
+### Where to start if we take it on
 
-По аналогии с «Отказ от отдельных экранов»: сначала одно зашитое правило,
-не общий классификатор. `.s` → разбор (уже есть), `.py` → голый редактор без
-чужих вкладок, — и только когда это работает и не мешает друг другу,
-обобщать в реестр. Строить сразу полный Acme-подобный plumber — верный
-способ не закончить ни одной части.
+By analogy with "Dropping separate screens": start with one hardcoded rule, not a
+general classifier. `.s` → analysis (already exists), `.py` → bare editor without
+unrelated tabs — and only once those work without interfering with each other,
+generalize into a registry. Building a full Acme-style plumber up front is a sure way
+to finish none of the parts.
 
-### Компилятор-панель — единственный кусок, готовый уже сегодня
+### The compiler panel is the one piece already ready today
 
-«Слева компилятор, справа NEX считает такты» не упирается в разработку —
-бэкенд для правой панели построен и независимо перепроверен 05.09.2026
-на 25 настоящих ядрах (`real_candidates_100_400/`): настоящий
-`e2k-linux-cc -O3 -S`, разбор через `vliw/core/asm_parser.py`, счёт тактов
-через `list_schedule`. Не хватает только компоновки окна, не логики счёта —
-это меньше работы, чем классификатор и менеджер окон выше, и ближе всего
-к тому, что можно попробовать первым.
+"Compiler on the left, NEX counting cycles on the right" is not blocked on engineering —
+the backend for the right panel is built and independently re-verified on 05.09.2026 on
+25 real kernels (`real_candidates_100_400/`): real `e2k-linux-cc -O3 -S`, parsing via
+`vliw/core/asm_parser.py`, cycle counting via `list_schedule`. Only window layout is
+missing, not the counting logic — that is less work than the classifier and window
+manager above, and the closest thing to try first.
 
-## Сделано по ходу и стоит помнить
+## Done along the way and worth remembering
 
-### Штаб моделей в АГЕНТЕ (18.09.2026)
+### Model Headquarters in AGENT (18.09.2026)
 
-Правая колонка АГЕНТА переразбита на четыре блока, каждый разворачивается
-двойным кликом на весь экран:
+The right column of AGENT was reorganized into four blocks, each expandable to full
+screen with a double-click:
 
-* **ШТАБ** — главный блок. Мини: сводка (сколько подключений и миссий,
-  последняя задача) + поле задачи, отправить можно не разворачивая.
-  Разворот: подключения (на каком пойдёт задача), участок работы
-  с пояснением, скрипт-дописка к промпту, список миссий (ещё раз / убрать),
-  «убрать выполненные».
-* **ПОДКЛЮЧЕНИЕ** — компактный мини-блок вместо перегруженной МОДЕЛИ:
-  текущий провайдер, пять кнопок API на один клик, поле ключа + «подключить».
-  Разворот — всё по шагам: провайдер → ключ → каталог. Поиск в каталоге
-  подписан честно: это только фильтр списка, Enter берёт первую строку.
-* **ЧТО ВИДИТ АГЕНТ** и **ТРАССА** — как были, отдельными панелями.
+* **HQ** — the primary block. Mini: summary (how many connections and missions, latest
+  task) + task input, sendable without expanding. Expanded: connections (which one runs
+  the task), focus area with explanation, prompt addendum script, mission list (retry /
+  remove), "clear completed".
+* **CONNECTION** — compact mini-block replacing the overloaded MODEL panel: current
+  provider, five one-click API buttons, key field + "connect". Expanded — step by step:
+  provider → key → catalog. Catalog search is labeled honestly: it is only a list
+  filter, Enter picks the first row.
+* **WHAT THE AGENT SEES** and **TRACE** — as before, as separate panels.
 
-Почему так, а не всё в одном окне: штаб раньше жил внутри разворота
-МОДЕЛИ — без подключённой модели его было не найти, а мини-панель не умела
-ни выбрать API, ни принять ключ. Теперь штаб виден всегда, подключение
-чинится в мини, каталог не мешает.
+Why this way instead of everything in one window: HQ used to live inside the expanded
+MODEL view — without a connected model you couldn't even find it, and the mini panel
+could neither pick an API nor accept a key. Now HQ is always visible, connections are
+fixed right in the mini view, and the catalog stays out of the way.
 
-Цена: на низких терминалах четыре блока не влезают в 24 строки, поэтому
-есть лесенка (`nex.tcss`, после правил ширины): низкий — штаб жмётся
-к содержимому, худеют ЧТО ВИДИТ и ТРАССА; очень низкий — ЧТО ВИДИТ
-прячется целиком (те же факты отдаёт TAB у развёрнутого штаба),
-кнопки API прячутся (ключ вводится в поле ниже). Проверяет
-`TestNothingFallsBelowTheFold` на пяти размерах — правится только
-стилями, не кодом.
+Cost: on short terminals, four blocks do not fit in 24 rows, so there is a responsive
+step-down (`nex.tcss`, after width rules): short — HQ shrinks to content, WHAT IT SEES
+and TRACE thin out; very short — WHAT IT SEES hides completely (the expanded HQ's TAB
+serves the same facts) and API buttons hide (key is typed into the field below).
+Verified by `TestNothingFallsBelowTheFold` across five sizes — tuned purely in styles,
+not code.
 
-Покрыто: `TestHeadquartersPanel` (7 тестов: свой блок, разворот с миссиями,
-подсказка без подключений, `hqclear`, смена API и ключ из мини без записи
-на диск, пояснение фильтра); `test_hq.py` переведён на новый блок.
-Полный прогон на момент записи: 547 тестов, всё зелёное.
+Covered by: `TestHeadquartersPanel` (7 tests: own block, expanded view with missions,
+hint without connections, `hqclear`, switching API and entering key from mini without
+disk writes, filter explanation); `test_hq.py` migrated to the new block. Full suite at
+the time of writing: 547 tests, all green.
 
-### Открытый вопрос: синергия штаба с крошками
+### Open question: synergy between HQ and tiny schedulers
 
-Крошки (`vliw/tiny/`, крошка-1/2/3) и штаб сегодня связаны в одну сторону:
-`tiny_facts()` в `agent/context.py` кладёт число крошек в контекст — его
-видят и диалог, и миссии штаба. Направление честное: крошки считаются
-детерминированно за миллисекунды без LLM, агент получает готовое число
-и объясняет его. Обратное (модель подсказывает планировщику) было бы
-выдумкой вместо поиска — запрещено тем же правилом честности из CAB,
-по которому ничьи в портфеле отдаются baseline, а не модели.
+Tiny schedulers (`vliw/tiny/`, tiny-1/2/3) and HQ are currently connected in one
+direction: `tiny_facts()` in `agent/context.py` puts the tiny cycle count into context,
+where both the dialog and HQ missions see it. The direction is honest: tiny runs
+deterministically in milliseconds without an LLM, and the agent receives the finished
+number and explains it. The reverse (a model advising the scheduler) would be
+hallucination instead of search — forbidden by the same honesty rule from CAB that
+awards portfolio ties to baseline rather than the model.
 
-Что можно добавить, от дешёвого к дорогому:
+What could be added, from cheap to expensive:
 
-1. Область «крошки» в штабе (одна строка в `hq.AREAS` + вопрос по
-   умолчанию): агент разбирает, где крошки обыграли baseline и почему.
-   Цена — почти ноль, риск — лишний пункт в сетке участков.
-2. Строка крошек в мини штаба («крошки: 41 т. = baseline»): считается
-   локально за миллисекунды, сети не надо, в мини появляется третья
-   цифра рядом с baseline/оракулом. Цена — одна строка сводки и место
-   в панели; риск — шум, когда весов нет (тогда молча пропускать,
-   как уже делает `tiny_facts`).
-3. Статус весов в ПОДКЛЮЧЕНИИ («крошки: веса есть/нет»): крошки — не API,
-   ключа не требуют, но сегодня нигде в интерфейсе не видно, обучены
-   они или работают fallback на baseline. Цена — чтение двух файлов
-   весов; риск — путаница «почему крошек нет в списке провайдеров»
-   (ответ: они не подключение, а локальный счёт — это надо подписать).
+1. A "tiny" area in HQ (one line in `hq.AREAS` + default question): the agent explains
+   where tiny beat baseline and why. Cost — near zero; risk — an extra item in the
+   area grid.
+2. A tiny line in the HQ mini view ("tiny: 41 c. = baseline"): computed locally in
+   milliseconds, no network needed, adding a third number beside baseline/oracle. Cost —
+   one summary line and panel height; risk — noise when weights are absent (silently
+   skip in that case, as `tiny_facts` already does).
+3. Weights status in CONNECTION ("tiny: weights present/absent"): tiny is not an API
+   and needs no key, yet today nowhere in the UI can you tell whether it is trained or
+   falling back to baseline. Cost — reading two weight files; risk — confusion over
+   "why isn't tiny in the provider list" (answer: it is not a connection, it is local
+   computation — must be labeled clearly).
 
-### Заготовки участков по «/» (`CodeScreen.SNIPPETS`)
+### Block snippets via "/" (`CodeScreen.SNIPPETS`)
 
-Семь кусков ассемблера, которые вставляются в буфер: пустая широкая
-команда, четыре умножения параллельно, те же четыре в очередь, цепочка
-зависимых, деление на монопольном канале, загрузка с потребителем, запись.
+Seven assembly snippets inserted into the buffer: empty wide instruction, four parallel
+multiplications, the same four serialized, a dependent chain, division on the monopoly
+channel, load with consumer, store.
 
-Это не текстовые вставки, а СБОРКА под текущий буфер: регистры берутся из
-свободных (`_free_regs` смотрит, что уже занято), паузы считаются по
-латентности из модели (`_pause_for`), каналы — из `channels_for`. Первая
-версия вставляла готовый текст с вбитыми `%r10, %r11, %r20`, и вторая
-вставка давала конфликт по записи на коде, которого человек не писал.
-Обычный редактор со сниппетами так не умеет: у него нет ни разбора буфера,
-ни модели машины.
+These are not static text pastes, but ASSEMBLED for the current buffer: registers are
+allocated from free ones (`_free_regs` checks what is already used), pauses are computed
+from model latencies (`_pause_for`), and channels come from `channels_for`. The first
+version pasted static text with hardcoded `%r10, %r11, %r20`, so a second insert caused
+a write conflict in code the user never wrote. An ordinary snippet editor cannot do
+this: it has neither buffer parsing nor a machine model.
 
-Каналы в них не выдуманы. Формат `<мнемоника>,<канал> <аргументы>,
-<результат>` и семантика `nop N` — из руководства МЦСТ (выпуск 1.2, с. 19).
-Допустимые каналы сошлись в ТРЁХ независимых источниках:
+The channels in them are not invented. The `<mnemonic>,<channel> <args>, <result>`
+format and `nop N` semantics come from the MCST manual (release 1.2, p. 19). Legal
+channels agreed across THREE independent sources:
 
-| класс | опрос ассемблера | QEMU `alop.decode` |
+| class | assembler probe | QEMU `alop.decode` |
 |---|---|---|
-| умножение | `,0 ,1 ,3 ,4` | маска `-0-` → alc0/1/3/4 |
-| деление | только `,5` | маска `110` → только alc5 |
-| загрузка | `,0 ,2 ,3 ,5` | маска `--0` → alc0/2/3/5 |
-| запись | `,2 ,5` | маска `-10` → alc2/5 |
-| арифметика | все шесть | маска `---` → любой |
+| multiply | `,0 ,1 ,3 ,4` | mask `-0-` → alc0/1/3/4 |
+| divide | `,5` only | mask `110` → alc5 only |
+| load | `,0 ,2 ,3 ,5` | mask `--0` → alc0/2/3/5 |
+| store | `,2 ,5` | mask `-10` → alc2/5 |
+| arithmetic | all six | mask `---` → any |
 
-Это первое независимое подтверждение модели машины со стороны: до сих пор
-она опиралась на опрос ассемблера и сверку с руководством МЦСТ. Стоит
-записать в `docs/ISA.md` отдельным разделом.
+This is the first independent external confirmation of the machine model: previously it
+rested on assembler probing and checking against the MCST manual. Worth documenting as
+a separate section in `docs/ISA.md`.
 
-Чего заготовки НЕ делают: не притворяются выводом компилятора. Адресация
-памяти у настоящего `lcc` записывается иначе (`ldw,3 0x0, [ _f64,_lts0 a ],
-%r3`), здесь короткая форма — полигон для расписания, а не готовый к
-ассемблированию код.
+What snippets do NOT do: they do not pretend to be compiler output. Real `lcc` memory
+addressing is written differently (`ldw,3 0x0, [ _f64,_lts0 a ], %r3`); here the short
+form is a scheduling sandbox, not assembly-ready code.
 
-## Отложено целиком
+## Deferred entirely
 
-### Скрипты рядом с участком (`.py`)
+### Scripts alongside a block (`.py`)
 
-Было в интерфейсе один день и **убрано**: завести `.py` инструмент умел, а
-запустить — нет. Кнопка, которая делает файл и на этом кончается, — не
-функция, а обещание.
+Was in the UI for one day and **removed**: the tool could create a `.py` file, but
+could not run it. A button that creates a file and stops there is not a feature, it is
+a promise.
 
-Смысл, ради которого стоит вернуть: скрипт **порождает** участок. Прогнал
-`lcc -O3 -S`, вытащил нужную функцию, положил рядом `.s` — и он открылся
-вкладкой. Тогда F5 на скрипте значит «сделай мне участок», а не «запусти
-питон».
+The reason worth bringing it back for: a script **generates** a block. It runs
+`lcc -O3 -S`, extracts the target function, writes a `.s` file next to it — and it
+opens as a tab. Then F5 on a script means "build my block", not "run Python".
 
-Что нужно решить до возврата:
-* где берётся интерпретатор и что делать, когда его нет;
-* куда идёт вывод и что делать с процессом, который не кончается;
-* как отличить «скрипт упал» от «скрипт отработал, но участка не сделал».
+What must be decided before bringing it back:
+* where the interpreter comes from and what to do if it is missing;
+* where output goes and how to handle a process that never terminates;
+* how to distinguish "script crashed" from "script succeeded but produced no block".
 
-### Отказ от отдельных экранов РАЗБОР / ЯДРО / АГЕНТ
+### Dropping separate LAB / CORE / AGENT screens
 
-Идея: раз вкладки дока показывают то же самое, экраны лишние, а `^O` с
-выбором режима — тем более.
+Idea: since the dock tabs show the same thing, separate screens are redundant, and `^O`
+with a mode picker even more so.
 
-Почему не сделано сейчас: во вкладках нет того, что живёт только в экранах —
-навигации по находкам (`n`/`N`), шага по операциям (`[` `]`), цепочки (`c`),
-тумблеров вида (`z x p w`), воспроизведения такт за тактом, матрицы машины.
-Удалить экраны сегодня значит удалить это, а не сократить код.
+Why not done now: the tabs lack features that live only in the screens — finding
+navigation (`n`/`N`), stepping through operations (`[` `]`), dependency chain (`c`),
+view toggles (`z x p w`), cycle-by-cycle replay, and the machine matrix. Deleting the
+screens today means deleting those features, not shrinking code.
 
-Порядок, если браться: сначала перенести перечисленное во вкладки, потом
-убирать экраны — по одному, каждый со своим прогоном тестов.
+Order if we take it on: first port the above into the tabs, then remove screens one by
+one, each with its own test run.
 
-### Типы файлов и «холст» вокруг участка
+### File types and a "canvas" around a block
 
-Владелец: «в идеале в левой панели можно создавать файлы разных типов… может,
-и от блока ЯДРО тогда можно отказаться». Сейчас заводятся `.s` и заметка
-`.md`; всё остальное — вместе со скриптами выше.
+Owner: "ideally in the left panel you can create files of different types… maybe we can
+even drop the CORE block then." Right now `.s` and `.md` notes can be created;
+everything else goes together with the scripts above.
 
-Здесь же лежит вопрос, на который пока нет ответа: чем такой набор
-отличается от обычного редактора и что в нём остаётся от планировщика.
+Here sits a question that still has no answer: how does such a setup differ from an
+ordinary editor, and what remains of the scheduler in it.
 
-### Тянуть мышью боковые колонки
+### Dragging side columns with the mouse
 
-Нижний док тянется за границу `╍╍╍` (высота живёт всю сессию). Левая колонка
-и проводник — фиксированной ширины.
+The bottom dock is draggable by its `╍╍╍` border (height persists for the session). The
+left column and explorer have fixed widths.
 
-### «Разделить панель» у расписания
+### "Split panel" for the schedule
 
-Просьба владельца, записана дословно: «по расписанию да там желательно
-разделить панель». Что именно делить — не выяснено; спросить, прежде чем
-делать.
+Owner's request, recorded verbatim: "for the schedule, yes, it would be nice to split
+the panel." What exactly to split has not been clarified; ask before building.
 
-## Что осталось за границей интерфейса
+## What lies beyond the UI boundary
 
-Дальше КОД доводить нечем — упирается в железо и в данные:
+There is nothing left to polish in CODE — progress is bottlenecked on hardware and data:
 
-* **модель на настоящем Эльбрусе.** Латентности и занятость портов сняты
-  через `lcc` и ассемблер, каналы сверены с QEMU и руководством МЦСТ. Но на
-  живой машине никто ничего не мерил.
-* **реальные `.s` больших функций.** Вся выборка синтетическая, и это уже
-  дважды подводило: первая модель машины была построена по одному листингу и
-  оказалась неверной, первая выборка не содержала задачи (жадность стояла в
-  оптимуме на 298 графах из 300).
-* **проверка `F6` исполнением.** Переписанный по оракулу код никто не
-  запускал: переставляются только независимые операции, `validate()` это
-  проверяет, но эквивалентность на железе не доказана.
-* **живой терминал.** Весь редизайн проверен headless через `App.run_test()`
-  — ни одного запуска в настоящей сессии с мышью и цветом.
+* **model on real Elbrus hardware.** Latencies and port occupancies were measured via
+  `lcc` and the assembler; channels were verified against QEMU and the MCST manual.
+  Nobody has measured anything on live silicon.
+* **real `.s` of large functions.** The entire sample is synthetic, and that has already
+  bitten us twice: the first machine model was built from a single listing and turned
+  out wrong, and the first dataset contained no real problem (greedy sat at the optimum
+  on 298 out of 300 graphs).
+* **verifying `F6` by execution.** Nobody has run the oracle-rewritten code: only
+  independent operations are reordered and `validate()` checks it, but hardware
+  equivalence is unproven.
+* **live terminal.** The entire redesign was tested headless via `App.run_test()` —
+  not a single run in a real terminal session with mouse and color.
 
-Пока это не сделано, любые новые числа в интерфейсе будут про модель, а не
-про машину. Инструмент об этом говорит честно (пометки источника у каждого
-числа в `model.py`), и менять это до выхода на железо нельзя.
+Until this is done, any new numbers in the UI are about the model, not the machine. The
+tool states this honestly (source tags on every number in `model.py`), and that must
+not change until we reach real hardware.

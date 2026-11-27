@@ -1,91 +1,88 @@
-# Режим КОД
+# CODE Mode
 
-> Этап 4 из 13 · [← Методика](METHOD.md) · [Маршрут](README.md) · [Режим РАЗБОР →](LAB_MODE.md)
+> Stage 4 of 13 · [← Methodology](METHOD.md) · [Roadmap](README.md) · [LAB Mode →](LAB_MODE.md)
 
-Рабочее место с настоящим ассемблером: сюда приносят `.s` от `lcc`, разбирают его и прогоняют.
-Открывается клавишей `1` на экране выбора, командой `/mode code` или запуском `python -m vliw --mode code`.
+The workspace for real assembly: load `.s` output from `lcc`, parse it into basic blocks, and schedule it.
+Opens with `1` on the mode selector, `/mode code`, or `python -m vliw --mode code`.
 
-![КОД: probe.s разобран, F5 прогнан](img/code-mode.svg)
+![CODE: probe.s parsed, F5 executed](img/code-mode.svg)
 
-## Экран
+## Screen Layout
 
 ```
-NEX  slots.s              15 т. · 15 оп. · e2k-v6-measured   [файлы] [док] [папки]
-  1     ! комментарий
-  2  т0   muls,0 %r10, %r11, %r20
+NEX  slots.s              15 cyc · 15 ops · e2k-v6-measured   [files] [dock] [folders]
+  1     ! comment
+  2  c0   muls,0 %r10, %r11, %r20
 ...
-стр.1  не операция  разбор >  F5 прогнать  F11 развернуть  F12 убрать док   слоты 17%  чисто  git
+ln.1  not an op  inspect >  F5 run  F11 expand  F12 hide dock   slots 17%  clean  git
 ```
 
-- Шапка: имя вкладки, число тактов и операций, профиль машины, три переключателя.
-- Редактор: номера строк, метки тактов, стрелка у строки под курсором.
-- Подвал: позиция курсора, краткий разбор, подсказки, состояние расписания.
+- Header: tab name, cycle and operation counts, machine profile, three toggles.
+- Editor: line numbers, bundle cycle tags, cursor indicator arrow.
+- Footer: cursor position, quick inspection, key hints, schedule status.
 
-## Переключатели
+## Toggles
 
-| кнопка | клавиша | что открывает |
+| button | key | opens |
 |---|---|---|
-| `файлы` | `Ctrl+B` | список открытых вкладок и создание новых |
-| `док` | `F12` | нижняя панель с шестью вкладками |
-| `папки` | `Ctrl+E` | проводник файловой системы |
+| `files` | `Ctrl+B` | open tabs list and new-buffer creation |
+| `dock` | `F12` | bottom dock with six tabs |
+| `folders` | `Ctrl+E` | filesystem explorer |
 
-## Клавиши
+## Keybindings
 
-| клавиша | действие |
+| key | action |
 |---|---|
-| `F5` | прогнать: разобрать, посчитать жадный и точный поиск |
-| `F6` | переписать буфер по расписанию точного поиска |
-| `F11` | развернуть текущую вкладку дока на весь низ |
-| `F12` | показать / убрать док |
-| `F2` | переименовать вкладку |
-| `Ctrl+S` | сохранить |
-| `Ctrl+P` или `/` | строка команд |
-| `Ctrl+G` | объяснить строку под курсором |
-| `Ctrl+E` | проводник |
-| `Esc` | шаг назад: подсказка → проводник → вкладка агента → развёрнутая вкладка → выход |
+| `F5` | run: parse, compute greedy list scheduler and exact solver schedules |
+| `F6` | rewrite buffer using the exact branch-and-bound oracle schedule |
+| `F11` | expand the active dock tab across the bottom |
+| `F12` | show / hide the dock |
+| `F2` | rename tab |
+| `Ctrl+S` | save |
+| `Ctrl+P` or `/` | command bar |
+| `Ctrl+G` | explain line under cursor |
+| `Ctrl+E` | file explorer |
+| `Esc` | step back: hint → explorer → agent tab → expanded tab → exit |
 
-`F2` в КОДЕ переименовывает вкладку, а в РАЗБОРЕ переключает фокус на решётку — это разные карты клавиш.
+`F2` renames the tab in CODE mode, whereas in LAB mode it toggles focus onto the schedule grid — the two modes maintain separate keymaps.
 
-## Шесть вкладок дока
+## Six Dock Tabs
 
-| вкладка | что внутри |
+| tab | contents |
 |---|---|
-| **вывод** | журнал команд и прогонов |
-| **замечания** | находки линтера с номерами строк; клик ведёт к строке |
-| **разбор** | кто кормит операцию и что с ней сделает точный поиск |
-| **расписание** | решётка тактов × каналов для текущего буфера |
-| **ядро** | мини-интерпретатор: `a = 10`, `sum 8`, `go` |
-| **агент** | мини-диалог с агентом |
+| **output** | log of commands and scheduler runs |
+| **diagnostics** | linter findings with line numbers; click to jump directly to the line |
+| **inspect** | producer operations feeding this instruction and how the exact solver schedules it |
+| **schedule** | cycles × issue slots grid for the current buffer |
+| **core** | mini-interpreter: `a = 10`, `sum 8`, `go` |
+| **agent** | mini-dialogue with the agent |
 
-`F11` разворачивает текущую вкладку. Клик по `стр.N` в подвале открывает вкладку «разбор».
+`F11` expands the active tab. Clicking `ln.N` in the footer jumps straight to the inspect tab.
 
-## F6: важная оговорка
+## F6: Important Caveat
 
-`F6` переписывает буфер: мнемоники и операнды те же, меняются каналы и разбивка на широкие команды.
-Планировщик моделирует только истинные зависимости (чтение после записи), а антизависимости (запись после чтения)
-не учитывает — для анализа это правильно, их снимает переименование регистров. Но `F6` возвращает операции
-с теми же именами регистров, поэтому в редких случаях текст может стать некорректным.
+`F6` rewrites the buffer in place: mnemonics and operands stay unchanged while issue-slot assignments (`,0`..`,5`) and VLIW bundle boundaries are recomputed.
+The scheduler models only true dependencies (RAW, read-after-write) and ignores false dependencies — anti-dependencies (WAR) and output dependencies (WAW). That is standard for pre-allocation scheduling analysis, where register renaming eliminates false dependencies. Because `F6` emits operations with their original architectural register names, however, a rewritten scheduling region can occasionally violate a WAR/WAW constraint and become invalid.
 
-Если это произошло, `F6` сообщит число ошибок собственной проверки, а не объявит успех. Перед сохранением
-проверьте вкладку «замечания».
+When that happens, `F6` reports the error count from its own validator rather than claiming success. Review the diagnostics tab before saving.
 
-## Проводник
+## File Explorer
 
-`Ctrl+E` показывает файловую систему: папки, файлы, `..` и до трёх недавних каталогов.
-Поиск ищет вглубь до четырёх уровней и понимает путь целиком, в том числе с обратными слэшами Windows.
+`Ctrl+E` opens the filesystem browser: folders, files, `..`, and up to three recent directories.
+Search traverses up to four levels deep and accepts full paths, including Windows backslashes.
 
-Удаление файла требует подтверждения и доступно только для файлов рабочего каталога, не для встроенных примеров.
+File deletion requires confirmation and is restricted to files inside the working directory, never built-in examples.
 
-## Новый буфер
+## New Buffer
 
-`файлы` → «завести»:
+`files` → "new":
 
-- **участок e2k** — новый `.s` с подсказкой;
-- **заметка** — `.md` для записей.
+- **e2k basic block** — new `.s` file with a starter hint;
+- **note** — `.md` file for scratch notes.
 
-Имя даётся по порядку, переименовать можно через `F2`.
+Buffers are numbered sequentially and can be renamed with `F2`.
 
-## Примеры
+## Examples
 
 ```text
 /load examples/probe.s
@@ -94,4 +91,4 @@ F5
 F6
 ```
 
-Граница между настоящим кодом и синтетикой — в [`REAL_VS_SYNTH.md`](REAL_VS_SYNTH.md).
+The boundary between real code and synthetic benchmarks is covered in [`REAL_VS_SYNTH.md`](REAL_VS_SYNTH.md).

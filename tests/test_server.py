@@ -1,15 +1,8 @@
-"""Транспорт к постоянному llama-server: UNIX-сокет, HTTP, разбор SSE.
+"""Persistent llama-server transport tests: AF_UNIX socket, HTTP, and SSE parsing.
 
-Настоящий сервер здесь НЕ поднимается: он грузит 2.1 ГБ весов, и тест из-за
-этого не шёл бы ни в CI, ни на чужой машине. Вместо него — поддельный сервер
-на таком же UNIX-сокете, отвечающий такими же кусками SSE, какие даёт
-`llama-server` (проверено вживую на сборке b10488). Проверяется ровно то, что
-написано у нас: соединение через AF_UNIX, разбор `data:`-строк, остановка по
-флагу `stop` и закрытие соединения при отмене.
-
-Почему это стоит теста: разбор потока — единственное место, где мы полагаемся
-на формат чужой программы. Смена формата в новой сборке llama.cpp проявится
-здесь, а не молчаливым «модель ничего не написала».
+Uses a lightweight mock server over AF_UNIX emitting `llama-server`-style SSE
+chunks (no 2.1 GB weights required) to verify socket connection, `data:` line
+parsing, `stop` termination, and clean connection teardown on cancellation.
 """
 
 from __future__ import annotations
@@ -35,7 +28,7 @@ def _sse(payloads: list[dict]) -> bytes:
 
 
 class FakeServer:
-    """Один UNIX-сокет, один заготовленный ответ на каждое соединение."""
+    """Mock AF_UNIX HTTP server returning a scripted response per connection."""
 
     def __init__(self, response: bytes, status_line: bytes | None = None):
         self.dir = tempfile.mkdtemp(prefix="nex-test-")
@@ -50,15 +43,7 @@ class FakeServer:
         self._thread.start()
 
     def _serve(self) -> None:
-        """Каждое соединение — в своём потоке.
-
-        Раньше цикл обслуживал их по одному, и тест был флакающим: одно
-        падение на пять прогонов. Пока поток сидел в `sendall` отменённого
-        запроса (клиент уже ушёл, ядро копит EPIPE), следующее соединение
-        ждало в очереди, и клиент получал разрыв на отправке заголовков.
-        Настоящий llama-server держит слоты параллельно — подставной должен
-        вести себя так же, иначе он проверяет не то.
-        """
+        """Serve each connection in its own thread to match real llama-server concurrency."""
         while not self._stop:
             try:
                 conn, _ = self._sock.accept()
@@ -79,19 +64,7 @@ class FakeServer:
 
     @staticmethod
     def _read_request(conn) -> bytes:
-        """Прочитать запрос ЦЕЛИКОМ: заголовки и тело по Content-Length.
-
-        Одного `recv` не хватало, и это была вторая причина флака (первая —
-        последовательный `accept`, см. `_serve`). `http.client` отправляет
-        заголовки и тело разными вызовами. Подставной сервер успевал
-        прочитать 126 байт заголовков, ответить и ЗАКРЫТЬ сокет — а клиент в
-        этот момент ещё дописывал тело и получал EPIPE прямо на
-        `conn.request`. Отсюда и обманчивая картина в отчёте: падал тест
-        отмены, хотя до отмены дело не доходило вовсе.
-
-        Настоящий сервер читает запрос до конца, и подставной обязан вести
-        себя так же, иначе он проверяет не тот протокол.
-        """
+        """Read the full HTTP request (headers + Content-Length body) before responding."""
         buf = b""
         while b"\r\n\r\n" not in buf:
             part = conn.recv(65536)
@@ -117,7 +90,7 @@ class FakeServer:
 
 
 def _server_at(path: str) -> LlamaServer:
-    """`LlamaServer`, указывающий на готовый сокет: без запуска процесса."""
+    """Create a `LlamaServer` pointed at an existing socket without spawning a process."""
     srv = LlamaServer(binary=None, base_gguf=None, adapters=[], threads=2,
                       ctx=2048, env={})
     srv._sock = path
@@ -125,8 +98,8 @@ def _server_at(path: str) -> LlamaServer:
 
 
 @unittest.skipUnless(hasattr(socket, "AF_UNIX"),
-                     "AF_UNIX нет на этой платформе (Windows): "
-                     "транспорт llama-server проверяется на POSIX")
+                     "AF_UNIX unavailable on this platform (Windows): "
+                     "llama-server transport is tested on POSIX")
 class TestCompletionStream(unittest.TestCase):
 
     def test_chunks_arrive_and_stop_flag_ends_the_stream(self) -> None:
@@ -135,55 +108,55 @@ class TestCompletionStream(unittest.TestCase):
             {"content": "такт=0 ", "stop": False},
             {"content": "канал=1\n", "stop": False},
             {"content": "", "stop": True, "stop_type": "eos"},
-            {"content": "ЭТО УЖЕ ПОСЛЕ stop", "stop": False},
+            {"content": "AFTER STOP", "stop": False},
         ]))
         self.addCleanup(fake.close)
-        got = list(_server_at(fake.path).complete("промпт", 64))
+        got = list(_server_at(fake.path).complete("prompt", 64))
         self.assertEqual("".join(got), "0: такт=0 канал=1\n")
 
     def test_prompt_and_settings_reach_the_server(self) -> None:
-        """Температура 0 — не украшение: на ней сняты все замеры."""
+        """Default temperature=0.0 is deterministic and omits `seed` when unset."""
         fake = FakeServer(_sse([{"content": "x", "stop": True}]))
         self.addCleanup(fake.close)
-        list(_server_at(fake.path).complete("мой промпт", 123))
+        list(_server_at(fake.path).complete("my prompt", 123))
         body = json.loads(fake.requests[0].split(b"\r\n\r\n", 1)[1])
-        self.assertEqual(body["prompt"], "мой промпт")
+        self.assertEqual(body["prompt"], "my prompt")
         self.assertEqual(body["n_predict"], 123)
         self.assertEqual(body["temperature"], 0)
-        self.assertNotIn("seed", body)     # без явного seed его нет и в запросе
+        self.assertNotIn("seed", body)     # omit seed when not explicitly passed
         self.assertTrue(body["stream"])
 
     def test_sampling_reaches_the_server(self) -> None:
-        """temperature/seed для best-of доходят до /completion как есть."""
+        """temperature and seed for best-of sampling are forwarded verbatim to /completion."""
         fake = FakeServer(_sse([{"content": "x", "stop": True}]))
         self.addCleanup(fake.close)
-        list(_server_at(fake.path).complete("промпт", 8, temperature=0.7, seed=42))
+        list(_server_at(fake.path).complete("prompt", 8, temperature=0.7, seed=42))
         body = json.loads(fake.requests[0].split(b"\r\n\r\n", 1)[1])
         self.assertEqual(body["temperature"], 0.7)
         self.assertEqual(body["seed"], 42)
 
     def test_cancel_closes_the_connection(self) -> None:
-        """Отмена на середине потока не оставляет соединение висеть."""
+        """Closing the generator mid-stream tears down cleanly without hanging."""
         fake = FakeServer(_sse([{"content": f"{i}\n", "stop": False}
                                 for i in range(50)]))
         self.addCleanup(fake.close)
-        gen = _server_at(fake.path).complete("промпт", 999)
+        gen = _server_at(fake.path).complete("prompt", 999)
         self.assertEqual(next(gen), "0\n")
-        gen.close()          # не должно ни падать, ни висеть
+        gen.close()          # must neither raise nor hang
 
     def test_non_200_is_an_expected_failure(self) -> None:
-        """Отказ сервера — `ServerError`, а не голое исключение из stdlib."""
-        body = "не готов".encode()
+        """HTTP server errors raise `ServerError`, not raw stdlib exceptions."""
+        body = "not ready".encode()
         fake = FakeServer(b"HTTP/1.1 503 Service Unavailable\r\n"
                           + f"Content-Length: {len(body)}\r\n\r\n".encode()
                           + body)
         self.addCleanup(fake.close)
         with self.assertRaises(ServerError):
-            list(_server_at(fake.path).complete("промпт", 8))
+            list(_server_at(fake.path).complete("prompt", 8))
 
 
 class TestThreadDefault(unittest.TestCase):
-    """Число потоков — половина логических ядер, см. замер в `default_threads`."""
+    """Default thread count is half of logical CPU cores."""
 
     def test_half_of_logical_cores(self) -> None:
         import unittest.mock as mock

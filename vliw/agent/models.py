@@ -1,22 +1,20 @@
-"""Живой каталог моделей: что доступно именно этому ключу.
+"""Live model catalog: what is actually available for the given API key.
 
-Правило окна МОДЕЛЬ: без ключа списка нет. Каталог грузится только после
-вставки ключа (или URL у Local) — живых данных, которым можно верить, иначе
-не бывает. Выдуманных «проверенных списков» здесь нет: неверное имя модели —
-это 404 за деньги пользователя, а угаданный список именно к этому и ведёт.
+Rule of the MODEL screen: no list without a key. The catalog is fetched only
+after entering a key (or URL for Local) — live data only, never hardcoded
+guesses that lead to paid 404s.
 
-Контракт `catalog(provider, api_key="", base_url="", folder="")`:
-  * `("live", rows)` — сервер отдал список, клик применяется сразу;
-  * `("locked", [])` — нужен ключ/URL/folder, в сеть не ходили;
-  * `("unsupported", [])` — списка у провайдера нет: ручной ввод ID
-    с платной проверкой через API (yandex);
-  * `("text", [])` — провайдер скрыт из каталога (`custom`, `local`).
-Ошибки сети и неверный ключ — исключением `LLMError` с готовым русским
-текстом (без секретов внутри): окно показывает его как есть.
+Contract `catalog(provider, api_key="", base_url="", folder="")`:
+  * `("live", rows)` — server returned models; clicking applies immediately;
+  * `("locked", [])` — key/URL/folder required, no network call made;
+  * `("unsupported", [])` — provider has no list endpoint: manual ID entry
+    with live API check (yandex);
+  * `("text", [])` — provider omitted from catalog (`custom`, `local`).
+Network errors and invalid keys raise `LLMError` with a clean human-readable
+message (no secrets leaked).
 
-Только стандартная библиотека. Кэш — в памяти процесса, ключом
-(провайдер, ключ, адрес): смена ключа даёт свежий список, перезапуск
-всё забывает — как и сами ключи.
+Standard library only. In-memory cache keyed by (provider, key, base_url):
+changing the key refreshes the list; restarting clears everything.
 """
 
 from __future__ import annotations
@@ -62,18 +60,18 @@ def _fetch_json(url: str, headers: dict | None = None,
             raw = ""
         msg = _short_message(raw) or f"HTTP {e.code}"
         if e.code in (401, 403):
-            raise LLMError(f"ключ отклонён (HTTP {e.code}): вставь заново"
+            raise LLMError(f"key rejected (HTTP {e.code}): paste again"
                            + (f" — {msg}" if msg else "")) from None
         if e.code == 404:
-            raise LLMError("сервер не знает такого списка "
+            raise LLMError("server does not expose this model list "
                            f"(HTTP 404): {msg}") from None
-        raise LLMError(f"сервер не отдал каталог (HTTP {e.code}): "
+        raise LLMError(f"server did not return catalog (HTTP {e.code}): "
                        f"{msg}") from None
     except LLMError:
         raise
-    except Exception as e:  # noqa: BLE001 — сеть даёт что угодно
-        raise LLMError(f"нет сети: {type(e).__name__} — проверь соединение "
-                       "и повтори") from None
+    except Exception as e:  # noqa: BLE001 — wrap any network failure
+        raise LLMError(f"network error: {type(e).__name__} — check connection "
+                       "and try again") from None
 
 
 def _short_message(raw: str) -> str:
@@ -95,7 +93,7 @@ def _short_message(raw: str) -> str:
 def _openai_rows(data: dict) -> list[ModelRow]:
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        raise LLMError("сервер вернул странный каталог: нет списка data")
+        raise LLMError("unexpected catalog format: missing 'data' list")
     rows = []
     for m in items:
         if not isinstance(m, dict) or not m.get("id"):
@@ -119,7 +117,7 @@ def _gemini_rows(key: str) -> list[ModelRow]:
     data = _fetch_json(url, {"x-goog-api-key": key})
     items = data.get("models") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        raise LLMError("сервер вернул странный каталог: нет списка models")
+        raise LLMError("unexpected catalog format: missing 'models' list")
     rows = []
     for m in items:
         if not isinstance(m, dict):
@@ -144,7 +142,7 @@ def _anthropic_rows(key: str) -> list[ModelRow]:
                         "anthropic-version": "2023-06-01"})
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        raise LLMError("сервер вернул странный каталог: нет списка data")
+        raise LLMError("unexpected catalog format: missing 'data' list")
     rows = [ModelRow(id=str(m["id"]),
                      label=str(m.get("display_name") or m["id"]), free=None)
             for m in items
@@ -158,7 +156,7 @@ def _openrouter_rows(key: str) -> list[ModelRow]:
     data = _fetch_json("https://openrouter.ai/api/v1/models", headers)
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        raise LLMError("сервер вернул странный каталог: нет списка data")
+        raise LLMError("unexpected catalog format: missing 'data' list")
     rows = [ModelRow(id=str(m["id"]), label=str(m.get("name") or m["id"]),
                      free=str(m.get("id", "")).endswith(":free"))
             for m in items
@@ -183,13 +181,13 @@ def _gigachat_rows(pair: str) -> list[ModelRow]:
         try:
             raw = base64.b64decode(pair.strip(), validate=True).decode("ascii")
         except Exception:
-            raise LLMError("GigaChat: нужна пара id:secret") from None
+            raise LLMError("GigaChat: requires an id:secret pair") from None
         if raw.count(":") != 1:
-            raise LLMError("GigaChat: нужна пара id:secret") from None
+            raise LLMError("GigaChat: requires an id:secret pair") from None
         cid, _, sec = raw.partition(":")
     cid, sec = cid.strip(), sec.strip()
     if not cid or not sec:
-        raise LLMError("GigaChat: нужна пара id:secret")
+        raise LLMError("GigaChat: requires an id:secret pair")
     basic = base64.b64encode(f"{cid}:{sec}".encode()).decode()
     body = urllib.parse.urlencode({"scope": "GIGACHAT_API_PERS"}).encode()
     req = urllib.request.Request(
@@ -201,15 +199,15 @@ def _gigachat_rows(pair: str) -> list[ModelRow]:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             tok = json.load(resp)
     except Exception as e:  # noqa: BLE001
-        raise LLMError(f"GigaChat OAuth не дал токен: {type(e).__name__}") from None
+        raise LLMError(f"GigaChat OAuth failed to issue token: {type(e).__name__}") from None
     access = tok.get("access_token", "") if isinstance(tok, dict) else ""
     if not access:
-        raise LLMError("GigaChat OAuth: нет access_token в ответе")
+        raise LLMError("GigaChat OAuth: no access_token in response")
     data = _fetch_json("https://api.giga.chat/v1/models",
                        {"Authorization": f"Bearer {access}"})
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        raise LLMError("сервер вернул странный каталог: нет списка data")
+        raise LLMError("unexpected catalog format: missing 'data' list")
     rows = []
     for m in items:
         if not isinstance(m, dict):

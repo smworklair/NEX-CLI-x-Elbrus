@@ -1,14 +1,14 @@
-! РАЗМИНКА: короткий конвейер, три вида давления сразу
+! WARMUP: short pipeline, three kinds of pressure at once
 ! nex: src=11 orc=9 err=0
 !
-! Написано руками для этого проекта — НЕ вывод lcc (см. docs/REAL_VS_SYNTH.md,
-! там честная граница между настоящим кодом и синтетикой). Лежит в
-! examples/stress/warmup/ — второй уровень вложенности от examples/, специально
-! для проверки проводника (^E): дойти сюда через examples/ -> stress/ -> warmup/.
+! Hand-written for this project — NOT lcc output (see docs/REAL_VS_SYNTH.md,
+! which draws an honest boundary between real code and synthetic cases). Placed in
+! examples/stress/warmup/ — two levels deep under examples/, specifically
+! to test the file browser (^E): navigate here via examples/ -> stress/ -> warmup/.
 !
-! Что внутри: четыре независимых умножения (можно упаковать по каналам ,0 ,1
-! ,3 ,4 в один такт), загрузка с латентностью 5 перед тем, кто её ждёт, и
-! короткая цепочка сложений на пути к результату.
+! Inside: four independent multiplications (can be packed across channels ,0 ,1
+! ,3 ,4 in one cycle), a 5-cycle-latency load before its consumer, and
+! a short addition chain leading to the final result.
 {
   ldw,0 %r1, %r2
   muls,1 %r10, %r11, %r20

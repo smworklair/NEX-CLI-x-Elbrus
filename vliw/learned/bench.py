@@ -1,19 +1,19 @@
-"""Замер обученной модели на файле эвала — локально, без Kaggle.
+"""Evaluate the learned model on an eval file — locally, without Kaggle.
 
-Зачем в инструменте, а не отдельным скриптом: до сих пор единственный способ
-измерить модель был `training/validate_kaggle.py`, а он рассчитан на Kaggle
-(грузит torch, ждёт GPU, печатает свою сводку). Пока замер живёт только там,
-любая проверка гипотезы упирается в квоту GPU — 30 часов в неделю.
+Why built into the tool rather than a standalone script: previously the only
+way to measure the model was `training/validate_kaggle.py`, which targets Kaggle
+(loads torch, waits for GPU, prints its own summary). While evaluation lived
+only there, every hypothesis check hit the 30h/week GPU quota.
 
-Здесь тот же замер на локальном движке. Классификатор намеренно совпадает по
-смыслу с `validate_kaggle.classify()`: «валидно» / «хвост» (законный префикс,
-но модель не остановилась) / «ресурс» (операция на канал, который её не
-исполняет) / «прочее». Разделение хвоста и брака — не придирка: именно на нём
-пойман EOS-баг, см. docs/archive/EOS_INCIDENT.md.
+This runs the same benchmark on the local engine. The classifier intentionally
+matches `validate_kaggle.classify()`: "valid" / "tail" (valid prefix, but the
+model did not stop) / "resource" (operation placed on an unsupported channel) /
+"other". Separating tail from invalid is not pedantry — it caught the EOS bug,
+see docs/archive/EOS_INCIDENT.md.
 
-Разбивка идёт по НАЛИЧИЮ STORE в графе, а не только по размеру. Причина в
-docs/archive/ROADMAP.md: в обучающих данных прогона 1 не было ни одной операции STORE,
-и по корзинам размера эта причина размазывается, а по STORE — видна сразу.
+Breakdown is stratified by STORE presence in the graph, not just size. See
+docs/archive/ROADMAP.md: run-1 training data had zero STORE ops, which gets
+blurred in size buckets but stands out immediately by STORE.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ from pathlib import Path
 
 @dataclass
 class SampleOutcome:
-    """Итог одного сэмпла внутри best-of: ровно то, по чему идёт выбор.
+    """Outcome of a single sample within best-of: exactly what selection uses.
 
-    `gap` — только у валидного сэмпла: сравнивать makespan битых ответов
-    с оптимумом бессмысленно.
+    `gap` is set only for a valid sample: comparing makespan of broken
+    outputs against the optimum is meaningless.
     """
 
     valid: bool
@@ -41,17 +41,16 @@ class SampleOutcome:
 
 @dataclass(frozen=True)
 class BestOf:
-    """N сэмплов на граф при temperature>0, лучший по validate().
+    """N samples per graph at temperature>0, selecting best by validate().
 
-    Зачем: repair() чинит ТОЛЬКО канал (см. его докстринг) — нарушения
-    зависимости и занятости порта во времени он сознательно не трогает.
-    А вот другой сэмпл может их просто не совершить: при температуре модель
-    каждый раз пишет расписание чуть иначе, и среди N попыток законное
-    встречается чаще, чем в одной. Это и измеряется здесь.
+    Why: repair() fixes ONLY channels (see its docstring) — it deliberately
+    leaves dependency and port-occupancy violations untouched. Another sample
+    may avoid them altogether: with temperature>0 the model writes slightly
+    different schedules, so a valid one appears more often across N tries.
 
-    `seed` — база: сэмпл k получает seed+k. Пришпилён не для красоты:
-    без него повторный прогон замера давал бы другие числа, а одинаковый
-    seed на все k — N одинаковых ответов и вырожденный best-of.
+    `seed` is the base: sample k gets seed+k. Pinned for reproducibility:
+    without it reruns would drift, and using the same seed for all k would
+    produce N identical answers and degenerate best-of.
     """
 
     n: int = 1
@@ -70,23 +69,23 @@ class BenchRow:
     gap: int | None = None
     first_error: str = ""
     samples: list[SampleOutcome] | None = None
-    """Сэмплы best-of по порядку k=0..N-1. None — обычный прогон без сэмплинга.
+    """Best-of samples in order k=0..N-1. None for standard deterministic run.
 
-    Хранить их все, а не только итог, нужно ради таблицы: best-of-2 и
-    best-of-4 — это те же сэмплы, усечённые до первых 2 и 4. Один прогон
-    с N=8 отвечает сразу на все k ≤ 8, без отдельных забегов на каждый N.
+    Storing all of them (not just the winner) powers the table: best-of-2 and
+    best-of-4 are just prefixes of the same samples. One run with N=8 answers
+    all k <= 8 without separate passes.
     """
 
     cab_improved: bool = False
-    """Победитель портфеля строго короче жадного кандидата, а не вничью."""
+    """Portfolio winner is strictly shorter than the greedy candidate, not a tie."""
 
     cab_winner: str | None = None
-    """Кто выиграл портфель CAB на этом графе. None — портфель выключен.
+    """Winner of the CAB portfolio on this graph. None if portfolio is off.
 
-    Без этого замер отвечает «сколько тактов», но не «чья это работа»: на
-    трудном эвале жадный кандидат лежит в портфеле и не даёт результату
-    стать хуже baseline, поэтому по одному среднему нельзя понять, добавила
-    модель что-нибудь или просто не помешала.
+    Without this, the benchmark tells "how many cycles" but not "whose work":
+    on the hard eval set, the greedy candidate sits in the portfolio and
+    prevents regressions below baseline, so the mean alone cannot show whether
+    the model helped or merely stayed out of the way.
     """
 
     @property
@@ -102,7 +101,7 @@ class BenchResult:
 
     @property
     def valid(self) -> int:
-        return sum(1 for r in self.rows if r.kind == "валидно")
+        return sum(1 for r in self.rows if r.kind == "valid")
 
     def pct(self, n: int) -> float:
         return 100.0 * n / len(self.rows) if self.rows else 0.0
@@ -114,10 +113,10 @@ class BenchResult:
         return out
 
     def cab_winners(self) -> dict[str, tuple[int, int]]:
-        """{кандидат: (побед, из них строго лучше жадного)}.
+        """{candidate: (wins, strictly_better_than_greedy)}.
 
-        Второе число и есть вклад: победа вничью означает, что кандидат
-        совпал с эвристикой, а не обыграл её.
+        The second number is the true contribution: a tied win means the
+        candidate matched the heuristic rather than beating it.
         """
         out: dict[str, list[int]] = {}
         for r in self.rows:
@@ -128,20 +127,20 @@ class BenchResult:
         return {k: (v[0], v[1]) for k, v in out.items()}
 
     def split_store(self) -> dict[bool, tuple[int, int]]:
-        """{есть ли STORE: (валидных, всего)} — главный разрез диагноза."""
+        """{has_store: (valid_count, total)} — primary diagnostic split."""
         out: dict[bool, list[int]] = {True: [0, 0], False: [0, 0]}
         for r in self.rows:
             out[r.has_store][1] += 1
-            if r.kind == "валидно":
+            if r.kind == "valid":
                 out[r.has_store][0] += 1
         return {k: (v[0], v[1]) for k, v in out.items()}
 
     def best_of_valid(self, k: int) -> tuple[int, int]:
-        """(валидных среди первых k сэмплов, строк с сэмплами).
+        """(valid among first k samples, rows with samples).
 
-        «Валиден best-of-k» = ХОТЯ БЫ один из первых k сэмплов валиден —
-        выбор идёт по минимуму нарушений, а валидный сэмпл нарушений не
-        имеет и выигрывает у любого битого.
+        "Valid at best-of-k" means AT LEAST ONE of the first k samples is
+        valid — selection minimizes violations, so any valid sample beats
+        every invalid one.
         """
         rows = [r for r in self.rows if r.samples]
         return (sum(1 for r in rows if any(s.valid for s in r.samples[:k])),
@@ -154,7 +153,7 @@ def _parse_graph(prompt: str):
     instrs = []
     for line in prompt.split("\n")[2:]:
         line = line.strip()
-        if line == "расписание:" or not line:
+        if line in ("schedule:", "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435:") or not line:
             continue
         head, _, preds_s = line.partition(" <- ")
         idx_s, _, op = head.partition(" ")
@@ -165,12 +164,12 @@ def _parse_graph(prompt: str):
 
 
 def _candidate_key(res):
-    """Порядок кандидатов best-of: меньше нарушений → меньше makespan.
+    """Best-of candidate ordering: fewer violations -> smaller makespan.
 
-    Ошибки validate() и неразмещённые инструкции считаются НАРАВНЕ: и то и
-    другое — провал графа, а не частичная заслуга. makespan — только
-    тай-брейк: сравнивать его между битыми ответами смысла нет, а вот между
-    двумя валидными — это и есть качество плана.
+    validate() errors and unplaced instructions count EQUALLY: both are a
+    schedule failure, not partial credit. Makespan is only a tie-breaker:
+    comparing makespan of broken outputs is meaningless, while between two
+    valid schedules it measures plan quality.
     """
     st = res.search_stats
     unplaced = 0 if res.schedule.complete else len(st["missing"])
@@ -189,16 +188,16 @@ def _sample_outcome(res, meta_makespan: int) -> SampleOutcome:
 
 
 def _candidates(scheduler, dag, model, best_of: BestOf | None):
-    """Все ответы модели на один граф. Без best_of — один, прежним путём."""
+    """All model responses for one graph. Without best_of, a single standard call."""
     if best_of is None:
         return [scheduler.schedule(dag, model)]
 
-    # Атрибуты, а не аргументы schedule(): протокол Scheduler фиксирован,
-    # и bench меняет сэмплинг между попытками. Нет атрибутов — перед нами не
-    # обученный планировщик, и best-of к нему неприменим.
+    # Attributes rather than schedule() arguments: the Scheduler protocol is
+    # fixed, and bench varies sampling across attempts. Missing attributes mean
+    # this is not a learned scheduler, so best-of does not apply.
     if not hasattr(scheduler, "temperature"):
         raise TypeError(
-            "best-of требует обученный планировщик с сэмплингом "
+            "best-of requires a learned scheduler with sampling "
             "(vliw.learned.LearnedScheduler)")
 
     out = []
@@ -211,12 +210,12 @@ def _candidates(scheduler, dag, model, best_of: BestOf | None):
 
 def run_bench(dataset: Path, limit: int, scheduler, model,
               on_row=None, best_of: BestOf | None = None) -> BenchResult:
-    """Прогнать `limit` примеров. `on_row` зовётся после каждого — для прогресса.
+    """Run `limit` examples. `on_row` is called after each for progress reporting.
 
-    `best_of` включает выбор из N сэмплов при temperature>0: каждый сэмпл
-    идёт через тот же конвейер (включая repair() планировщика), побеждает
-    кандидат с меньшим числом нарушений, при равенстве — с меньшим makespan.
-    None — прежний путь: один жадный ответ, как на всех замерах.
+    `best_of` enables picking from N samples at temperature>0: each sample
+    passes through the same pipeline (including scheduler repair()), winning
+    by fewest violations, then smallest makespan. None uses the standard
+    single deterministic response.
     """
     from ..core.dag import DAG
 
@@ -239,14 +238,14 @@ def run_bench(dataset: Path, limit: int, scheduler, model,
 
             st = r.search_stats
             if st["valid"]:
-                kind = "валидно"
+                kind = "valid"
                 gap = r.schedule.makespan - meta_makespan
             elif not st["errors"] and not st["missing"]:
-                kind, gap = "хвост", None
-            elif any("не исполняет" in e for e in st["errors"]):
-                kind, gap = "ресурс", None
+                kind, gap = "tail", None
+            elif any("does not execute" in e or "cannot execute" in e or "\u043d\u0435 \u0438\u0441\u043f\u043e\u043b\u043d\u044f\u0435\u0442" in e for e in st["errors"]):
+                kind, gap = "resource", None
             else:
-                kind, gap = "прочее", None
+                kind, gap = "other", None
 
             br = BenchRow(n=len(instrs), kind=kind, has_store=has_store, gap=gap,
                           cab_winner=st.get("cab_winner"),

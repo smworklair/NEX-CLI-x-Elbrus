@@ -1,24 +1,6 @@
-"""Сборка обучающего слияния и широкого held-out эвала.
-
-Зачем нужен второй эвал
------------------------
-Старый `eval.jsonl` собран под графы 6..14 инструкций — ровно диапазон
-`dataset.jsonl`. Новые 20 000 примеров покрывают 4..24. Если мерить только
-старым эвалом, прирост на крупных графах (18..24) не увидит никто: их там
-физически нет. Поэтому режем held-out прямо из новых данных — CP-SAT уже
-доказал на них оптимум, генерировать заново нечего.
-
-Срез берётся послойно по числу инструкций (stratified), чтобы весь диапазон
-4..24 был представлен, а не только середина, где примеров больше всего.
-Отобранное ИСКЛЮЧАЕТСЯ из обучающего файла — иначе эвал измеряет запоминание.
-
-Старый `eval.jsonl` при этом остаётся нетронутым: сравнение «до/после» с
-прошлым замером должно идти на тех же данных, что и прошлый замер.
+"""Build merged training set and stratified wide held-out eval split.
 
     python tools/build_split.py
-
-Проверить результат:
-
     python tools/validate_jsonl.py train_merged.jsonl eval_wide.jsonl
 """
 
@@ -43,12 +25,7 @@ def dump(path: Path, rows: list[dict]) -> None:
 
 
 def stratified_sample(rows: list[dict], k: int, seed: int) -> list[int]:
-    """Индексы k примеров, разложенных по числу инструкций поровну.
-
-    Слои обходятся по кругу: пока в слое есть непотраченные примеры, он отдаёт
-    по одному. Так редкие размеры (n=4, n=24 — их в разы меньше середины)
-    попадают в эвал наравне с частыми, а не тонут в пропорции.
-    """
+    """Select k indices stratified evenly across instruction-count buckets."""
     rng = random.Random(seed)
     by_n: dict[int, list[int]] = collections.defaultdict(list)
     for i, r in enumerate(rows):
@@ -67,7 +44,7 @@ def stratified_sample(rows: list[dict], k: int, seed: int) -> list[int]:
             moved = True
             if len(picked) == k:
                 break
-        if not moved:            # примеров меньше, чем просят
+        if not moved:            # fewer examples available than requested
             break
     return picked
 
@@ -80,7 +57,7 @@ def main() -> None:
     ap.add_argument("--train-out", type=Path, default=Path("train_merged.jsonl"))
     ap.add_argument("--eval-out", type=Path, default=Path("eval_wide.jsonl"))
     ap.add_argument("--eval-size", type=int, default=300,
-                    help="столько же, сколько в старом eval.jsonl")
+                    help="same size as legacy eval.jsonl")
     ap.add_argument("--seed", type=int, default=20260817)
     args = ap.parse_args()
 
@@ -92,9 +69,9 @@ def main() -> None:
     eval_rows = [extra[i] for i in sorted(held)]
     extra_train = [r for i, r in enumerate(extra) if i not in held]
 
-    # Дедуп по промпту. Внутри каждого файла дублей нет (проверено), но
-    # пересечение между файлами никто не гарантировал: генераторы разные и
-    # про друг друга не знают. Приоритет у base — он обучал текущий адаптер.
+    # Deduplicate by prompt across input files (base takes priority).
+    #
+    #
     seen = {r["prompt"] for r in base}
     merged = list(base)
     dropped = 0
@@ -105,11 +82,11 @@ def main() -> None:
         seen.add(r["prompt"])
         merged.append(r)
 
-    # Эвал не должен пересекаться с обучением ни одним промптом — иначе
-    # меряется запоминание, а не решение задачи.
+    # Verify zero prompt leakage between eval and training splits.
+    #
     eval_prompts = {r["prompt"] for r in eval_rows}
     leak = sum(1 for r in merged if r["prompt"] in eval_prompts)
-    assert leak == 0, f"утечка эвала в обучение: {leak}"
+    assert leak == 0, f"eval leakage into train: {leak}"
 
     random.Random(args.seed).shuffle(merged)
     dump(args.train_out, merged)
@@ -117,13 +94,13 @@ def main() -> None:
 
     def spread(rows: list[dict]) -> str:
         c = collections.Counter(r["meta"]["n"] for r in rows)
-        return f"n={min(c)}..{max(c)}, слоёв {len(c)}, по слою {min(c.values())}..{max(c.values())}"
+        return f"n={min(c)}..{max(c)}, strata {len(c)}, per stratum {min(c.values())}..{max(c.values())}"
 
-    print(f"\n{args.train_out}: {len(merged)} примеров "
+    print(f"\n{args.train_out}: {len(merged)} examples "
           f"({len(base)} base + {len(extra_train) - dropped} extra, "
-          f"дублей отброшено {dropped})")
+          f"duplicates dropped {dropped})")
     print(f"   {spread(merged)}")
-    print(f"{args.eval_out}: {len(eval_rows)} примеров (held-out, в обучение не попали)")
+    print(f"{args.eval_out}: {len(eval_rows)} examples (held-out, excluded from train)")
     print(f"   {spread(eval_rows)}")
 
 

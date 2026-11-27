@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vliw-ai-scheduler"
-version = "1.4"
+version = "1.5"
 description = "VLIW instruction-scheduler prototype: greedy baseline vs exact-search oracle (Elbrus e2k machine model)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,12 +28,12 @@ dev = ["rich>=13", "textual>=8.2"]
 vliw = "vliw.cli:main"
 
 [tool.setuptools.packages.find]
-# Ядро планировщика, NNL-блоки (включая блок помощи) и модель ISA: код
-# импортирует их по именам, поэтому они должны попадать в установку.
+# Scheduler core, NNL blocks (including the help block), and ISA model: the code
+# imports them by name, so they must be included in the installed package.
 include = ["vliw*", "nex_core*", "nnl_vliw*", "nnl_isa*"]
 
-# Runtime data shipped inside the package: Textual CSS, UI themes, лёгкие веса
-# NNL-ассистента и сами NNL-блоки (паспорт + веса + датасет обучения).
+# Runtime data shipped inside the package: Textual CSS, UI themes, lightweight
+# NNL assistant weights, and NNL blocks themselves (passport + weights + training dataset).
 [tool.setuptools.package-data]
 vliw = ["tui/*.tcss", "ui/themes/*.json", "help_weights.json"]
 nnl_vliw = [

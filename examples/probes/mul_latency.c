@@ -1,6 +1,6 @@
-/* Латентность умножения: ЦЕПОЧКА зависимых умножений. Каждое следующее ждёт
-   результат предыдущего, поэтому компилятор ОБЯЗАН развести их по тактам
-   ровно на latency — и покажет это явными nop N между ними. */
+/* Multiplication latency: CHAIN of dependent multiplications. Each waits on
+   the previous result, so the compiler MUST space them across cycles
+   by exact latency — and will show this with explicit nop N stalls between them. */
 volatile int a = 3, b = 5;
 volatile int out;
 

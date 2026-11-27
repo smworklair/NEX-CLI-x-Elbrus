@@ -1,62 +1,58 @@
-# TINY AI: обученный планировщик без LLM
+# TINY AI: Learned Scheduler Without an LLM
 
-> Этап 9 из 13 · [← Оркестр](ORCHESTRA.md) · [Маршрут](README.md) · [Модель машины →](ISA.md)
+> Stage 9 of 13 · [← Orchestra](ORCHESTRA.md) · [Roadmap](README.md) · [Machine Model →](ISA.md)
 
-TINY AI — это не языковая модель, а несколько маленьких MLP (~21 тыс. параметров), которые подсказывают
-обычному планировщику порядок операций, отсрочки и моменты «придержать». Расписание строит
-детерминированный код, поэтому оно законно по построению: галлюцинаций нет как класса.
+TINY AI is not a language model — it is a suite of compact MLPs (~21K parameters) that advise a deterministic list scheduler on operation priorities, defers, and holds. Conventional scheduling code emits the final VLIW bundles, guaranteeing legal schedules by construction: invalid schedules and hallucinations are structurally impossible.
 
-В CLI TINY AI вызывается через NNL-обёртку `nex_core/` в быстром варианте **TINY Flash**:
-это тот же планировщик, упакованный как NNL-блок (паспорт, веса, sha256), а не другая сеть.
-Эксперименты `nnl_vliw/` — отдельно.
+In the CLI, TINY AI runs through the `nex_core/` NNL wrapper in its fast variant **TINY Flash**: the exact same scheduler packaged as an NNL block (passport, weights, SHA-256), not a separate network. The `nnl_vliw/` experiments are independent.
 
-## Что считает
+## What It Computes
 
-Портфель вариантов, от дешёвого к дорогому:
+A candidate portfolio evaluated from cheapest to most expensive:
 
 ```text
-жадный → prio → prio+defer → prio+hold → rule_hold → rule_hold_far
+greedy → prio → prio+defer → prio+hold → rule_hold → rule_hold_far
        → beam_t* → beam_h* → beam_d*
 ```
 
-- **prio** — порядок из скоров MLP.
-- **defer** — запрет «не раньше такого-то такта».
-- **hold** — держка после asap, отдельная голова.
-- **rule_hold** — ручные держки монопольного порта без ML.
-- **beam** — веер вариантов вокруг двух центров, точный выбор по makespan.
+- **prio** — priority ordering driven by MLP scores.
+- **defer** — earliest-issue constraint ("do not issue before cycle `t`").
+- **hold** — deliberate delay past ASAP, predicted by a dedicated head.
+- **rule_hold** — deterministic heuristics for sole-issue functional-unit holds without ML.
+- **beam** — candidate fan-out around two anchors, selecting the shortest makespan.
 
-Побеждает лучший makespan. Ничьи отдаются жадному, поэтому **хуже жадного TINY AI не бывает**.
+The shortest makespan wins. Ties break in favor of the greedy list scheduler baseline, so **TINY AI never regresses against the baseline**.
 
-## Цифры
+## Numbers
 
-| | жадный | TINY AI | точный оптимум |
+| | greedy baseline | TINY AI | exact optimum |
 |---|---|---|---|
-| настоящий код, оптимальных блоков из 947 | 890 | **927** | 947 |
-| трудные графы, из 300 | 18 | **284** | 300 |
-| время на блок | 0,4 мс | 0,6 мс | до 20 с |
+| real code, optimal basic blocks out of 947 | 890 | **927** | 947 |
+| hard graphs, out of 300 | 18 | **284** | 300 |
+| time per basic block | 0.4 ms | 0.6 ms | up to 20 s |
 
-- На настоящем коде потери жадного — 0,51% тактов; TINY AI возвращает около 70% этих потерь.
-- Ни одного ухудшения на 1 547 проверенных графах.
-- `eval_hard`: 284/300 в оптимуме, разрыв 0,053; законность расписаний — 100%.
-- `eval_wide`: вровень с жадным, без побед и поражений.
+- On real code, the greedy baseline leaves 0.51% in recoverable cycles; TINY AI recovers roughly 70% of that scheduling headroom.
+- Zero regressions across 1,547 tested graphs.
+- `eval_hard`: 284/300 optimal, gap 0.053; schedule validity 100%.
+- `eval_wide`: tied with the baseline, zero wins and zero losses.
 
 ## TINY Flash
 
-`TinyFlashScheduler` (`vliw/tiny/fast.py`) даёт тот же makespan, что обычный TINY, но быстрее:
+`TinyFlashScheduler` (`vliw/tiny/fast.py`) produces the exact same makespan as standard TINY, much faster:
 
-| набор | было | стало |
+| dataset | before | after |
 |---|---:|---:|
-| `eval_hard` | 63,4 мс | 2,6 мс |
-| `eval_real` | 70,4 мс | 0,95 мс |
-| `eval_wide` | 39 мс | 0,49 мс |
+| `eval_hard` | 63.4 ms | 2.6 ms |
+| `eval_real` | 70.4 ms | 0.95 ms |
+| `eval_wide` | 39 ms | 0.49 ms |
 
-Ускорение — до 26 раз. На 3 061 графе расхождений по makespan — 0, расписания законны.
-Скорость даёт остановка на нижней границе, движок `ListPlan` и ленивая трасса.
+Up to 26× speedup. Across 3,061 graphs: 0 makespan discrepancies, all schedules valid.
+The speedup comes from early termination upon hitting the theoretical lower bound, the `ListPlan` engine, and lazy trace generation.
 
-## Команды
+## Commands
 
 ```bash
-python -m vliw tiny                     # прогнать на текущем участке
+python -m vliw tiny                     # run on the current basic block
 python -m vliw.tiny.train --train train_merged.jsonl \
     --out vliw/tiny/weights.json --max-graphs 8000 --epochs 25 --seed 0
 python -m vliw.tiny.es --train train_hard.jsonl \
@@ -66,25 +62,24 @@ python -m vliw.tiny.verify --weights vliw/tiny/weights.json --train-sample 500 -
 python -m unittest tests.test_tiny tests.test_tiny_fast
 ```
 
-Обучение — минуты на CPU, `numpy` нужен только для обучения; инференс работает на стандартной библиотеке.
-Без `weights.json` планировщик честно откатывается на жадный.
+Training takes minutes on CPU; `numpy` is required only for training, while inference runs purely on the Python standard library.
+If `weights.json` is missing, the scheduler falls back cleanly to the greedy list scheduler baseline.
 
-## Наборы данных
+## Datasets
 
-| набор | роль |
+| dataset | role |
 |---|---|
-| `train_merged.jsonl` | обучение |
-| `eval_hard_dev.jsonl` | отбор конфигурации |
-| `eval_hard.jsonl` | финальный тест, смотреть один раз |
-| `eval_wide.jsonl` | регресс на лёгких графах |
-| случайные графы | проверка «не хуже жадного» |
+| `train_merged.jsonl` | training |
+| `eval_hard_dev.jsonl` | configuration selection |
+| `eval_hard.jsonl` | final test set, evaluate once |
+| `eval_wide.jsonl` | regression check on easy graphs |
+| random graphs | "no worse than baseline" verification |
 
-## Границы
+## Boundaries
 
-- Такты модельные, не замеры на железе; `loop_mode` не моделируется.
-- На настоящем коде выигрыш небольшой: жадный уже оптимален в 94% блоков.
-- TINY AI выбирает из готовых вариантов, а не доказывает оптимум.
-- Экспериментальные NNL-ядра (`nnl_vliw/`), которые выбирали группу портфеля, в CLI не включены:
-  на настоящем коде они почти не лучше случайного отказа — [`../nnl_vliw/README.md`](../nnl_vliw/README.md).
+- Cycle counts are model-based, not hardware measurements; `loop_mode` (software-pipelined loops) is not modeled.
+- Gains on real code are modest because the greedy list scheduler is already optimal on 94% of basic blocks.
+- TINY AI selects the best schedule from its candidate portfolio; it does not prove optimality.
+- Experimental NNL cores (`nnl_vliw/`) for selecting portfolio groups are not wired into the CLI: on real code they perform barely better than random abstention — [`../nnl_vliw/README.md`](../nnl_vliw/README.md).
 
-Устройство и команды разработчика — [`../vliw/tiny/README.md`](../vliw/tiny/README.md).
+Internals and developer commands: [`../vliw/tiny/README.md`](../vliw/tiny/README.md).

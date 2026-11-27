@@ -1,46 +1,8 @@
-"""Набор «настоящий код с доказанным оптимумом»: `.s` от lcc → jsonl в формате проекта.
+"""Build real-code eval JSONL with proven optima from lcc `.s` basic blocks and windows.
 
-Зачем. Оба эвала крошек (`eval_hard`, `eval_wide`) синтетические: графы из
-`random_dag`. О настоящем коде lcc до сих пор было известно только то, что
-замерялось в памяти и пропадало вместе с процессом. Здесь замер превращается в
-файл того же вида, что `eval_hard.jsonl` (`prompt` / `completion` / `meta`), —
-и любую новую крошку можно проверить на настоящем коде той же командой, что и на
-синтетике:
-
-    python3 vliw/tiny/eval.py --eval eval_real.jsonl
-
-Что делается.
-  1. Из `.s` берутся базовые блоки (от `--min-ops` операций) и окна внутри блоков
-     (`vliw/core/blocks.py`). Одинаковые графы (по операциям и связям) сливаются в
-     один; сколько раз граф встретился, пишется в `meta.seen`.
-  2. Для каждого графа ищется доказанный оптимум:
-       * быстрые крошки (`TinyFlashScheduler`, режим точности) дали makespan, равный
-         нижней границе, — оптимум доказан границей (`meta.proven_by = "bound"`);
-       * иначе точный поиск (`OracleScheduler`) в бюджет `--oracle` секунд на граф:
-         доказал — оптимум доказан поиском (`"oracle"`).
-  3. Доказанные графы пишутся в `--out` (по умолчанию `eval_real.jsonl`).
-     Недоказанные — в `--out-open` (`eval_real_open.jsonl`) БЕЗ поля `meta.makespan`:
-     там лежит лучшее найденное (`meta.best_known`), и принять его за оптимум
-     нельзя — `vliw/tiny/eval.py` на таком файле честно упадёт, а не соврёт.
-  4. Записанное читается обратно ТЕМ ЖЕ кодом проекта, которым его будут читать
-     (`build_dag(parse_graph_entries(...))`, `Schedule.validate()`), и сверяется:
-     структура графа, законность расписания, makespan == meta, нижняя граница.
-
-Чего здесь нет.
-  * Оптимум — в тактах МОДЕЛИ машины (`e2k-v6-measured`), не в тактах железа.
-  * Циклы `loop_mode` помечены `meta.loop = true`: для них модель считает длину
-    линейного куска, а не такты на итерацию.
-  * Граф, который формат проекта записать не может, пропускается и считается:
-    `vliw.core.dag._SYMBOL` не знает операций FMA, MOVA, CONV, INCR, и
-    `build_dag(parse_graph_entries(...))` на них падает с KeyError. Код проекта
-    этим инструментом не меняется.
-  * Чтобы не было утечки при обучении, в `meta.file` лежит имя исходного `.s`:
-    делить на обучение и проверку нужно по файлам, а не по графам.
-
-Запуск:
-    python3 tools/make_eval_real.py                      # корпус real_candidates_100_400/asm
+Usage:
+    python3 tools/make_eval_real.py
     python3 tools/make_eval_real.py --oracle 10 --jobs 2
-    python3 tools/make_eval_real.py a.s b.s --no-windows --oracle 0
 """
 
 from __future__ import annotations
@@ -74,51 +36,51 @@ from vliw.tiny.features import build_dag, parse_graph_entries  # noqa: E402
 DEFAULT_DIR = ROOT / "real_candidates_100_400" / "asm"
 DEFAULT_PROFILE = "e2k-v6-measured"
 
-#: Операции, которым знак не нужен (пишутся отдельной формой).
+#: Ops that do not need a symbol in `_SYMBOL` (encoded separately).
 _NO_SYMBOL_NEEDED = {"LOAD", "STORE"}
 
 
 # --------------------------------------------------------------------------
-# Сбор графов
+# Graph collection
 # --------------------------------------------------------------------------
 
 @dataclass
 class Item:
-    file: str        # имя .s без каталога
+    file: str        # .s filename without directory
     kind: str        # block | block_loop | window | window_loop
-    key: str         # ключ графа (stem#блок[wNtM])
+    key: str         # graph key (stem#block[wNtM])
     loop: bool
     dag: DAG
-    seen: int = 1    # сколько раз такой же граф встретился в корпусе
+    seen: int = 1    # occurrence count of this graph across the corpus
 
 
 def signature(dag: DAG) -> tuple:
-    """Граф с точностью до того, что видит планировщик: операции и связи."""
+    """Canonical graph signature (ops and edges as seen by the scheduler)."""
     return tuple((i.op, i.preds) for i in dag)
 
 
 def missing_symbols(dag: DAG) -> set[str]:
-    """Операции графа, которых нет в `_SYMBOL` (на них падает запись в формат)."""
+    """Ops missing from `_SYMBOL` (unencodable in prompt format)."""
     known = set(getattr(_dag_module, "_SYMBOL", {})) | _NO_SYMBOL_NEEDED
     return {i.op for i in dag} - known
 
 
 def roundtrip(dag: DAG, model) -> tuple[DAG | None, str]:
-    """Запись → чтение кодом проекта. `(граф, "")` или `(None, причина)`."""
+    """Roundtrip encode -> decode check: returns `(dag, "")` or `(None, reason)`."""
     try:
         back = build_dag(parse_graph_entries(encode_prompt(dag, model)))
     except KeyError as exc:
-        return None, f"нет знака в dag._SYMBOL: {exc.args[0] if exc.args else exc}"
-    except Exception as exc:  # noqa: BLE001 — любой отказ = «формат не записывает»
+        return None, f"missing symbol in dag._SYMBOL: {exc.args[0] if exc.args else exc}"
+    except Exception as exc:  # noqa: BLE001 — any failure means unencodable
         return None, f"{type(exc).__name__}: {exc}"
     if signature(back) != signature(dag):
-        return None, "после записи и чтения структура графа другая"
+        return None, "graph structure changed after roundtrip"
     return back, ""
 
 
 def collect(paths: list[Path], min_ops: int, windows: bool,
             win_min: int, win_max: int) -> tuple[list[Item], int]:
-    """Блоки, потом окна; повторы сливаются. Возвращает (графы, сколько повторов убрано)."""
+    """Collect blocks then windows, deduplicating identical graphs."""
     items: list[Item] = []
     index: dict[tuple, Item] = {}
     dups = 0
@@ -134,7 +96,7 @@ def collect(paths: list[Path], min_ops: int, windows: bool,
         index[sig] = it
         items.append(it)
 
-    # сначала ВСЕ блоки, потом ВСЕ окна: окно, совпавшее с целым блоком, остаётся блоком
+    # all blocks before windows so whole-block duplicates remain tagged as blocks
     for p in paths:
         for g in block_graphs_of_file(p, min_ops=min_ops):
             add(p.stem, "block_loop" if g.block.loop else "block", g.dag.key,
@@ -148,7 +110,7 @@ def collect(paths: list[Path], min_ops: int, windows: bool,
 
 
 # --------------------------------------------------------------------------
-# Поиск доказанного оптимума (в процессах-работниках)
+# Search for proven optima (worker processes)
 # --------------------------------------------------------------------------
 
 _W: dict = {}
@@ -162,7 +124,7 @@ def _init(profile: str, oracle_budget: float) -> None:
 
 
 def solve(dag: DAG, model, fast, greedy, oracle_budget: float) -> dict:
-    """Лучшее расписание и чем доказан оптимум: `bound` | `oracle` | None (не доказан)."""
+    """Return best schedule and proof source: `bound` | `oracle` | None."""
     t0 = time.perf_counter()
     base = greedy.schedule(dag, model).schedule.makespan
     lb = compute_metrics(dag, model).lower_bound
@@ -177,12 +139,12 @@ def solve(dag: DAG, model, fast, greedy, oracle_budget: float) -> dict:
         o = orc.schedule
         legal = o.complete and not o.validate()
         if orc.optimal and legal:
-            if o.makespan > best.makespan:     # доказанный оптимум не может быть хуже найденного
+            if o.makespan > best.makespan:     # proven optimum cannot be worse than an already-found valid schedule
                 raise RuntimeError(
-                    f"{dag.key}: оракул 'доказал' {o.makespan}, а крошки нашли {best.makespan}")
+                    f"{dag.key}: oracle claimed {o.makespan}, but tiny found {best.makespan}")
             best, by = o, "oracle"
         elif legal and o.makespan < best.makespan:
-            best = o                            # не доказано, но лучше — берём как лучшее найденное
+            best = o                            # unproven but shorter — keep as best known
     return {"by": by, "lb": lb, "base": base, "ms": best.makespan,
             "completion": encode_completion(best), "oracle_s": oracle_s,
             "s": time.perf_counter() - t0}
@@ -194,7 +156,7 @@ def _solve_job(job: tuple) -> tuple[int, dict]:
 
 
 # --------------------------------------------------------------------------
-# Строки файла и проверка прочитанного обратно
+# File serialization and roundtrip verification
 # --------------------------------------------------------------------------
 
 def shape_of(kind: str) -> str:
@@ -214,7 +176,7 @@ def make_row(it: Item, r: dict, model) -> dict:
 
 
 def verify_file(path: Path, model, proven: bool) -> list[str]:
-    """Прочитать файл обратно кодом проекта и сверить каждую строку. Пустой список = всё сходится."""
+    """Read back written JSONL and verify every row (empty list = all OK)."""
     problems: list[str] = []
     with path.open(encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
@@ -226,27 +188,27 @@ def verify_file(path: Path, model, proven: bool) -> list[str]:
             try:
                 dag = build_dag(parse_graph_entries(row["prompt"]))
             except Exception as exc:  # noqa: BLE001
-                problems.append(f"{tag}: граф не читается ({type(exc).__name__}: {exc})")
+                problems.append(f"{tag}: failed to parse DAG ({type(exc).__name__}: {exc})")
                 continue
             if len(dag) != meta["n"]:
-                problems.append(f"{tag}: граф разобран не целиком {len(dag)} из {meta['n']}")
+                problems.append(f"{tag}: incomplete DAG parse {len(dag)} of {meta['n']}")
                 continue
             sched = build_schedule(dag, model, decode_completion(row["completion"]))
             errs = sched.validate()
             if errs or not sched.complete:
-                problems.append(f"{tag}: расписание незаконно: {(errs or ['неполное'])[0][:80]}")
+                problems.append(f"{tag}: invalid schedule: {(errs or ['incomplete'])[0][:80]}")
                 continue
             want = meta["makespan"] if proven else meta["best_known"]
             if sched.makespan != want:
-                problems.append(f"{tag}: makespan {sched.makespan}, в meta {want}")
+                problems.append(f"{tag}: makespan {sched.makespan}, meta has {want}")
             if proven and "makespan" not in meta:
-                problems.append(f"{tag}: нет meta.makespan")
+                problems.append(f"{tag}: missing meta.makespan")
             if not proven and "makespan" in meta:
-                problems.append(f"{tag}: у недоказанного графа есть meta.makespan")
+                problems.append(f"{tag}: unproven graph must not have meta.makespan")
             if sched.makespan < meta["lb"]:
-                problems.append(f"{tag}: makespan {sched.makespan} ниже нижней границы {meta['lb']}")
+                problems.append(f"{tag}: makespan {sched.makespan} below lower bound {meta['lb']}")
             if meta["baseline"] < sched.makespan:
-                problems.append(f"{tag}: жадный {meta['baseline']} лучше записанного {sched.makespan}")
+                problems.append(f"{tag}: greedy {meta['baseline']} beats recorded {sched.makespan}")
     return problems
 
 
@@ -259,76 +221,76 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 # --------------------------------------------------------------------------
-# Сводка
+# Summary
 # --------------------------------------------------------------------------
 
 def summarize(items: list[Item], results: list[dict], skipped: Counter, dups: int,
               wall: float) -> None:
     proven = [(it, r) for it, r in zip(items, results) if r["by"]]
     opened = [(it, r) for it, r in zip(items, results) if not r["by"]]
-    print(f"\nграфов после слияния повторов: {len(items) + sum(skipped.values())} "
-          f"(повторов убрано {dups})")
+    print(f"\nunique graphs after dedup: {len(items) + sum(skipped.values())} "
+          f"(duplicates removed: {dups})")
     if skipped:
         tot = sum(skipped.values())
         why = ", ".join(f"{k} ×{v}" for k, v in skipped.most_common())
-        print(f"формат проекта не записывает: {tot} графов — {why}")
-    print(f"записано: доказанных {len(proven)}, недоказанных {len(opened)}")
+        print(f"unencodable graphs skipped: {tot} — {why}")
+    print(f"written: proven {len(proven)}, open {len(opened)}")
     if proven:
         by = Counter(r["by"] for _, r in proven)
-        print(f"  чем доказан оптимум: границей {by.get('bound', 0)}, точным поиском {by.get('oracle', 0)}")
+        print(f"  proven by: lower bound {by.get('bound', 0)}, oracle {by.get('oracle', 0)}")
         gaps = [r["base"] - r["ms"] for _, r in proven]
         zero = sum(1 for g in gaps if g == 0)
-        print(f"  жадный уже оптимален: {zero}/{len(proven)} "
-              f"({100.0 * zero / len(proven):.1f}%), лишних тактов у жадного всего {sum(gaps)}")
+        print(f"  greedy already optimal: {zero}/{len(proven)} "
+              f"({100.0 * zero / len(proven):.1f}%), total greedy excess cycles: {sum(gaps)}")
     kinds = Counter(it.kind for it, _ in proven)
     kinds_o = Counter(it.kind for it, _ in opened)
     if kinds or kinds_o:
-        print("  по видам:", ", ".join(
+        print("  by kind:", ", ".join(
             f"{k}: {kinds.get(k, 0)}+{kinds_o.get(k, 0)}"
             for k in ("block", "block_loop", "window", "window_loop")),
-            "(доказанных + недоказанных)")
+            "(proven + open)")
     if opened:
         slack = [r["ms"] - r["lb"] for _, r in opened]
-        print(f"  недоказанные: лучшее найденное выше нижней границы на {sum(slack)} тактов всего "
-              f"(не больше {max(slack)} на граф); оптимум где-то между ними")
-    print(f"время {wall:.0f} с")
+        print(f"  open graphs: total best-known slack above lower bound {sum(slack)} cycles "
+              f"(max {max(slack)} per graph)")
+    print(f"elapsed {wall:.0f} s")
 
 
 # --------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
-    # Консоль Windows бывает в узкой кодировке (cp866/cp1251): не падать на «×», «→», «≈»
+    # Avoid UnicodeEncodeError on narrow Windows console encodings
     for _stream in (sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(errors="replace")
-        except Exception:  # noqa: BLE001 — поток подменён (тесты, перенаправление)
+        except Exception:  # noqa: BLE001 — stream replaced (tests/redirect)
             pass
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("files", nargs="*", type=Path, help="файлы .s (по умолчанию весь корпус)")
+    ap.add_argument("files", nargs="*", type=Path, help=".s files (default: entire corpus)")
     ap.add_argument("--dir", type=Path, default=DEFAULT_DIR)
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
-    ap.add_argument("--min-ops", type=int, default=10, help="блоки короче не берутся")
-    ap.add_argument("--no-windows", action="store_true", help="только целые блоки")
+    ap.add_argument("--min-ops", type=int, default=10, help="minimum ops per block")
+    ap.add_argument("--no-windows", action="store_true", help="whole blocks only (no windows)")
     ap.add_argument("--win-min", type=int, default=12)
     ap.add_argument("--win-max", type=int, default=56)
     ap.add_argument("--oracle", type=float, default=3.0,
-                    help="секунд точного поиска на граф, не уложившийся в границу (0 = не запускать)")
-    ap.add_argument("--jobs", type=int, default=1, help="процессов")
+                    help="oracle budget per graph in seconds when above lower bound (0 = disable)")
+    ap.add_argument("--jobs", type=int, default=1, help="worker processes")
     ap.add_argument("--out", type=Path, default=ROOT / "eval_real.jsonl")
     ap.add_argument("--out-open", type=Path, default=ROOT / "eval_real_open.jsonl")
-    ap.add_argument("--limit", type=int, default=0, help="не больше N графов (для проб)")
+    ap.add_argument("--limit", type=int, default=0, help="cap at N graphs (for quick runs)")
     a = ap.parse_args(argv)
 
     model = get_profile(a.profile)
     paths = list(a.files) or sorted(a.dir.glob("*.s"))
     if not paths:
-        print(f"нет файлов .s в {a.dir}", file=sys.stderr)
+        print(f"no .s files in {a.dir}", file=sys.stderr)
         return 2
     t0 = time.perf_counter()
     items, dups = collect(paths, a.min_ops, not a.no_windows, a.win_min, a.win_max)
 
-    # то, что формат проекта записать не умеет, отсеивается ДО поиска
+    # filter unencodable graphs before running search
     keep: list[Item] = []
     skipped: Counter = Counter()
     for it in items:
@@ -340,8 +302,8 @@ def main(argv: list[str] | None = None) -> int:
             keep.append(it)
     if a.limit:
         keep = keep[:a.limit]
-    print(f"файлов {len(paths)}; графов к поиску {len(keep)}; профиль {model.name}; "
-          f"точный поиск {a.oracle:g} с/граф; процессов {a.jobs}", flush=True)
+    print(f"files {len(paths)}; graphs to solve {len(keep)}; profile {model.name}; "
+          f"oracle {a.oracle:g} s/graph; workers {a.jobs}", flush=True)
 
     jobs = [(i, it.dag) for i, it in enumerate(keep)]
     results: list[dict | None] = [None] * len(keep)
@@ -351,14 +313,14 @@ def main(argv: list[str] | None = None) -> int:
             for k, (i, r) in enumerate(pool.map(_solve_job, jobs, chunksize=4), 1):
                 results[i] = r
                 if k % 250 == 0:
-                    print(f"  ... {k}/{len(jobs)}  {time.perf_counter() - t0:.0f} с", flush=True)
+                    print(f"  ... {k}/{len(jobs)}  {time.perf_counter() - t0:.0f} s", flush=True)
     else:
         _init(a.profile, a.oracle)
         for k, job in enumerate(jobs, 1):
             i, r = _solve_job(job)
             results[i] = r
             if k % 250 == 0:
-                print(f"  ... {k}/{len(jobs)}  {time.perf_counter() - t0:.0f} с", flush=True)
+                print(f"  ... {k}/{len(jobs)}  {time.perf_counter() - t0:.0f} s", flush=True)
 
     rows_ok, rows_open = [], []
     for it, r in zip(keep, results):
@@ -366,15 +328,15 @@ def main(argv: list[str] | None = None) -> int:
     write_jsonl(a.out, rows_ok)
     write_jsonl(a.out_open, rows_open)
     summarize(keep, results, skipped, dups, time.perf_counter() - t0)
-    print(f"файлы: {a.out}, {a.out_open}")
+    print(f"files: {a.out}, {a.out_open}")
 
     problems = verify_file(a.out, model, True) + verify_file(a.out_open, model, False)
     if problems:
-        print(f"\nПРОВЕРКА ЗАПИСАННОГО: {len(problems)} проблем; первые:")
+        print(f"\nVERIFY WRITTEN: {len(problems)} issues; first:")
         for p in problems[:8]:
             print("  ", p)
         return 1
-    print("проверка записанного (чтение кодом проекта, законность, makespan, граница): ок")
+    print("written file verification (roundtrip, validity, makespan, lower bound): OK")
     return 0
 
 

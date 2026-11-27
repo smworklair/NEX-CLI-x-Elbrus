@@ -1,4 +1,4 @@
-// Фрагмент 4. Горнер: арифметика и загрузки из памяти в одной широкой команде.
+// Snippet 4. Horner's scheme: arithmetic and memory loads in a single wide instruction.
 {
   ldw,0  [%r10 + 0], %r20
   ldw,2  [%r10 + 4], %r21

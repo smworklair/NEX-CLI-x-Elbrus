@@ -1,4 +1,4 @@
-"""Экран выбора режима: ядро / разбор / агент."""
+"""Mode launcher screen: CORE / LAB / AGENT."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ PANELS = [
     {
         "id": "work",
         "key": "1",
-        "title": "ЯДРО",
-        "subtitle": "интерпретатор",
+        "title": "CORE",
+        "subtitle": "interpreter",
         "role": "work",
         "lines": [
             "sum 8   ·   saxpy 8   ·   fir 8",
@@ -20,8 +20,8 @@ PANELS = [
     {
         "id": "lab",
         "key": "2",
-        "title": "РАЗБОР",
-        "subtitle": "исследование",
+        "title": "LAB",
+        "subtitle": "analysis",
         "role": "lab",
         "lines": [
             "/run slotclash   /compare   /doctor",
@@ -31,12 +31,12 @@ PANELS = [
     {
         "id": "mind",
         "key": "3",
-        "title": "АГЕНТ",
-        "subtitle": "диалог",
+        "title": "AGENT",
+        "subtitle": "dialogue",
         "role": "mind",
         "lines": [
-            "почему этот участок медленный?",
-            "загрузи probe.s и разбери",
+            "why is this block slow?",
+            "load probe.s and analyze it",
         ],
     },
 ]
@@ -84,7 +84,7 @@ def render_choice(selected: int = 0, width: int | None = None) -> list[str]:
     for i, app in enumerate(PANELS):
         out += card(app, i == selected, w)
         out.append("")
-    out.append("  " + Style.dim("1 / 2 / 3 выбрать    ↑↓ Enter    q выход    /clear — сюда"))
+    out.append("  " + Style.dim("1 / 2 / 3 select    ↑↓ Enter    q quit    /clear — return here"))
     return out
 
 
@@ -107,4 +107,4 @@ def prompt_plain() -> str:
             return "mind"
         if ans in ("q", "quit", "exit"):
             return ""
-        print(Style.dim("  наберите 1, 2 или 3"))
+        print(Style.dim("  enter 1, 2, or 3"))

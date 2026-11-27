@@ -1,7 +1,5 @@
-"""Вычислительный интерпретатор: считает числа, держит память и имена.
-
-Параллельно собирает граф — его можно отдать планировщику командой go.
-Это не «текст → DAG». Сначала результат, граф — побочный продукт.
+"""Expression interpreter: evaluates numbers, manages memory/registers,
+and records a DAG as a side effect for scheduling via `go`.
 """
 
 from __future__ import annotations
@@ -20,17 +18,17 @@ _ASSIGN = re.compile(
 _STORE = re.compile(r"^(?:store|st)\s+(\w+)\s*$", re.I)
 
 KERNELS: dict[str, tuple[str, int]] = {
-    "sum":   ("сумма mem[0..n)", 8),
-    "dot":   ("скалярное произведение двух векторов длины n", 4),
-    "saxpy": ("y[i] += a*x[i], n точек", 8),
-    "chase": ("цепочка указателей длины n", 6),
-    "div":   ("n делений подряд", 4),
-    "gemm":  ("матрица n×n, n=2 или 3", 2),
-    "horner":("полином степени n схемой Горнера", 6),
-    "fir":   ("свёртка окна n", 8),
-    "rms":   ("сумма квадратов / n", 8),
-    "copy":  ("копирование n ячеек", 8),
-    "addn":  ("поэлементная сумма двух массивов", 8),
+    "sum":   ("sum of mem[0..n)", 8),
+    "dot":   ("dot product of two vectors of length n", 4),
+    "saxpy": ("y[i] += a*x[i], n points", 8),
+    "chase": ("pointer-chasing chain of length n", 6),
+    "div":   ("n consecutive divisions", 4),
+    "gemm":  ("n×n matrix multiply, n=2 or 3", 2),
+    "horner":("degree-n polynomial via Horner's scheme", 6),
+    "fir":   ("n-tap FIR convolution", 8),
+    "rms":   ("sum of squares / n", 8),
+    "copy":  ("copy n memory cells", 8),
+    "addn":  ("elementwise sum of two arrays", 8),
 }
 
 _KERNEL = re.compile(
@@ -49,30 +47,21 @@ class InterpError(ValueError):
 
 
 def _did_you_mean(name: str, known) -> str:
-    """Хвост сообщения об ошибке: что человек, скорее всего, имел в виду.
-
-    Появилось по живому промаху: на `mul m0 a0 b0` — совершенно разумную для
-    e2k строку — интерпретатор отвечал «нет имени mul» и замолкал. Человек
-    не знает, что можно писать, а инструмент знает и молчит. Тупик на ровном
-    месте, причём в первой же строке, которую набирает новый пользователь.
-
-    Похожие имена ищем всегда, а список доступного показываем, только если
-    похожих нет: иначе подсказка тонет в перечислении.
-    """
+    """Error hint suffix suggesting close matches or expression syntax."""
     import difflib
 
     pool = sorted(set(known) | set(KERNELS) | set(VERBS))
     close = difflib.get_close_matches(name, pool, n=3, cutoff=0.6)
     if close:
-        return "  может быть: " + ", ".join(close)
-    # Похожего нет — значит человек, скорее всего, пишет не на том языке.
-    # Самый частый случай: набирают мнемонику e2k (`mul m0 a0 b0`), потому
-    # что весь остальной инструмент про них и говорит. Показываем не список
-    # слов, а ФОРМУ строки: одного примера хватает, чтобы понять правило.
+        return "  did you mean: " + ", ".join(close)
+    # No close match — user may be typing e2k mnemonics instead of expressions.
+    # Show expression syntax example and available names/kernels.
+    #
+    #
     real = [n for n in sorted(known) if not n.startswith("_")]
-    tail = ("  имена: " + ", ".join(real[:8])) if real else \
-           ("  ядра: " + ", ".join(sorted(KERNELS)))
-    return ("  здесь считают выражениями, а не мнемониками e2k:\n"
+    tail = ("  names: " + ", ".join(real[:8])) if real else \
+           ("  kernels: " + ", ".join(sorted(KERNELS)))
+    return ("  use expressions here rather than e2k mnemonics:\n"
             "    a0 = load [0]      b0 = load [1]      s = a0 * b0\n"
             + tail)
 
@@ -111,10 +100,7 @@ class ExecResult:
 
 
 class Workspace:
-    """Машина: имена → числа, память, последний результат.
-
-    go отдаёт собранный граф в разбор. Счёт не зависит от планировщика.
-    """
+    """Interpreter state: named values, memory, last result, and recorded DAG."""
 
     def __init__(self) -> None:
         self.reset()
@@ -125,7 +111,7 @@ class Workspace:
         self._lp = 0
         self.log: list[str] = []
         self.last: int | None = None
-        self._b = _b("ws", "интерпретатор", "считает здесь. go — в разбор.")
+        self._b = _b("ws", "interpreter", "computes here. go — send to scheduler.")
         self._ids: dict[str, int] = {}
         self._last_node: int | None = None
         self._used_names: set[str] = set()
@@ -147,18 +133,11 @@ class Workspace:
                    src.family, src.lesson)
 
     def graph_size(self) -> int:
-        """Узлов в накопленном графе. id узла равен индексу, поэтому новые
-        операции одной строки — это диапазон [было, стало)."""
+        """Node count in the accumulated DAG (new ops from a line span [before, after))."""
         return len(self._b._instrs)
 
     def machine(self) -> dict:
-        """Полный снимок машины: имена, память, граф, служебные счётчики.
-
-        Кладётся в запись git-журнала, чтобы «вернуть» у неё было настоящим
-        чекаутом состояния ЯДРА, а не только графа участка. Внутри — одни
-        примитивы и кортежи: запись живёт дольше экрана и не должна тянуть
-        ссылок на живые объекты.
-        """
+        """Immutable snapshot of interpreter state (primitives/tuples for history checkout)."""
         b = self._b
         return {
             "regs": dict(self.regs),
@@ -175,7 +154,7 @@ class Workspace:
         }
 
     def restore(self, snap: dict) -> None:
-        """Чекаут снимка: машина становится ровно такой, как была."""
+        """Restore interpreter state from a snapshot."""
         self.regs = dict(snap["regs"])
         self.mem = list(snap["mem"])
         self._lp = snap["lp"]
@@ -218,7 +197,7 @@ class Workspace:
             left, _, right = s.partition("=")
             name = left.strip()
             if not name.isidentifier():
-                raise InterpError(f"плохое имя {name!r}")
+                raise InterpError(f"invalid name {name!r}")
             src = right.strip()
             val = self._eval(src, dest=name)
             self.regs[name] = val
@@ -231,7 +210,7 @@ class Workspace:
     def _verb(self, head: str, raw: str) -> ExecResult:
         if head in ("reset", "new"):
             self.reset()
-            return ExecResult(True, "reset", message="регистры пусты, память 1,2,3…")
+            return ExecResult(True, "reset", message="registers empty, memory 1,2,3...")
         if head in ("names", "env"):
             return ExecResult(True, "env")
         if head == "mem":
@@ -240,11 +219,11 @@ class Workspace:
             return ExecResult(True, "list")
         if head == "go":
             if self.empty() and not self.regs:
-                raise InterpError("нечего планировать — нет графа")
+                raise InterpError("nothing to schedule — DAG is empty")
             if self.empty():
-                self._b = _b("ws", "интерпретатор", "граф из вычислений")
+                self._b = _b("ws", "interpreter", "DAG from interpreter evaluation")
             return ExecResult(True, "go", value=self.last)
-        raise InterpError(f"нет команды {head}")
+        raise InterpError(f"unknown command {head}")
 
     def _mem_line(self, s: str) -> ExecResult:
         rest = s.split(None, 1)
@@ -255,18 +234,18 @@ class Workspace:
             try:
                 nums.append(int(tok, 0))
             except ValueError:
-                raise InterpError(f"mem: не число {tok!r}")
+                raise InterpError(f"mem: not a number {tok!r}")
         for i, v in enumerate(nums):
             if i >= MEM_SIZE:
                 break
             self.mem[i] = v
-        return ExecResult(True, "mem", message=f"записано {len(nums)}")
+        return ExecResult(True, "mem", message=f"wrote {len(nums)} values")
 
     def _store_line(self, s: str) -> ExecResult:
         body = re.sub(r"^(store|st)\s+", "", s, flags=re.I).strip()
         if not body:
-            raise InterpError("store что [куда]")
-        # store x        → mem[0] = x  (или последний свободный)
+            raise InterpError("usage: store <expr> [addr]")
+        # store x -> mem[0] = x (or next free slot)
         # store x 3      → mem[3] = x
         # store 9 3      → mem[3] = 9
         bits = body.rsplit(None, 1)
@@ -277,7 +256,7 @@ class Workspace:
             val = self._eval(body)
             addr = 0
         if not 0 <= addr < MEM_SIZE:
-            raise InterpError(f"адрес {addr} вне памяти 0..{MEM_SIZE - 1}")
+            raise InterpError(f"address {addr} out of range 0..{MEM_SIZE - 1}")
         self.mem[addr] = val
         if self._last_node is not None:
             self._b.op("STORE", self._fresh(f"st{addr}"), self._last_node)
@@ -340,7 +319,7 @@ class Workspace:
             return s // max(1, n)
         if k == "gemm":
             n = min(n, 3)
-            # A в mem[0:n*n], B в mem[n*n:2n*n], C в 2n*n
+            # A in mem[0:n*n], B in mem[n*n:2n*n], C at 2n*n
             out = 0
             for i in range(n):
                 for j in range(n):
@@ -358,19 +337,19 @@ class Workspace:
             return p
         raise InterpError(_unknown_kernel(k))
 
-    # --- вычисление и сборка графа ----------------------------------------
+    # --- evaluation and DAG recording -------------------------------------
     #
-    # Одна рекурсия делает обе вещи сразу: считает значение и кладёт в граф
-    # ту операцию, которую машина действительно выполнила бы. Раньше это были
-    # два независимых прохода — вычисление и отдельный разбор строки регулярным
-    # выражением — и они расходились: `x=load 0` добавлял LOAD дважды (один раз
-    # при вычислении, второй при разборе), а `t=x*a+b` не попадал в граф вовсе,
-    # потому что регулярное выражение знало только про одну бинарную операцию.
-    # Отсюда же берётся правило про константы: у числа нет узла, поэтому `a=10`
-    # ничего в граф не кладёт, а `t=a*2` кладёт умножение с одним операндом.
+    # Single recursive pass evaluates values and records corresponding DAG
+    # ops simultaneously. Constants produce no DAG node.
+    #
+    #
+    #
+    #
+    #
+    #
 
     def _fresh(self, name: str) -> str:
-        """Уникальное имя узла: одно имя в графе — одна операция."""
+        """Generate a unique DAG node name."""
         if name not in self._used_names:
             self._used_names.add(name)
             return name
@@ -385,7 +364,7 @@ class Workspace:
         return self._b.op(op, self._fresh(f"v{len(self._b._instrs)}"), *preds)
 
     def _rename(self, node: int, dest: str) -> None:
-        """Дать узлу-результату имя, под которым его назвал человек."""
+        """Assign the user's variable name to the result node."""
         ins = self._b._instrs[node]
         name = self._fresh(dest)
         text = ins.text.replace(ins.name, name, 1)
@@ -394,14 +373,14 @@ class Workspace:
     def _eval(self, s: str, dest: str | None = None) -> int:
         tokens = _tokenize(s)
         if not tokens:
-            raise InterpError("пустое выражение")
+            raise InterpError("empty expression")
         val, node, i = self._expr(tokens, 0)
         if i != len(tokens):
-            raise InterpError(f"лишнее после выражения: {tokens[i][1]}")
+            raise InterpError(f"unexpected token after expression: {tokens[i][1]}")
         self._last_node = node
         if dest:
             if node is None:
-                # имя стало просто числом — прежняя привязка к узлу неверна
+                # variable now holds a constant — clear stale node binding
                 self._ids.pop(dest, None)
             else:
                 self._rename(node, dest)
@@ -428,7 +407,7 @@ class Workspace:
 
     def _factor(self, tok: list, i: int) -> tuple[int, int | None, int]:
         if i >= len(tok):
-            raise InterpError("ожидал число, имя или load")
+            raise InterpError("expected number, name, or load")
         kind, val = tok[i]
         if kind == "num":
             return int(val), None, i + 1
@@ -440,15 +419,15 @@ class Workspace:
         if kind == "id":
             name = val
             if name not in self.regs:
-                raise InterpError(f"нет имени {name}\n"
+                raise InterpError(f"unknown name {name}\n"
                                   + _did_you_mean(name, self.regs))
             return self.regs[name], self._ids.get(name), i + 1
         if kind == "op" and val == "(":
             v, node, i = self._expr(tok, i + 1)
             if i >= len(tok) or tok[i][1] != ")":
-                raise InterpError("нет закрывающей )")
+                raise InterpError("missing closing )")
             return v, node, i + 1
-        raise InterpError(f"не понял {val!r}")
+        raise InterpError(f"unexpected token {val!r}")
 
     def _load_factor(self, tok: list, i: int) -> tuple[int, int | None, int]:
         if i < len(tok) and tok[i][0] == "num":
@@ -458,7 +437,7 @@ class Workspace:
             addr = self._lp
             self._lp += 1
         if not 0 <= addr < MEM_SIZE:
-            raise InterpError(f"load: адрес {addr} вне 0..{MEM_SIZE - 1}")
+            raise InterpError(f"load: address {addr} out of range 0..{MEM_SIZE - 1}")
         node = self._b.op("LOAD", self._fresh(f"ld{addr}"))
         return self.mem[addr], node, i
 
@@ -472,13 +451,13 @@ def _apply(op: str, a: int, b: int) -> int:
         return a * b
     if op == "/":
         if b == 0:
-            raise InterpError("деление на ноль")
+            raise InterpError("division by zero")
         return a // b
     if op == "&":
         return a & b
     if op == "<<":
         return a << (b & 31)
-    raise InterpError(f"нет операции {op}")
+    raise InterpError(f"unknown operator {op}")
 
 
 def _tokenize(s: str) -> list[tuple[str, str]]:
@@ -513,7 +492,7 @@ def _tokenize(s: str) -> list[tuple[str, str]]:
             out.append(("id", s[i:j]))
             i = j
             continue
-        raise InterpError(f"странный символ {c!r}")
+        raise InterpError(f"unexpected character {c!r}")
     return out
 
 
@@ -532,7 +511,7 @@ def _tree(b: DagBuilder, ids: list[int], prefix: str) -> int:
 
 
 def _b(key: str, title: str, lesson: str) -> DagBuilder:
-    return DagBuilder(key, title, family="интерпретатор", lesson=lesson)
+    return DagBuilder(key, title, family="interpreter", lesson=lesson)
 
 
 def kernel(kind: str, n: int | None) -> DAG:
@@ -543,13 +522,13 @@ def kernel(kind: str, n: int | None) -> DAG:
     n = default if n is None else max(2, n)
 
     if k == "sum":
-        b = _b("sum", f"сумма {n} загрузок", f"sum {n}: загрузки и дерево сложений")
+        b = _b("sum", f"sum of {n} loads", f"sum {n}: loads and reduction tree")
         r = _tree(b, [b.op("LOAD", f"v{i}") for i in range(n)], "s")
         b.op("STORE", "out", r)
         return b.build()
 
     if k == "dot":
-        b = _b("dot", f"скалярное произведение {n}", f"dot {n}: load+load+mul, дерево")
+        b = _b("dot", f"dot product {n}", f"dot {n}: load+load+mul, reduction tree")
         muls = []
         for i in range(n):
             a, c = b.op("LOAD", f"a{i}"), b.op("LOAD", f"b{i}")
@@ -558,7 +537,7 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "saxpy":
-        b = _b("saxpy", f"SAXPY ×{n}", f"saxpy {n}: запись только в двух каналах")
+        b = _b("saxpy", f"SAXPY ×{n}", f"saxpy {n}: stores limited to 2 channels")
         for i in range(n):
             x, y = b.op("LOAD", f"x{i}"), b.op("LOAD", f"y{i}")
             t = b.op("MUL", f"t{i}", x)
@@ -567,7 +546,7 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "chase":
-        b = _b("chase", f"обход ×{n}", f"chase {n}: зависимые загрузки, lat 5")
+        b = _b("chase", f"pointer chase x{n}", f"chase {n}: dependent loads, lat 5")
         p = b.op("LOAD", "p0")
         for i in range(1, n):
             p = b.op("LOAD", f"p{i}", p)
@@ -576,13 +555,13 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "div":
-        b = _b("divn", f"{n} делений", f"div {n}: очередь на порт ,5")
+        b = _b("divn", f"{n} divisions", f"div {n}: queue on exclusive port ,5")
         b.op("STORE", "out", _tree(b, [b.op("DIV", f"d{i}") for i in range(n)], "s"))
         return b.build()
 
     if k == "gemm":
         n = min(n, 3)
-        b = _b("gemm", f"матрица {n}×{n}", f"gemm {n}: независимые mul, свёртка по k")
+        b = _b("gemm", f"matrix {n}x{n}", f"gemm {n}: independent muls, reduction over k")
         for i in range(n):
             for j in range(n):
                 acc = None
@@ -594,8 +573,8 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "horner":
-        b = _b("horner", f"Горнер, степень {n}",
-               f"horner {n}: каждое mul+add ждёт предыдущее, ILP=1")
+        b = _b("horner", f"Horner, degree {n}",
+               f"horner {n}: each mul+add waits on previous, ILP=1")
         acc = b.op("LOAD", "c0")
         x = b.op("LOAD", "x")
         for i in range(1, n + 1):
@@ -606,7 +585,7 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "fir":
-        b = _b("fir", f"FIR окно {n}", f"fir {n}: независимые tap, потом свёртка")
+        b = _b("fir", f"FIR window {n}", f"fir {n}: independent taps, then reduction")
         taps = []
         for i in range(n):
             x = b.op("LOAD", f"x{i}")
@@ -616,7 +595,7 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "rms":
-        b = _b("rms", f"RMS {n}", f"rms {n}: квадраты + одно деление")
+        b = _b("rms", f"RMS {n}", f"rms {n}: squares + single division")
         sq = []
         for i in range(n):
             v = b.op("LOAD", f"v{i}")
@@ -626,14 +605,14 @@ def kernel(kind: str, n: int | None) -> DAG:
         return b.build()
 
     if k == "copy":
-        b = _b("copy", f"копирование {n}", f"copy {n}: load→store, 4 vs 2 канала")
+        b = _b("copy", f"copy {n}", f"copy {n}: load->store, 4 vs 2 channels")
         for i in range(n):
             v = b.op("LOAD", f"v{i}")
             b.op("STORE", f"o{i}", v)
         return b.build()
 
     if k == "addn":
-        b = _b("addn", f"a[i]+b[i] ×{n}", f"addn {n}: две загрузки, сложение, запись")
+        b = _b("addn", f"a[i]+b[i] ×{n}", f"addn {n}: two loads, add, store")
         for i in range(n):
             a, c = b.op("LOAD", f"a{i}"), b.op("LOAD", f"b{i}")
             s = b.op("ADD", f"s{i}", a, c)
@@ -645,12 +624,12 @@ def kernel(kind: str, n: int | None) -> DAG:
 
 def _unknown_kernel(kind: str) -> str:
     known = ", ".join(sorted(KERNELS))
-    return f"нет ядра {kind!r}. есть: {known}"
+    return f"unknown kernel {kind!r}. available: {known}"
 
 
 def parse_ir(text: str) -> DAG:
     names: dict[str, int] = {}
-    b = _b("ir", "заданная работа", "граф из записи интерпретатора")
+    b = _b("ir", "custom workload", "DAG from interpreter script")
     n_store = 0
     for raw in text.split(";"):
         line = raw.strip()
@@ -660,34 +639,34 @@ def parse_ir(text: str) -> DAG:
         if sm:
             src = sm.group(1)
             if src not in names:
-                raise InterpError(f"store {src}: такого имени ещё нет")
+                raise InterpError(f"store {src}: undefined name")
             b.op("STORE", f"st{n_store}", names[src])
             n_store += 1
             continue
         m = _ASSIGN.match(line)
         if not m:
             raise InterpError(
-                f"не разобрал «{line}». пример: a=load; b=load; t=a*b; store t")
+                f"could not parse '{line}'. example: a=load; b=load; t=a*b; store t")
         dest, left, op, right = m.group(1), m.group(2), m.group(3), m.group(4)
         if left.lower() in _UNARY and not op:
             names[dest] = b.op(_UNARY[left.lower()], dest)
             continue
         if op:
             if left not in names:
-                raise InterpError(f"нет имени {left} (сначала {left}=load или …)")
+                raise InterpError(f"undefined name {left} (define {left}=load or assign first)")
             if right not in names:
                 names[dest] = b.op(_BIN[op], dest, names[left])
             else:
                 names[dest] = b.op(_BIN[op], dest, names[left], names[right])
             continue
-        raise InterpError(f"не разобрал «{line}»")
+        raise InterpError(f"could not parse '{line}'")
     if not b._instrs:
-        raise InterpError("пустая запись")
+        raise InterpError("empty script")
     return b.build()
 
 
 def interpret(text: str) -> DAG:
-    """Граф для планировщика. Для счёта — Workspace.exec."""
+    """Parse script into a DAG for scheduling. For evaluation use Workspace.exec."""
     s = text.strip()
     km = _KERNEL.match(s)
     if km:
@@ -702,7 +681,7 @@ def interpret(text: str) -> DAG:
         pass
     if looks_like_work(s):
         return parse_ir(s)
-    raise InterpError("это не работа для машины")
+    raise InterpError("not a schedulable workload")
 
 
 def kernel_help() -> list[tuple[str, int, str]]:

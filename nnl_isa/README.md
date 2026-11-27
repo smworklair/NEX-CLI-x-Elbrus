@@ -1,64 +1,53 @@
-# nnl_isa: два ядра NNL угадывают класс мнемоники
+# `nnl_isa`: Two NNL Cores Predicting Mnemonic Classes
 
-> **Статус: эксперимент.** В CLI не включён.
+> **Status: experiment.** Not wired into the CLI.
 
-Ветка `nnl-isa` от `nnl-vliw` (`f7469eb`). Два ядра, каждое — одна сеть из четырёх блоков
-(softmax по «ничего» и ответам всех блоков). «Имя» (19 307 чисел, вектор 24) делит классы на
-целые/память, дробные, предикаты/управление, упакованные и AAU. «Употребление» (17 491 число,
-вектор 32, другая соль) делит по набору каналов. Таблица классов — в `ядра.py`.
-Метки не менялись: `MNEMONICS` и `model.py` как были.
+Branch `nnl-isa` off `nnl-vliw` (`f7469eb`). Two cores, each a single network of four blocks (softmax over "none" and all block answers). The "name" core (19,307 parameters, dim 24) splits classes into integer/memory, floating-point, predicates/control, packed SIMD, and AAU. The "usage" core (17,491 parameters, dim 32, different hash salt) splits by channel set. The class table lives in `ядра.py`.
+Labels were not modified: `MNEMONICS` and `model.py` remain unchanged.
 
-Проверка — leave-mnemonic-out, 5 фолдов, стратификация по классу. В проверке 158 мнемоник.
-Только в обучение (одна мнемоника в классе): `INCR`, `MOVAQ`. Отказ — ответ «ничего».
+Validation: leave-mnemonic-out, 5-fold, stratified by class. 158 mnemonics evaluated. Train-only (single mnemonic in class): `INCR`, `MOVAQ`. Abstention = "none" answer.
 
-## А–В. Ядра и базы (одни и те же фолды)
+## A–C. Cores vs. Baselines (Identical Folds)
 
-| | точность | доля «ничего» | точность по отвеченным |
+| | accuracy | abstention rate | accuracy on answered |
 |---|---:|---:|---:|
-| ядро «имя» | 0.8418 | 0.0253 | 0.8636 |
-| логрегрессия, токены имени | 0.9304 | 0 | 0.9304 |
-| ближайший сосед по n-граммам | 0.8291 | 0 | 0.8291 |
-| ядро «употребление» | 0.2089 | 0.0316 | 0.2157 |
-| логрегрессия, токены употребления | 0.2785 | 0 | 0.2785 |
+| "name" core | 0.8418 | 0.0253 | 0.8636 |
+| logistic regression, name tokens | 0.9304 | 0 | 0.9304 |
+| nearest neighbor on n-grams | 0.8291 | 0 | 0.8291 |
+| "usage" core | 0.2089 | 0.0316 | 0.2157 |
+| logistic regression, usage tokens | 0.2785 | 0 | 0.2785 |
 
-## Г. Ядро проверяет ядро
+## D. Cross-Core Verification
 
-Согласие (оба назвали один класс) — принять, иначе «нужна проверка ассемблером».
-Принято 30 из 158 (отказ 0.8101), из них верных 29, точность согласия 0.9667.
-Случайный отказ с той же долей, ответ ядра «имя»: ожидание 25.25 верных.
-Перекрёсток выше этой базы (29 > 25.25) и выше точности «имени» среди отвеченных (0.8636).
-Запас маленький. На 13 незнакомых согласия нет: все 13 помечены «проверить ассемблером»
-(`предложения.md`).
+Agreement (both cores predict the same class) → accept; otherwise "verify with assembler".
+Accepted 30 of 158 (abstention 0.8101), of which 29 are correct (agreement accuracy 0.9667).
+Random abstention at the same rate using the "name" core's answer gives an expected 25.25 correct.
+Cross-checking beats that baseline (29 > 25.25) and beats the "name" core's answered accuracy (0.8636), though the margin is small. On the 13 unknown mnemonics there is zero agreement: all 13 are flagged "verify with assembler" (`предложения.md`).
 
-## Д. Допущения латентности (10 классов, которые есть в файлах)
+## E. Latency Assumptions (10 Classes Present in the Files)
 
-Минимальный зазор производитель→потребитель по dst/srcs внутри функции, не через границу цикла.
-Настоящая латентность не больше минимума. Допущение больше минимума — опровержение.
-Пар < 3 — «мало данных». Минимум больше допущения — «сомнительно» (не опровержение:
-компилятор мог оставить запас). Колонка руководства — раздел 6.1, выпуск 1.2, CC BY 4.0;
-это **Е4С/Е8С, не e2k-v6**. Глава 12 — задержки пар, в колонку класса не сведена.
-Пусто там, где класса в 6.1 нет.
+Minimum producer→consumer gap by dst/srcs within a function, never crossing a loop boundary.
+True latency cannot exceed this minimum. An assumption larger than the minimum is refuted. Fewer than 3 pairs = "insufficient data". Minimum larger than the assumption = "questionable" (not a refutation, since the compiler may have left slack). The guide column cites Section 6.1, release 1.2, CC BY 4.0 — which covers **E4C/E8C, not `e2k-v6`**. Chapter 12 gives pair delays and is not folded into the class column. Blank where the class is absent from Section 6.1.
 
-| класс | допущение | пар | мин. зазор | вердикт | по руководству |
+| class | assumption | pairs | min gap | verdict | MCST guide |
 |---|---:|---:|---:|---|---|
-| AAU | 1 | 4 | 7 | сомнительно | |
-| AND | 1 | 9 | 1 | согласуется | 1 (Int, Bitwise) |
-| INCR | 1 | 0 | — | мало данных | |
-| INSF | 1 | 4 | 1 | согласуется | |
-| MERGE | 1 | 169 | 1 | согласуется | |
-| MOVA | 1 | 63 | 5 | сомнительно | |
-| PACK | 1 | 6 | 5 | сомнительно | |
-| PRED | 1 | 21 | 1 | согласуется | 0.5–3 (от потребителя) |
-| RW | 1 | 0 | — | мало данных | |
-| SHL | 1 | 167 | 1 | согласуется | 1 (Int, Bitwise) |
+| AAU | 1 | 4 | 7 | questionable | |
+| AND | 1 | 9 | 1 | consistent | 1 (Int, Bitwise) |
+| INCR | 1 | 0 | — | insufficient data | |
+| INSF | 1 | 4 | 1 | consistent | |
+| MERGE | 1 | 169 | 1 | consistent | |
+| MOVA | 1 | 63 | 5 | questionable | |
+| PACK | 1 | 6 | 5 | questionable | |
+| PRED | 1 | 21 | 1 | consistent | 0.5–3 (consumer-dependent) |
+| RW | 1 | 0 | — | insufficient data | |
+| SHL | 1 | 167 | 1 | consistent | 1 (Int, Bitwise) |
 
-Опровергнутых допущений: **0**. Сомнительны AAU, MOVA, PACK. Мало данных: INCR, RW
-(приёмник `incr`/`%lsr` в разборе не читается дальше внутри куска).
+Refuted assumptions: **0**. Questionable: AAU, MOVA, PACK. Insufficient data: INCR, RW (`incr`/`%lsr` destination is not read further within the parsed snippet).
 
-## Вывод
+## Conclusion
 
-По названию ядро NNL (0.842) чуть выше соседа по n-граммам (0.829) и ниже логрегрессии на тех же токенах (0.930). Линейной модели здесь достаточно.
-По употреблению слабо и у ядра (0.209), и у логрегрессии (0.278): в 25 файлах встречается 55 из 160 мнемоник, а каналы у многих классов общие.
-Перекрёсток отказывает в 81% случаев. На редком согласии он чуть лучше случайного отказа (29 верных против ожидания 25.3) — не повтор прошлого эксперимента, где перекрёсток был не лучше, но запас маленький.
-Опровергнутых допущений латентности нет: у всех десяти в модели стоит 1, зазора короче такта нет. Сомнительны AAU, MOVA и PACK, где минимум больше единицы.
-Ни одну из 13 незнакомых мнемоник ядра не приняли вместе; предложения в `предложения.md` в словарь не вносились.
+On mnemonic names, the NNL core (0.842) edges out n-gram nearest neighbor (0.829) but trails logistic regression on the same tokens (0.930). A linear model suffices here.
+On usage context, both the NNL core (0.209) and logistic regression (0.278) are weak: only 55 of 160 mnemonics appear across the 25 files, and many classes share identical channels.
+Cross-checking abstains 81% of the time. On the rare agreements, it slightly beats random abstention (29 correct vs. 25.3 expected) — unlike the earlier experiment where cross-checking failed to beat random, though the margin remains narrow.
+No latency assumptions were refuted: all ten default to 1, and no observed gap is shorter than 1 cycle. AAU, MOVA, and PACK are questionable, with minimums above 1.
+The two cores did not agree on any of the 13 unknown mnemonics; none of the proposals in `предложения.md` were added to the dictionary.

@@ -1,7 +1,6 @@
-"""TINY AI рядом с инструментом: честность против baseline, блоки файла, панель, контекст агента.
+"""TINY AI integration tests: parity vs. baseline, basic blocks, panel, and agent context.
 
-NNL AI из CLI убран (он оценивал «есть ли что улучшать» и в самой CLI был лишним),
-поэтому здесь проверяется только TINY AI — крошки, которые строят расписание.
+Verifies TINY Flash scheduling integration in the CLI (legacy NNL AI gate was removed).
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ class TestTinyAI(unittest.TestCase):
         base, orc, _ = s.results()
         h = ai_hints.collect(s, base, orc, with_blocks=False)
         self.assertIsNotNone(h.tiny)
-        self.assertFalse(hasattr(h, "nnl"), "NNL AI из CLI убран")
+        self.assertFalse(hasattr(h, "nnl"), "NNL AI was removed from CLI")
         self.assertEqual(h.blocks, [])
 
 
@@ -69,7 +68,7 @@ class TestAgentFacts(unittest.TestCase):
         self.assertFalse(hasattr(ai_hints, "NnlAI"))
 
 
-@unittest.skipUnless(ASM.exists(), "нет файла .s")
+@unittest.skipUnless(ASM.exists(), "sample .s file not present")
 class TestBlocks(unittest.TestCase):
     def test_blocks_sorted_by_tiny_gain(self):
         s = _session()
@@ -77,12 +76,12 @@ class TestBlocks(unittest.TestCase):
         self.assertGreater(total, 0)
         gains = [(r.tiny_gain, r.n) for r in rows]
         self.assertEqual(gains, sorted(gains, key=lambda g: (-g[0], -g[1])),
-                         "блоки идут по убыванию выигрыша крошек")
+                         "blocks must be sorted by descending TINY gain")
         for r in rows:
             self.assertLessEqual(r.tiny, r.baseline)
 
 
-@unittest.skipUnless(HAS_TEXTUAL, "textual не установлен")
+@unittest.skipUnless(HAS_TEXTUAL, "textual is not installed")
 class TestPanel(unittest.TestCase):
     def test_lab_shows_tiny_but_not_nnl(self):
         from tests.test_tui_smoke import _make_app

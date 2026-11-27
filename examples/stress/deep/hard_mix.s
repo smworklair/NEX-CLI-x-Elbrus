@@ -1,18 +1,18 @@
-! ТЯЖЁЛЫЙ СЛУЧАЙ: монополия делителя + широкое умножение + цепочка загрузок
-! + плавающая точка — четыре вида давления в одном участке
+! HARD CASE: divider monopoly + wide multiplication + load chain
+! + floating point — four kinds of pressure in a single block
 ! nex: src=31 orc=16 err=0
 !
-! Написано руками для этого проекта — НЕ вывод lcc (см. docs/REAL_VS_SYNTH.md,
-! там честная граница между настоящим кодом и синтетикой). Лежит в
-! examples/stress/deep/ — специально в СОСЕДНЕЙ папке от warmup/, чтобы
-! проверить переход между двумя каталогами через проводник (^E): открыв
-! basic_pipeline.s, дойти сюда через «..» и обратно — недавние каталоги
-! (↩) должны предложить оба одним нажатием.
+! Hand-written for this project — NOT lcc output (see docs/REAL_VS_SYNTH.md,
+! which draws an honest boundary between real code and synthetic cases). Placed in
+! examples/stress/deep/ — intentionally in a SIBLING folder to warmup/, to
+! test navigating between two directories in the file browser (^E): after opening
+! basic_pipeline.s, navigate here via ".." and back — recent directories
+! (↩) should offer both in a single keypress.
 !
-! Такты положены с запасом, не впритык: цель — дать оракулу что упаковывать
-! плотнее, а не показать идеальное расписание руками. Занятость портов и
-! латентности честные (см. таблицу в vliw/core/model.py), просто без
-! экономии на пустых тактах между зависимыми операциями.
+! Cycles are laid out with slack rather than tightly: the goal is to give the oracle
+! room to pack tighter, not to show an optimal hand-crafted schedule. Port occupancy
+! and latencies are accurate (see the table in vliw/core/model.py), just without
+! squeezing empty cycles between dependent operations.
 {
   sdivs,5 %r0, %r1, %r2
   muls,0 %r10, %r11, %r20

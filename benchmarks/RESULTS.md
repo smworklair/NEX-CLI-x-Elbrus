@@ -1,124 +1,69 @@
-# Бейчмарк фрагментов e2k
+# e2k Snippet Benchmark
 
-Профиль машины: `e2k-v6-measured` (6 портов). Точный поиск: бюджет 1.5 с на файл.
+Machine profile: `e2k-v6-measured` (6 ports). Exact search budget: 1.5 s per file.
 
-| файл | N | автор | baseline | TINY Flash | oracle | оптимум | UNKNOWN | ошибки |
+| file | N | orig | baseline | TINY Flash | oracle | optimal | UNKNOWN | errors |
 |---|---:|---:|---:|---:|---:|---|---:|---:|
-| `01_mul_latency.s` | 15 | 12 | 8 | 8 | 8 | да | 0 | 4 |
-| `02_software_pipeline.s` | 19 | 7 | 9 | 9 | 9 | да | 0 | 14 |
-| `03_predication.s` | 9 | 3 | 8 | 8 | 8 | да | 2 | 10 |
-| `04_horner_load.s` | 12 | 6 | 15 | 15 | 15 | да | 0 | 8 |
+| `01_mul_latency.s` | 15 | 12 | 8 | 8 | 8 | yes | 0 | 4 |
+| `02_software_pipeline.s` | 19 | 7 | 9 | 9 | 9 | yes | 0 | 14 |
+| `03_predication.s` | 9 | 3 | 8 | 8 | 8 | yes | 2 | 10 |
+| `04_horner_load.s` | 12 | 6 | 15 | 15 | 15 | yes | 0 | 8 |
 
-`автор` — длина расписания, как оно написано в файле. Оно может быть
-короче законного минимума: линтер показывает места, где результат прочитан
-раньше, чем операция его выдаст. `baseline`, `TINY Flash` и `oracle` строят
-расписание заново по графу зависимостей и модели машины.
+`orig` is the schedule length as written in the file. It may be shorter
+than the valid minimum: the linter flags reads issued before producer
+latency elapses. `baseline`, `TINY Flash`, and `oracle` reschedule from
+scratch using the dependency DAG and machine model.
 
-## Подробности
+## Details
 
 ### `01_mul_latency.s`
 
-- Нижняя граница: 8 (ресурсы); критический путь 7, ресурсы 8.
-- Время: baseline 0.44 мс, TINY Flash 0.857 мс, oracle 0.8 мс.
-- Расписание компилятора не восстановлено: раскладка по каналам не сходится с моделью
-- Замечания линтера:
-  - строка 5: muls в канале ,2 — этого канала у операции нет
-  - строка 6: канал ,3 в такте 0 уже занят: muls из строки 5
-  - строка 11: muls в канале ,2 — этого канала у операции нет
-  - строка 12: канал ,3 в такте 1 уже занят: muls из строки 11
+- Lower bound: 8 (resources); critical path 7, resources 8.
+- Time: baseline 0.382 ms, TINY Flash 1.588 ms, oracle 1.0 ms.
+- Compiler schedule not reconstructed: channel layout conflicts with machine model
+- Linter diagnostics:
+  - line 5: muls on channel ,2 — unsupported channel for MUL
+  - line 6: channel ,3 in cycle 0 is already busy: muls on line 5
+  - line 11: muls on channel ,2 — unsupported channel for MUL
+  - line 12: channel ,3 in cycle 1 is already busy: muls on line 11
 
 ### `02_software_pipeline.s`
 
-- Нижняя граница: 9 (ресурсы); критический путь 8, ресурсы 9.
-- Время: baseline 0.461 мс, TINY Flash 0.58 мс, oracle 0.9 мс.
-- Расписание компилятора не восстановлено: раскладка по каналам не сходится с моделью
-- Замечания линтера:
-  - строка 6: muls в канале ,2 — этого канала у операции нет
-  - строка 7: канал ,3 в такте 0 уже занят: muls из строки 6
-  - строка 13: muls в канале ,2 — этого канала у операции нет
-  - строка 14: канал ,3 в такте 1 уже занят: muls из строки 13
-  - строка 20: %r20 читается в такте 2, а muls из строки 4 отдаст его только в такте 4
-  - строка 20: %r21 читается в такте 2, а muls из строки 5 отдаст его только в такте 4
+- Lower bound: 9 (resources); critical path 8, resources 9.
+- Time: baseline 0.36 ms, TINY Flash 0.479 ms, oracle 0.7 ms.
+- Compiler schedule not reconstructed: channel layout conflicts with machine model
+- Linter diagnostics:
+  - line 6: muls on channel ,2 — unsupported channel for MUL
+  - line 7: channel ,3 in cycle 0 is already busy: muls on line 6
+  - line 13: muls on channel ,2 — unsupported channel for MUL
+  - line 14: channel ,3 in cycle 1 is already busy: muls on line 13
+  - line 20: %r20 read in cycle 2, but muls on line 4 produces it only in cycle 4
+  - line 20: %r21 read in cycle 2, but muls on line 5 produces it only in cycle 4
 
 ### `03_predication.s`
 
-- Нижняя граница: 8 (и то, и другое); критический путь 8, ресурсы 8.
-- Время: baseline 0.282 мс, TINY Flash 0.357 мс, oracle 0.6 мс.
-- Расписание компилятора не восстановлено: раскладка по каналам не сходится с моделью
-- UNKNOWN: 2 операций (`cmples`, `cmpgts`) — латентность 1 и любой канал, это заглушка, а не замер.
-- Замечания линтера:
-  - строка 6: muls в канале ,2 — этого канала у операции нет
-  - строка 7: канал ,3 в такте 0 уже занят: muls из строки 6
-  - строка 11: %r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4
-  - строка 11: %r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4
-  - строка 12: %r20 читается в такте 1, а muls из строки 6 отдаст его только в такте 4
-  - строка 12: %r21 читается в такте 1, а muls из строки 7 отдаст его только в такте 4
+- Lower bound: 8 (both); critical path 8, resources 8.
+- Time: baseline 0.212 ms, TINY Flash 0.276 ms, oracle 0.4 ms.
+- Compiler schedule not reconstructed: channel layout conflicts with machine model
+- UNKNOWN: 2 ops (`cmples`, `cmpgts`) — latency 1 and any channel (placeholder, not measured).
+- Linter diagnostics:
+  - line 6: muls on channel ,2 — unsupported channel for MUL
+  - line 7: channel ,3 in cycle 0 is already busy: muls on line 6
+  - line 11: %r20 read in cycle 1, but muls on line 6 produces it only in cycle 4
+  - line 11: %r21 read in cycle 1, but muls on line 7 produces it only in cycle 4
+  - line 12: %r20 read in cycle 1, but muls on line 6 produces it only in cycle 4
+  - line 12: %r21 read in cycle 1, but muls on line 7 produces it only in cycle 4
 
 ### `04_horner_load.s`
 
-- Нижняя граница: 15 (и то, и другое); критический путь 15, ресурсы 15.
-- Время: baseline 0.418 мс, TINY Flash 0.459 мс, oracle 0.8 мс.
-- Расписание компилятора не восстановлено: 8 замечаний, первое: r40 выдана в такте 1, но операнд r20 готов только к такту 5. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно
-- Замечания линтера:
-  - строка 10: %r20 читается в такте 1, а ldw из строки 3 отдаст его только в такте 5
-  - строка 13: %r40 читается в такте 2, а muls из строки 10 отдаст его только в такте 5
-  - строка 13: %r21 читается в такте 2, а ldw из строки 4 отдаст его только в такте 5
-  - строка 17: %r31 читается в такте 3, а muls из строки 14 отдаст его только в такте 6
-  - строка 18: %r22 читается в такте 3, а ldw из строки 8 отдаст его только в такте 6
-  - строка 21: %r43 читается в такте 4, а muls из строки 18 отдаст его только в такте 7
-
----
-
-## Настоящие блоки 112–347 операций
-
-Источник: `real_candidates_100_400/asm/`, бюджет точного поиска 2 с на файл.
-Четыре блока, те же три планировщика. Машинный отчёт: `benchmarks/results_real.json`.
-
-Профиль машины: `e2k-v6-measured` (6 портов). Точный поиск: бюджет 2 с на файл.
-
-| файл | N | автор | baseline | TINY Flash | oracle | оптимум | UNKNOWN | ошибки |
-|---|---:|---:|---:|---:|---:|---|---:|---:|
-| `cm_mul.s` | 112 | 67 | 19 | 19 | 19 | да | 0 | 1 |
-| `cm_vect.s` | 113 | 56 | 19 | 19 | 19 | да | 0 | 1 |
-| `emb_iir.s` | 256 | 124 | 44 | 43 | 43 | нет | 4 | 0 |
-| `emb_fir.s` | 347 | 82 | 61 | 60 | 60 | нет | 0 | 2 |
-
-`автор` — длина расписания, как оно написано в файле. Оно может быть
-короче законного минимума: линтер показывает места, где результат прочитан
-раньше, чем операция его выдаст. `baseline`, `TINY Flash` и `oracle` строят
-расписание заново по графу зависимостей и модели машины.
-
-## Подробности
-
-### `cm_mul.s`
-
-- Нижняя граница: 19 (и то, и другое); критический путь 19, ресурсы 19.
-- Время: baseline 3.411 мс, TINY Flash 5.024 мс, oracle 6.1 мс.
-- Расписание компилятора не восстановлено: b[12] выдана в такте 28, но операнд b[38] готов только к такту 29. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно
-- Замечания линтера:
-  - строка 162: %b[38] читается в такте 28, а muls из строки 136 отдаст его только в такте 29
-
-### `cm_vect.s`
-
-- Нижняя граница: 19 (ресурсы); критический путь 15, ресурсы 19.
-- Время: baseline 5.045 мс, TINY Flash 4.104 мс, oracle 6.3 мс.
-- Расписание компилятора не восстановлено: b[10] выдана в такте 22, но операнд b[26] готов только к такту 23. Частая причина на настоящем -O3 — конвейеризованный цикл: значение берётся из предыдущей итерации, а разбор читает файл линейно
-- Замечания линтера:
-  - строка 148: %b[26] читается в такте 22, а muls из строки 123 отдаст его только в такте 23
-
-### `emb_iir.s`
-
-- Нижняя граница: 43 (ресурсы); критический путь 24, ресурсы 43.
-- Время: baseline 16.679 мс, TINY Flash 28.215 мс, oracle 2458.0 мс.
-- Расписание компилятора не восстановлено: раскладка по каналам не сходится с моделью
-- UNKNOWN: 4 операций (`pass`, `landp`, `sar_addd`) — латентность 1 и любой канал, это заглушка, а не замер.
-
-### `emb_fir.s`
-
-- Нижняя граница: 58 (ресурсы); критический путь 24, ресурсы 58.
-- Время: baseline 20.714 мс, TINY Flash 84.338 мс, oracle 2470.1 мс.
-- Расписание компилятора не восстановлено: раскладка по каналам не сходится с моделью
-- Замечания линтера:
-  - строка 37: %r0 читается в такте 5, а ldb из строки 30 отдаст его только в такте 8
-  - строка 44: %r0 читается в такте 6, а ldb из строки 30 отдаст его только в такте 8
+- Lower bound: 15 (both); critical path 15, resources 15.
+- Time: baseline 0.298 ms, TINY Flash 0.358 ms, oracle 0.6 ms.
+- Compiler schedule not reconstructed: 8 issues, first: r40 issued in cycle 1, but operand r20 is not ready until cycle 5. Common cause on -O3 code is a software-pipelined loop: values carry from the previous iteration while the parser reads the block linearly
+- Linter diagnostics:
+  - line 10: %r20 read in cycle 1, but ldw on line 3 produces it only in cycle 5
+  - line 13: %r40 read in cycle 2, but muls on line 10 produces it only in cycle 5
+  - line 13: %r21 read in cycle 2, but ldw on line 4 produces it only in cycle 5
+  - line 17: %r31 read in cycle 3, but muls on line 14 produces it only in cycle 6
+  - line 18: %r22 read in cycle 3, but ldw on line 8 produces it only in cycle 6
+  - line 21: %r43 read in cycle 4, but muls on line 18 produces it only in cycle 7
 

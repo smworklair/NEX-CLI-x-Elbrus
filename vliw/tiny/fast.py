@@ -1,34 +1,32 @@
-"""Быстрые крошки: то же качество, меньше времени. Новый файл, старый код не тронут.
+"""Fast Tiny scheduler: same quality, less time. New file; legacy code untouched.
 
-Что здесь и почему (замеры — docs/archive/TINY_FAST.md):
+What is here and why (measurements in docs/archive/TINY_FAST.md):
 
-  1. ГРАНИЦА. У графа есть нижняя граница makespan (`DagMetrics.lower_bound`):
-     быстрее неё расписания не бывает. Если жадный уже на границе — оптимум
-     доказан, искать нечего. Если какой-то член портфеля дошёл до границы —
-     остальные ничего не улучшат. Останавливаемся. Потери качества нет по
-     построению: итоговый makespan тот же, что у полного `TinyScheduler`.
-     На 3800 графах граница ни разу не оказалась выше найденного оптимума.
+  1. LOWER BOUND. Every graph has a makespan lower bound (`DagMetrics.lower_bound`):
+     no schedule can be shorter. If greedy already hits the lower bound, optimality
+     is proven and there is nothing to search. If any portfolio member hits the lower
+     bound, no remaining member can improve on it — we stop immediately. Zero quality
+     loss by construction: final makespan matches full `TinyScheduler`.
+     Across 3800 graphs, the lower bound never exceeded the found optimum.
 
-  2. ПОРЯДОК. Группы портфеля идут не как исторически добавлялись, а по
-     «дёшево и результативно»: bh, rule, bt, prio, hold, defer. Порядок не
-     влияет на итоговый makespan при полном проходе, только на то, как рано
-     мы упрёмся в границу.
+  2. ORDERING. Portfolio groups run not in historical order, but cheapest-and-most-
+     effective first: bh, rule, bt, prio, hold, defer. Ordering does not affect final
+     makespan on a full pass, only how early we hit the lower bound.
 
-  3. БЫСТРЫЙ ВЫВОД. `FastNet` считает ровно те же числа, что
-     `TinyPriority.scores`, в том же порядке сложений (проверено на ==, не на
-     «почти»), но по строкам весов; с numpy — ещё в разы быстрее. Метрики и
-     фичи графа считаются один раз на график, а не по разу на каждую сеть.
+  3. FAST INFERENCE. `FastNet` computes the exact same numbers as `TinyPriority.scores`,
+     in the exact same addition order (verified with ==, not "almost"), row-wise over
+     weights; with numpy, several times faster. Graph metrics and features are computed
+     once per DAG instead of once per network.
 
-  4. РЕЖИМ "asm". Без групп hold и defer. На 1514 настоящих графах из ваших
-     .s эти две группы не дали ничего (после остальных), на eval_hard — 6 из
-     300. Это уже НЕ гарантия, а замер: режим выбирает вызывающий.
+  4. "asm" MODE. Drops hold and defer groups. Across 1514 real graphs from .s files,
+     those two groups added nothing after the rest; on eval_hard, 6 of 300. This is
+     an empirical measurement, not a guarantee — the caller chooses the mode.
 
-Гарантии класса `TinyFlashScheduler(mode="exact")`:
-  * makespan равен makespan `TinyScheduler` на любом графе (при корректной
-    нижней границе); не хуже жадного (жадный идёт первым, как и раньше);
-  * каждое принятое расписание прошло `validate()` и `complete`;
-  * `optimal=True` в результате ставится только когда makespan == границе,
-    то есть оптимум доказан.
+Guarantees of `TinyFlashScheduler(mode="exact")`:
+  * makespan equals `TinyScheduler` makespan on any graph (given a valid lower bound),
+    and is never worse than greedy (greedy runs first, as before);
+  * every accepted schedule passed `validate()` and `complete`;
+  * `optimal=True` is set only when makespan == lower bound (proven optimal).
 """
 
 from __future__ import annotations
@@ -44,39 +42,38 @@ from ..core.model import MachineModel
 from .features import featurize, transitive_succs
 from .scheduler import TinyScheduler
 
-try:  # numpy только ускоряет; без него тот же результат чистым Python
+try:  # numpy only speeds this up; without it pure Python gives the exact same result
     if os.environ.get("VLIW_NO_NUMPY"):
         raise ImportError
     import numpy as _np
 except Exception:  # noqa: BLE001
     _np = None
 
-#: Порядок групп: дешёвые и результативные первыми (см. docs/archive/TINY_FAST.md).
+#: Group order: cheap and effective first (see docs/archive/TINY_FAST.md).
 DEFAULT_ORDER: tuple[str, ...] = ("bh", "rule", "bt", "prio", "hold", "defer")
-#: Режим "asm": без дорогих групп, не давших ничего на настоящем коде.
+#: "asm" mode: skips expensive groups that added no wins on real assembly.
 ASM_ORDER: tuple[str, ...] = ("bh", "rule", "bt", "prio")
 _NEEDS_PRIO = frozenset({"prio", "defer", "hold", "rule", "bt"})
 
 
 # --------------------------------------------------------------------------
-# Быстрый прямой проход
+# Fast forward pass
 # --------------------------------------------------------------------------
 
 
 class FastNet:
-    """Те же числа, что `TinyPriority.scores`, в том же порядке сложений.
+    """Same numbers as `TinyPriority.scores`, in the exact same addition order.
 
-    Оригинал для каждого выхода делает s = b; s += x0*w0; s += x1*w1; ...
-    (нулевые входы пропускает). Здесь то же самое, но накопление идёт сразу по
-    всем выходам слоя списковым выражением: для каждого выхода последовательность
-    сложений та же, поэтому результат совпадает побитово.
+    The original computes s = b; s += x0*w0; s += x1*w1; ... per output
+    (skipping zero inputs). Here we accumulate across all layer outputs at once
+    via a list comprehension: each output sees the exact same addition sequence,
+    so results match bit-for-bit.
 
-    Плюс память по строкам признаков: одинаковый вход даёт одинаковый выход, так
-    что повторяющиеся строки (на настоящем коде уникальны 32 % строк внутри
-    блока и 12 % среди всех блоков) считаются один раз. Память ограничена
-    (`memo_limit` строк; при переполнении очищается целиком); ноль выключает
-    запоминание МЕЖДУ вызовами, повторы внутри одного вызова всё равно
-    считаются один раз.
+    Also memoizes by feature row: identical inputs yield identical outputs, so
+    duplicate rows (on real code, only 32% of rows are unique within a block and
+    12% across all blocks) are evaluated once. Memory is bounded (`memo_limit`
+    rows; cleared on overflow); zero disables cross-call memoization while
+    in-call duplicates are still evaluated once.
     """
 
     MEMO_LIMIT = 32768
@@ -147,9 +144,9 @@ class FastNet:
 
 
 class FastNetNp(FastNet):
-    """То же, но слоями на numpy: сложения по k идут последовательно (как в
-    оригинале), отдельными операциями умножения и сложения, без FMA и без
-    попарного суммирования, поэтому и здесь совпадение побитовое."""
+    """Same, using numpy per layer: additions over k run sequentially (as in the
+    original) with separate multiply and add ops, no FMA and no pairwise
+    summation, preserving bit-exact parity."""
 
     def __init__(self, net, memo_limit: int | None = None) -> None:
         super().__init__(net, memo_limit)
@@ -181,7 +178,7 @@ class FastNetNp(FastNet):
 
 
 def make_fast(net, use_numpy: bool | None = None, memo_limit: int | None = None):
-    """Быстрая копия сети (или None). numpy — если есть и не отключён."""
+    """Fast copy of the network (or None). Uses numpy if available and enabled."""
     if net is None:
         return None
     if use_numpy is None:
@@ -192,12 +189,12 @@ def make_fast(net, use_numpy: bool | None = None, memo_limit: int | None = None)
 
 
 # --------------------------------------------------------------------------
-# Планировщик
+# Scheduler
 # --------------------------------------------------------------------------
 
 
 class _Ctx:
-    """Всё, что считается один раз на график."""
+    """Everything computed once per DAG."""
 
     __slots__ = ("dag", "model", "metrics", "X", "prio", "rule_common", "base_cycles")
 
@@ -208,11 +205,11 @@ class _Ctx:
         self.X = None
         self.prio = None
         self.rule_common = None
-        self.base_cycles = None  # такт выдачи каждой инструкции у жадного
+        self.base_cycles = None  # greedy issue cycle for each instruction
 
 
 class TinyFlashScheduler(TinyScheduler):
-    name = "Крошки быстрые (граница + порядок групп, без потерь)"
+    name = "Fast Tiny (lower bound + group order, lossless)"
     kind = "learned"
     short = "tiny-flash"
 
@@ -228,24 +225,24 @@ class TinyFlashScheduler(TinyScheduler):
                  memo_limit: int | None = None) -> None:
         super().__init__(weights, defer_weights, hold_weights, beam)
         if mode not in ("exact", "asm"):
-            raise ValueError(f"mode: 'exact' или 'asm', получено {mode!r}")
+            raise ValueError(f"mode must be 'exact' or 'asm', got {mode!r}")
         self.mode = mode
         self.order = tuple(order) if order else (ASM_ORDER if mode == "asm" else DEFAULT_ORDER)
         unknown = set(self.order) - {"bh", "rule", "bt", "prio", "hold", "defer"}
         if unknown:
-            raise ValueError(f"неизвестные группы: {sorted(unknown)}")
+            raise ValueError(f"unknown groups: {sorted(unknown)}")
         self.stop_at_bound = stop_at_bound
-        # Трасса решений нужна экрану разбора и объяснениям; при компиляции она
-        # не нужна. True — как у TinyScheduler (один дополнительный прогон с
-        # трассой, только для победителя); False — пустая трасса, быстрее.
+        # Decision trace is needed for inspection/explanations, not during compilation.
+        # True matches TinyScheduler (one extra traced run for the winner only);
+        # False leaves trace empty for speed.
         self.with_trace = with_trace
-        # быстрые копии: те же веса, те же числа на выходе
+        # fast copies: same weights, bit-exact outputs
         self.tiny = make_fast(self.tiny, use_numpy, memo_limit)
         self.defer = make_fast(self.defer, use_numpy, memo_limit)
         self.hold = make_fast(self.hold, use_numpy, memo_limit)
         self._tl = threading.local()
 
-    # -- кэш на один вызов schedule(); вне его всё работает как у родителя ----
+    # -- single-call cache for schedule(); outside it behaves like parent ----
 
     def _ctx(self, dag: DAG, model: MachineModel) -> _Ctx | None:
         c = getattr(self._tl, "ctx", None)
@@ -300,7 +297,7 @@ class TinyFlashScheduler(TinyScheduler):
             c.rule_common = (n, m.height, m.asap, chans, occs, reach, gt)
         return c.rule_common
 
-    # -- основной вызов -------------------------------------------------------
+    # -- main entry point -----------------------------------------------------
 
     def schedule(self, dag: DAG, model: MachineModel) -> SchedulingResult:
         ctx = _Ctx(dag, model)
@@ -316,25 +313,25 @@ class TinyFlashScheduler(TinyScheduler):
         n = len(dag)
         plan = ListPlan(dag, model)
         prio_g = [float(h) for h in metrics.height]
-        raw0 = plan.run(prio_g)                      # жадный baseline, без трассы
+        raw0 = plan.run(prio_g)                      # greedy baseline, untraced
         ctx.base_cycles = raw0.cycle
         g_ms = raw0.makespan
-        # лучшее на сейчас; recipe — как воспроизвести трассу победителя
-        # (None = трасса жадного, как у TinyScheduler для жадного и вееров)
+        # best so far; recipe describes how to replay the winner trace
+        # (None = greedy trace, matching TinyScheduler for greedy and beams)
         best = {"raw": raw0, "ms": g_ms, "sched": None, "tag": "greedy", "recipe": None}
         ran: list[str] = []
         skipped: list[str] = []
-        hit: list[str | None] = [None]     # где впервые достигнута граница
-        cur = ["greedy"]                   # какая группа сейчас работает
+        hit: list[str | None] = [None]     # where the lower bound was first hit
+        cur = ["greedy"]                   # currently active group
 
         def at_bound() -> bool:
             return best["ms"] <= lb
 
         def consider(raw, tag: str, recipe) -> bool:
-            """Принять расписание, если оно ЗАКОННО и строго короче. Порядок
-            проверок другой, чем в TinyScheduler (там validate() идёт первым,
-            на каждом варианте), но принимается ровно то же множество:
-            «короче И полно И законно» не зависит от порядка проверок."""
+            """Accept a schedule if it is VALID and strictly shorter. Check order
+            differs from TinyScheduler (which calls validate() first on every
+            candidate), but the accepted set is identical:
+            (shorter AND complete AND valid) is independent of check order."""
             ms = raw.makespan
             if ms < best["ms"]:
                 sched = plan.to_schedule(raw)
@@ -360,7 +357,7 @@ class TinyFlashScheduler(TinyScheduler):
                     skipped = [g for g in self.order[k:] if applicable(g)]
                     break
                 if not applicable(grp):
-                    continue  # как у родителя: группы на крошке-1 без весов не идут
+                    continue  # same as parent: Tiny-1 groups do not run without weights
                 ran.append(grp)
                 cur[0] = grp
                 if grp == "bh":
@@ -407,18 +404,18 @@ class TinyFlashScheduler(TinyScheduler):
                                       height=metrics.height, collect_trace=True)[1]
         proved = sched.makespan <= lb
         notes = [f"tiny-flash[{self.mode}]: greedy={g_ms} -> best={sched.makespan} "
-                 f"({best['tag']}); граница={lb}"
-                 + (" — оптимум доказан границей" if proved else ""),
-                 "группы: " + (",".join(ran) if ran else "не запускались")
-                 + (f"; пропущены по границе: {','.join(skipped)}" if skipped else "")]
+                 f"({best['tag']}); lower_bound={lb}"
+                 + (" — optimal proven by lower bound" if proved else ""),
+                 "groups: " + (",".join(ran) if ran else "none run")
+                 + (f"; skipped at lower bound: {','.join(skipped)}" if skipped else "")]
         if self.tiny is None:
-            notes.append("веса priority не загружены — группы на крошке-1 выключены; "
+            notes.append("priority weights not loaded — Tiny-1 groups disabled; "
                          + (self.load_error or ""))
         if self.defer is None and "defer" in self.order:
-            notes.append("веса defer не загружены — вариант prio_defer выключен; "
+            notes.append("defer weights not loaded — prio_defer disabled; "
                          + (self.defer_error or ""))
         if self.hold is None and "hold" in self.order:
-            notes.append("веса hold не загружены — вариант prio_hold выключен; "
+            notes.append("hold weights not loaded — prio_hold disabled; "
                          + (self.hold_error or ""))
         return SchedulingResult(
             schedule=sched, trace=trace, optimal=True if proved else None, notes=notes,
@@ -432,5 +429,5 @@ class TinyFlashScheduler(TinyScheduler):
         )
 
 
-# Прежнее имя оставлено для совместимости внешних импортов и старых скриптов.
+# Previous name kept for backwards compatibility with external imports and scripts.
 TinyFastScheduler = TinyFlashScheduler

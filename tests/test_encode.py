@@ -1,13 +1,8 @@
-"""Контракт текстового формата граф ⇄ расписание.
+"""Text wire-format contract between dependency DAG prompts and schedule completions.
 
-Формат — это интерфейс между генератором датасета, обучением и валидатором.
-Расходится он молча: модель обучится на чуть другом тексте и просто станет
-хуже, никакой ошибки при этом не возникнет.
-
-Отдельно закреплено ОТСУТСТВИЕ завершающего перевода строки. Это уже стоило
-одной поломки: внешний генератор ставил '\\n' в конце промпта и ответа, из-за
-чего склейка `prompt + "\\n" + completion` давала двойной перевод строки
-ровно на стыке, где стоит EOS. См. docs/archive/EOS_INCIDENT.md.
+Locks down the exact serialization shared by dataset generation, fine-tuning,
+and validation — especially the ABSENCE of trailing newlines so
+`prompt + "\n" + completion` never inserts a double newline at the EOS boundary.
 """
 
 from __future__ import annotations
@@ -56,7 +51,7 @@ class TestPromptFormat(unittest.TestCase):
         self.assertEqual(lines, ["0 ADD", "1 MUL <- 0", "2 STORE <- 0 1"])
 
     def test_profile_name_is_in_prompt(self):
-        """Смена профиля обязана быть видна в тексте, а не только в коде."""
+        """Changing the machine profile must be reflected in the serialized prompt."""
         self.assertIn(M.name, self.p)
 
 
@@ -65,7 +60,7 @@ class TestCompletionFormat(unittest.TestCase):
         self.d = dag(("ADD", ()), ("MUL", (0,)))
         self.s = Schedule(self.d, M)
         self.s.place(1, 1, 3)
-        self.s.place(0, 0, 0)          # кладём вразнобой намеренно
+        self.s.place(0, 0, 0)          # place out of order intentionally
         self.c = encode_completion(self.s)
 
     def test_sorted_by_id_regardless_of_insertion_order(self):
@@ -80,7 +75,7 @@ class TestCompletionFormat(unittest.TestCase):
 
 class TestDecoder(unittest.TestCase):
     def test_tolerates_junk_lines(self):
-        text = ("Вот расписание:\n0: такт=0 канал=1\nпояснение от модели\n"
+        text = ("Here is the schedule:\n0: такт=0 канал=1\nmodel commentary\n"
                 "1: такт=2 канал=4\n")
         self.assertEqual(decode_completion(text), {0: (0, 1), 1: (2, 4)})
 
@@ -88,7 +83,7 @@ class TestDecoder(unittest.TestCase):
         self.assertEqual(decode_completion("7:  такт=3   канал=5"), {7: (3, 5)})
 
     def test_empty_text_gives_nothing(self):
-        self.assertEqual(decode_completion("извини, не знаю"), {})
+        self.assertEqual(decode_completion("sorry, I do not know"), {})
 
     def test_last_line_wins_on_duplicate_id(self):
         self.assertEqual(decode_completion("0: такт=1 канал=0\n0: такт=9 канал=2"),
@@ -114,11 +109,7 @@ class TestClipAndBuild(unittest.TestCase):
 
 
 class TestDatasetsMatchEncoder(unittest.TestCase):
-    """Файлы на диске должны быть в том же формате, что выдаёт encode.py.
-
-    Проверяется на первой строке каждого датасета: полный прогон делает
-    tools/validate_jsonl.py, здесь — быстрая защита от расхождения формата.
-    """
+    """On-disk JSONL datasets must match `encode.py` format (first-row fast check)."""
 
     FILES = ("dataset.jsonl", "train_merged.jsonl", "eval_wide.jsonl",
              "training/checkpoints/eval.jsonl")
@@ -137,11 +128,11 @@ class TestDatasetsMatchEncoder(unittest.TestCase):
                 self.assertEqual(p.split("\n")[0], f"профиль: {M.name}")
                 self.assertEqual(p.split("\n")[1], "граф:")
                 self.assertTrue(p.endswith("расписание:"))
-                self.assertFalse(p.endswith("\n"), "лишний перевод строки в промпте")
-                self.assertFalse(c.endswith("\n"), "лишний перевод строки в ответе")
+                self.assertFalse(p.endswith("\n"), "unexpected trailing newline in prompt")
+                self.assertFalse(c.endswith("\n"), "unexpected trailing newline in completion")
                 ids = [int(line.split(":")[0]) for line in c.split("\n")]
-                self.assertEqual(ids, sorted(ids), "строки ответа не по возрастанию id")
-        self.assertTrue(checked, "не найдено ни одного датасета для проверки")
+                self.assertEqual(ids, sorted(ids), "completion lines not sorted by op ID")
+        self.assertTrue(checked, "no dataset files found to verify")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,14 @@
-! МОНОПОЛИЯ ДЕЛИТЕЛЯ — единственный канал ,5
+! DIVIDER MONOPOLY — exclusive port ,5
 ! nex: src=22 orc=18 err=0
 !
-! Деление живёт ТОЛЬКО в канале ,5 (ассемблер отвергает
-! остальные пять), держит порт 2 такта и отдаёт результат
-! через 11. Всё это — предел машины, отыграть его нельзя.
+! Division lives ONLY on channel ,5 (the assembler rejects
+! the other five), holds the port for 2 cycles, and delivers the result
+! after 11. This is a hardware lower bound that cannot be beaten.
 !
-! А вот цепочка сложений внизу к делению не относится:
-! компилятор поставил её ПОСЛЕ, хотя пока делитель
-! считает, остальные каналы свободны. Точный поиск уводит
-! её в начало — отсюда и резерв.
+! Meanwhile, the addition chain at the bottom is independent of division:
+! the compiler placed it AFTER, even though while the divider
+! is busy, the other channels are idle. Exact search hoists
+! it to the start — that is where the headroom comes from.
 {
   sdivs,5 %r0, %r1, %r2
 }

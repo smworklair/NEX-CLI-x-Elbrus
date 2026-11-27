@@ -1,10 +1,10 @@
-"""Граф зависимостей и нижние границы makespan.
+"""Dependency DAG and makespan lower bounds.
 
-Главное здесь — свойство, а не конкретные числа: `lower_bound` обязана быть
-НАСТОЯЩЕЙ нижней границей. Если она хоть раз окажется выше достижимого
-makespan, все выводы демо («столько-то тактов можно отыграть, дальше предел
-машины») перестанут значить что-либо. Поэтому граница проверяется против
-реально построенного расписания на всех встроенных сценариях.
+The core invariant here is a mathematical property, not specific numbers:
+`lower_bound` must be a TRUE lower bound. If it ever exceeds an achievable
+makespan, every scheduling diagnostic ("N cycles recoverable; beyond that is
+the machine limit") loses credibility. We therefore verify it against actual
+schedules across all built-in scenarios and random graphs.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class TestDagBasics(unittest.TestCase):
         self.assertEqual(len(d), 2)
 
     def test_preds_must_come_earlier(self):
-        """Ацикличность держится нумерацией; нарушение обязано падать сразу."""
+        """Acyclicity is enforced by topological IDs; violations must fail immediately."""
         from vliw.core.dag import DAG, Instr
         with self.assertRaises(AssertionError):
             DAG("k", "t", "", [Instr(0, "n0", "ADD", (1,), "n0"),
@@ -52,7 +52,7 @@ class TestDagBasics(unittest.TestCase):
 class TestMetrics(unittest.TestCase):
     def test_asap_respects_latency(self):
         b = DagBuilder("k", "t")
-        m = b.op("MUL", "m")          # латентность 4
+        m = b.op("MUL", "m")          # latency 4
         b.op("ADD", "a", m)
         met = compute_metrics(b.build(), M)
         self.assertEqual(met.asap, (0, 4))
@@ -66,16 +66,16 @@ class TestMetrics(unittest.TestCase):
         self.assertEqual(met.critical_path_bound, 5)
 
     def test_resource_bound_sees_the_divider(self):
-        """Восемь делений на один порт с темпом 2 такта — упор в ресурс."""
+        """Eight divisions on a single exclusive FU with 2-cycle occupancy are resource-bound."""
         b = DagBuilder("k", "t")
         for i in range(8):
             b.op("DIV", f"d{i}")
         met = compute_metrics(b.build(), M)
-        self.assertEqual(met.binding, "ресурсы")
+        self.assertEqual(met.binding, "resources")
         self.assertGreater(met.resource_bound, met.critical_path_bound)
 
     def test_lower_bound_is_really_a_lower_bound(self):
-        """На каждом сценарии: граница <= то, что реально построено."""
+        """Across every scenario: lower_bound <= actual scheduled makespan."""
         for key, d in SCENARIOS.items():
             with self.subTest(scenario=key):
                 met = compute_metrics(d, M)
@@ -97,11 +97,11 @@ class TestMetrics(unittest.TestCase):
             met = compute_metrics(d, M)
             with self.subTest(scenario=key):
                 if met.critical_path_bound > met.resource_bound:
-                    self.assertEqual(met.binding, "критический путь")
+                    self.assertEqual(met.binding, "critical path")
                 elif met.resource_bound > met.critical_path_bound:
-                    self.assertEqual(met.binding, "ресурсы")
+                    self.assertEqual(met.binding, "resources")
                 else:
-                    self.assertEqual(met.binding, "и то, и другое")
+                    self.assertEqual(met.binding, "both")
 
 
 class TestScenarios(unittest.TestCase):
@@ -113,7 +113,7 @@ class TestScenarios(unittest.TestCase):
                 self.assertEqual(res.schedule.validate(), [])
 
     def test_scenarios_have_teaching_metadata(self):
-        """Сценарий без урока — просто граф; в этом демо он бесполезен."""
+        """Every built-in scenario must carry title, lesson, and family metadata."""
         for key, d in SCENARIOS.items():
             with self.subTest(scenario=key):
                 self.assertTrue(d.title.strip())
@@ -122,18 +122,18 @@ class TestScenarios(unittest.TestCase):
 
     def test_unknown_scenario_exits_with_list(self):
         with self.assertRaises(SystemExit) as cm:
-            get_scenario("нет-такого")
+            get_scenario("no-such-scenario")
         self.assertIn("simple4", str(cm.exception))
 
     def test_randN_shortcut(self):
         self.assertEqual(len(get_scenario("rand5")), len(random_dag(5)))
-class TestMeasuredClassScenarios(unittest.TestCase):
-    """Сценарии на классы, измеренные 30.08.2026.
 
-    До них модель знала плавающую точку, предикаты и упакованные операции,
-    но показать их было нечем: одиннадцать классов из девятнадцати не
-    встречались ни в одном сценарии. Увидеть их можно было только загрузив
-    настоящий `.s`.
+
+class TestMeasuredClassScenarios(unittest.TestCase):
+    """Scenarios exercising the e2k operation classes measured on 2026-08-30.
+
+    Previously, floating-point, predication, and packed SIMD classes existed in
+    the machine model but appeared in no built-in scenario.
     """
 
     NEW = ("twodividers", "packnarrow", "predchain")
@@ -144,15 +144,15 @@ class TestMeasuredClassScenarios(unittest.TestCase):
 
         model = get_profile("e2k-v6-measured")
         for key in self.NEW:
-            with self.subTest(сценарий=key):
+            with self.subTest(scenario=key):
                 self.assertIn(key, SCENARIOS)
                 dag = get_scenario(key)
                 res = GreedyListScheduler().schedule(dag, model)
                 self.assertEqual(res.schedule.validate(), [],
-                                 "сценарий не раскладывается законно")
+                                 "scenario failed to schedule legally")
 
     def test_new_classes_are_actually_exercised(self):
-        """Смысл сценариев — покрыть классы, которых раньше не было нигде."""
+        """Ensure built-in scenarios actually cover the newly measured op classes."""
         from vliw.core import SCENARIOS, get_scenario
 
         covered = set()
@@ -160,18 +160,14 @@ class TestMeasuredClassScenarios(unittest.TestCase):
             covered |= {i.op for i in get_scenario(key).instrs}
         for op in ("FDIV", "FADD", "FMUL", "PACK", "PACKLOG", "PRED",
                    "MERGE", "INSF", "COMBO"):
-            with self.subTest(класс=op):
-                self.assertIn(op, covered, "класс не встречается ни в одном "
-                                           "сценарии — показать его нечем")
+            with self.subTest(op_class=op):
+                self.assertIn(op, covered, "op class does not appear in any scenario")
 
     def test_every_class_used_in_a_scenario_can_be_written(self):
-        """Класс, встречающийся в сценарии, должен иметь знак для записи.
+        """Every non-memory op class used in a scenario must have a symbol in `_SYMBOL`.
 
-        Без него `DagBuilder.op()` падает KeyError при первой же попытке
-        собрать граф — именно так и обнаружилось при добавлении FDIV.
-        Проверяются классы, реально используемые в сценариях: LOAD и STORE
-        знака не имеют и не должны — они пишутся не как «a = b ⊕ c», а
-        отдельной формой, и в _SYMBOL их не было никогда.
+        Without an entry in `_SYMBOL`, `DagBuilder.op()` raises KeyError. LOAD
+        and STORE use dedicated syntax rather than infix operators.
         """
         from vliw.core import SCENARIOS, get_scenario
         from vliw.core.dag import _SYMBOL
@@ -180,22 +176,16 @@ class TestMeasuredClassScenarios(unittest.TestCase):
         for key in SCENARIOS:
             used |= {i.op for i in get_scenario(key).instrs}
         for op in sorted(used - {"LOAD", "STORE"}):
-            with self.subTest(класс=op):
+            with self.subTest(op_class=op):
                 self.assertIn(op, _SYMBOL)
 
 
 class TestIntervalLowerBound(unittest.TestCase):
-    """Интервальная нижняя граница: главное — она не имеет права соврать вверх.
+    """Interval resource lower bound: must NEVER overestimate the true optimum.
 
-    Граница используется точным поиском как точка старта углубления. Если она
-    хоть раз превысит истинный оптимум, оракул объявит недостижимым то, что
-    достижимо, — и соврёт с самым уверенным лицом, потому что «доказано».
-    Поэтому здесь свойство проверяется перебором на случайных графах, а не
-    на паре заготовленных примеров.
-
-    Второе, что стережётся, — что она реально сильнее прежней. Прежняя
-    (суммарная занятость / число каналов) не выигрывала у критического пути
-    ни на одном из 300 графов трудного эвала, то есть была мёртвым кодом.
+    The exact branch-and-bound oracle uses this lower bound as its iterative
+    deepening starting point. Overestimating even once would cause the oracle to
+    declare an achievable makespan infeasible and claim false optimality.
     """
 
     def setUp(self):
@@ -218,29 +208,24 @@ class TestIntervalLowerBound(unittest.TestCase):
                                     for x in raw])
             res = OracleScheduler(budget_s=10.0).schedule(dag, self.machine)
             if not res.optimal:
-                continue          # оптимум не доказан — сравнивать не с чем
+                continue          # optimum not proven — cannot compare
             checked += 1
             lb = compute_metrics(dag, self.machine).lower_bound
             self.assertLessEqual(
                 lb, res.schedule.makespan,
-                f"граница {lb} выше доказанного оптимума {res.schedule.makespan}")
-        self.assertGreater(checked, 20, "фикстура: оптимум доказан слишком редко")
+                f"lower bound {lb} exceeds proven optimum {res.schedule.makespan}")
+        self.assertGreater(checked, 20, "fixture: too few graphs reached proven optimality")
 
     def test_sees_contention_that_plain_division_misses(self):
-        """Граф, где делители конфликтуют во времени, а не просто «их много».
-
-        Четыре деления, все готовы сразу, все обязаны пройти через
-        единственный канал `,5` с занятием 2 такта. Деление в столбик даёт
-        4*2/1 = 8; интервальная граница обязана учесть ещё и латентность
-        деления, стоящую после последнего из них.
-        """
+        """Four ready DIVs on exclusive port ,5 (occupancy 2): naive total_occ/ports
+        gives 8, whereas the interval bound must include the trailing latency of
+        the final division (6 + 11 = 17 cycles)."""
         from vliw.core.dag import DAG, Instr, compute_metrics
 
         instrs = [Instr(i, f"d{i}", "DIV", (), f"d{i}") for i in range(4)]
         dag = DAG("divs", "", "", instrs)
         m = compute_metrics(dag, self.machine)
-        # Четыре деления на одном канале: последнее выдаётся не раньше такта 6,
-        # плюс его латентность 11 — расписание не короче 17 тактов.
+        # Four DIVs on one port: last issues no earlier than cycle 6, plus 11c latency = 17c.
         self.assertGreaterEqual(m.resource_bound, 17)
         self.assertGreaterEqual(m.lower_bound, 17)
 

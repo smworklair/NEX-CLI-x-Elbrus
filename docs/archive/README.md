@@ -1,24 +1,24 @@
-# Архив исследований
+# Research Archive
 
-> Конец маршрута · [← Разработчику](../ENTHUSIAST.md) · [Маршрут](../README.md)
+> End of the trail · [← For Developers](../ENTHUSIAST.md) · [Guide](../README.md)
 
-Исторические документы: дневники, разборы прогонов, планы и отрицательные результаты.
-Это не инструкции. Актуальные руководства — в [`../README.md`](../README.md).
+Historical documents: journals, run analyses, plans, and negative results.
+These are not instructions. Up-to-date guides are in [`../README.md`](../README.md).
 
-| документ | о чём |
+| document | about |
 |---|---|
-| [`JOURNAL.md`](JOURNAL.md) | хронология исследования: что проверяли и что оказалось неверным |
-| [`FULL_README.md`](FULL_README.md) | полная версия README: методика, калибровка, разбор ошибки модели |
-| [`CAB.md`](CAB.md) | портфель законных расписаний из одного ответа модели |
-| [`DIAG2.md`](DIAG2.md), [`DIAG3.md`](DIAG3.md) | разбор конкретных прогонов |
-| [`EOS_INCIDENT.md`](EOS_INCIDENT.md) | модель не умела заканчивать ответ |
-| [`RUNBOOK_EOS.md`](RUNBOOK_EOS.md) | прогон на Kaggle и изоляция причины |
-| [`ROADMAP.md`](ROADMAP.md) | план на момент прогона 2; историческая точка |
-| [`REDESIGN.md`](REDESIGN.md) | что в интерфейсе КОДа отложено осознанно |
-| [`RELEASE_1_1.md`](RELEASE_1_1.md) | релиз 1.1 beta человеческим языком |
-| [`ARCH_EVENTS.md`](ARCH_EVENTS.md) | ранний проект событийного контракта планировщика |
-| [`TINY_FAST.md`](TINY_FAST.md) | ранние заметки о быстрых крошках; актуальное — в [`../TINY.md`](../TINY.md) |
+| [`JOURNAL.md`](JOURNAL.md) | research chronology: what was tested and what turned out to be wrong |
+| [`FULL_README.md`](FULL_README.md) | full README version: methodology, calibration, model error analysis |
+| [`CAB.md`](CAB.md) | portfolio of legal schedules from a single model response |
+| [`DIAG2.md`](DIAG2.md), [`DIAG3.md`](DIAG3.md) | analysis of specific runs |
+| [`EOS_INCIDENT.md`](EOS_INCIDENT.md) | the model did not know how to end its response |
+| [`RUNBOOK_EOS.md`](RUNBOOK_EOS.md) | Kaggle run and root-cause isolation |
+| [`ROADMAP.md`](ROADMAP.md) | plan as of Run 2; historical snapshot |
+| [`REDESIGN.md`](REDESIGN.md) | what was deliberately deferred in the CODE UI |
+| [`RELEASE_1_1.md`](RELEASE_1_1.md) | release 1.1 beta in plain language |
+| [`ARCH_EVENTS.md`](ARCH_EVENTS.md) | early design of the scheduler event contract |
+| [`TINY_FAST.md`](TINY_FAST.md) | early notes on fast tiny schedulers; current version in [`../TINY.md`](../TINY.md) |
 
-Главный результат этой части отрицательный и не спрятан: на настоящем коде обученная LLM
-не выигрывает у случайного перебора ни на одном графе из 13. Методика и сырые данные —
+The main result of this section is negative and not hidden: on real code, the trained LLM
+does not beat random search on a single graph out of 13. Methodology and raw data —
 [`../../real_candidates_100_400/model_eval/REPORT.md`](../../real_candidates_100_400/model_eval/REPORT.md).

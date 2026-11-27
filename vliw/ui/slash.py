@@ -1,47 +1,44 @@
-"""Режим «/»: палитра команд и подстановка аргументов.
+"""Slash ('/') mode: command palette and argument completion.
 
-Это не украшение. Пока в поле есть ведущий «/», интерфейс в режиме слеша:
-фильтр по имени, стрелки по списку, Tab подставляет, пробел открывает
-аргументы, Enter выполняет, Esc закрывает.
+While the input buffer starts with '/', the UI stays in slash mode:
+prefix filtering, arrow navigation, Tab completion, Space for arguments,
+Enter to execute, Esc to dismiss.
 """
 
 from __future__ import annotations
 
 from ..core import PROFILES, SCENARIOS
 
-#: Порядок групп команд в справке и палитре. Идентификатор → заголовок.
-#: Живёт здесь, а не в cli.py: палитра вставляет заголовки сама и не должна
-#: тянуть реестр команд (cli импортирует этот модуль, не наоборот).
+#: Group order in help and the command palette: group id -> display title.
 GROUPS = [
-    ("sched",   "расписание"),
-    ("graph",   "граф · диагноз"),
-    ("machine", "модель машины"),
-    ("runs",    "прогоны"),
-    ("agent",   "агент · обучение"),
-    ("data",    "данные"),
-    ("session", "сессия"),
+    ("sched",   "schedule"),
+    ("graph",   "graph · diagnostics"),
+    ("machine", "machine model"),
+    ("runs",    "benchmarks"),
+    ("agent",   "agent · learned"),
+    ("data",    "data"),
+    ("session", "session"),
 ]
 
-#: Сколько команд должно быть на экране, чтобы появились заголовки групп.
-#: Короткий фильтр («/r» → три штуки) читается и без них.
+#: Minimum number of visible commands before group headers are inserted.
 HEADER_THRESHOLD = 8
 
-# Что предлагать после имени команды и пробела.
+# Argument suggestions after command name + space.
 _ARGS: dict[str, tuple[str, object]] = {
-    "run":     ("сценарий", sorted(SCENARIOS)),
-    "compare": ("сценарий", sorted(SCENARIOS)),
-    "play":    ("кто", ["baseline", "oracle"]),
-    "asm":     ("кто", ["baseline", "oracle"]),
-    "doctor":  ("кто", ["baseline", "oracle"]),
-    "model":   ("профиль", list(PROFILES) + ["measured", "naive"]),
-    "theme":   ("тема", None),
-    "mode":    ("панель", ["work", "lab", "mind", "code"]),
-    "code":    ("действие", ["run", "show", "save", "load", "clear"]),
+    "run":     ("scenario", sorted(SCENARIOS)),
+    "compare": ("scenario", sorted(SCENARIOS)),
+    "play":    ("which", ["baseline", "oracle"]),
+    "asm":     ("which", ["baseline", "oracle"]),
+    "doctor":  ("which", ["baseline", "oracle"]),
+    "model":   ("profile", list(PROFILES) + ["measured", "naive"]),
+    "theme":   ("theme", None),
+    "mode":    ("pane", ["work", "lab", "mind", "code"]),
+    "code":    ("action", ["run", "show", "save", "load", "clear"]),
 }
 
 
 def parse_slash(buf: str) -> tuple[str, str, str] | None:
-    """Вернуть (команда, уже набранный аргумент, хвост после /) или None."""
+    """Return (command, typed_arg, tail_after_slash) or None."""
     if not buf.startswith("/"):
         return None
     rest = buf[1:]
@@ -58,7 +55,7 @@ def command_hits(commands: list[dict], prefix: str) -> list[dict]:
 
 def _arg_values(spec) -> list[str]:
     label, values = spec
-    if values is None and label == "тема":
+    if values is None and label == "theme":
         from . import theme
 
         return theme.list_themes()
@@ -87,12 +84,7 @@ def arg_hits(command: str, typed: str) -> list[dict]:
 
 
 def _with_headers(items: list[dict]) -> list[dict]:
-    """Вставить заголовки групп в длинный список команд.
-
-    Заголовок — пункт kind="header": палитра рисует его плашкой и не даёт
-    выбрать (см. Palette.selected/step). Короткий фильтр остаётся без
-    заголовков — там они шумят, а не организуют.
-    """
+    """Insert non-selectable kind='header' rows into long command lists."""
     if len(items) < HEADER_THRESHOLD:
         return items
     titles = dict(GROUPS)
@@ -103,8 +95,6 @@ def _with_headers(items: list[dict]) -> list[dict]:
         if g != last:
             last = g
             title = titles.get(g)
-            # Команды без группы (экранные инструменты вроде /view) идут
-            # в хвосте без плашки: заголовок «пусто» хуже отсутствия.
             if title:
                 out.append({"name": "", "arg": "", "help": title,
                             "kind": "header"})
@@ -113,7 +103,7 @@ def _with_headers(items: list[dict]) -> list[dict]:
 
 
 def items_for(buf: str, commands: list[dict]) -> list[dict]:
-    """Пункты палитры для текущего буфера. Пусто — режим слеша закрыт."""
+    """Palette entries for the current buffer. Empty closes slash mode."""
     parsed = parse_slash(buf)
     if parsed is None:
         return []
@@ -125,7 +115,7 @@ def items_for(buf: str, commands: list[dict]) -> list[dict]:
 
 
 def apply_tab(buf: str, selected: dict) -> str:
-    """Tab: подставить выбранный пункт, оставить место для аргумента."""
+    """Tab: insert selected entry and leave room for an argument."""
     kind = selected.get("kind", "cmd")
     if kind == "arg":
         cmd = buf[1:].split(" ", 1)[0]
@@ -137,14 +127,14 @@ def apply_tab(buf: str, selected: dict) -> str:
 
 
 def apply_enter(buf: str, selected: dict | None) -> str:
-    """Enter: готовая команда к запуску."""
+    """Enter: finalize command string for execution."""
     if selected is None:
         return buf.strip()
     if selected.get("kind") == "arg":
         cmd = buf[1:].split(" ", 1)[0]
         return f"/{cmd} {selected['name']}"
     name = selected["name"]
-    # если уже дописали аргумент руками — не затирать
+    # Do not overwrite an argument the user already typed manually.
     rest = buf[1:]
     if " " in rest and rest.split(" ", 1)[1].strip():
         return buf.strip()
@@ -152,7 +142,7 @@ def apply_enter(buf: str, selected: dict | None) -> str:
 
 
 def complete_plain(buf: str, commands: list[dict]) -> list[str]:
-    """Варианты для Tab в построчном режиме (readline)."""
+    """Tab completions for plain line-by-line mode (readline)."""
     if " " not in buf:
         bare = buf.lstrip("/")
         return sorted("/" + c["name"] for c in commands if c["name"].startswith(bare))

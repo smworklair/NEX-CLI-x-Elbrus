@@ -1,14 +1,6 @@
-"""Разбор проигрышей портфеля: где tiny не дотянул до оптимума.
+"""Analyze portfolio suboptimalities: where Tiny falls short of CP-SAT optimum.
 
-Вопрос после tiny_gap.py: разрыв топ-1/топ-2 скоров провал не предсказывает,
-ворота по gap'у отпадают. Тогда смотрим в лоб — какие графы остаются
-неоптимальными и чем они похожи: shape из meta, размер, наличие DIV
-(монопольный порт ,5), кто выиграл в портфеле.
-
-Правда — meta из eval-файла (makespan=доказанный оптимум CP-SAT),
-пересчитывать оракул не надо. Ничего не меняет в планировщике.
-
-Запуск (около минуты на eval_hard):
+Usage:
     .venv/bin/python tools/tiny_losses.py [limit]
 """
 
@@ -41,7 +33,7 @@ def main() -> None:
     prof = get_profile("e2k-v6-measured")
     sched = TinyScheduler()
     if sched.tiny is None:
-        print("нет весов priority — разбирать нечего")
+        print("priority weights missing — nothing to analyze")
         raise SystemExit(1)
     lines = open(ROOT / "eval_hard.jsonl", encoding="utf-8").readlines()
     if limit:
@@ -66,12 +58,12 @@ def main() -> None:
         })
     n = len(rows)
     bad = [r for r in rows if r["loss"] > 0]
-    print(f"n={n} неоптимальных: {len(bad)} "
+    print(f"n={n} suboptimal: {len(bad)} "
           f"({len(bad) / max(n, 1):.0%}), "
-          f"суммарный перебор тактов: {sum(r['loss'] for r in bad)}")
+          f"total excess cycles: {sum(r['loss'] for r in bad)}")
     print()
     print(f"{'shape':>10} {'n':>4} {'opt%':>5} "
-          f"{'ср.перебор':>10} {'кто выигрывал':>30}")
+          f"{'avg_gap':>10} {'winners':>30}")
     for shape in sorted({r["shape"] for r in rows}):
         sub = [r for r in rows if r["shape"] == shape]
         opt = sum(1 for r in sub if r["loss"] == 0)
@@ -81,8 +73,8 @@ def main() -> None:
         print(f"{shape:>10} {len(sub):>4} {opt / len(sub):>5.0%} "
               f"{avg:>10.2f} {str(wins):>30}")
     print()
-    for label, pred in (("с DIV", lambda r: r["div"]),
-                        ("без DIV", lambda r: not r["div"]),
+    for label, pred in (("with DIV", lambda r: r["div"]),
+                        ("without DIV", lambda r: not r["div"]),
                         ("n<=20", lambda r: r["n"] <= 20),
                         ("n>20", lambda r: r["n"] > 20)):
         sub = [r for r in rows if pred(r)]
@@ -91,10 +83,10 @@ def main() -> None:
         opt = sum(1 for r in sub if r["loss"] == 0)
         avg = sum(r["loss"] for r in sub) / len(sub)
         print(f"{label:>8}: n={len(sub):>4} opt={opt / len(sub):.0%} "
-              f"ср.перебор={avg:.2f}")
+              f"avg_gap={avg:.2f}")
     print()
     print(f"{'idx':>4} {'shape':>8} {'n':>3} {'opt':>4} "
-          f"{'base':>4} {'tiny':>4} {'перебор':>7} {'winner':>10}")
+          f"{'base':>4} {'tiny':>4} {'gap':>7} {'winner':>10}")
     for r in sorted(bad, key=lambda r: -r["loss"])[:10]:
         print(f"{r['idx']:>4} {r['shape']:>8} {r['n']:>3} {r['opt']:>4} "
               f"{r['base']:>4} {r['tiny']:>4} {r['loss']:>7} "

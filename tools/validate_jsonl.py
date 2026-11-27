@@ -1,17 +1,6 @@
-"""Проверка датасета настоящим валидатором проекта.
-
-Прогоняет каждую строку jsonl (`prompt` + `completion`) через
-`Schedule.validate()` из `vliw.core` — не через копию логики в генераторе и не
-через самодостаточный `validate_kaggle.py`. Смысл именно в этом: если модель
-мира в генераторе разъедется с `vliw/core/model.py`, увидно будет здесь.
-
-Печатается только сводка — файл на 20 000 строк целиком читать незачем:
+"""Validate JSONL datasets with the core `Schedule.validate()` engine.
 
     python tools/validate_jsonl.py dataset.jsonl vliw_train_extra_fixed.jsonl
-
-Разрыв до оптимума = makespan построенного расписания минус `meta.makespan`.
-Для примеров, где расписание считалось CP-SAT'ом, `meta.makespan` — доказанный
-минимум, поэтому разрыв обязан быть нулевым.
 """
 
 from __future__ import annotations
@@ -32,11 +21,11 @@ from vliw.core.schedule import Schedule                            # noqa: E402
 
 
 def parse_prompt(prompt: str) -> list[Instr]:
-    """Промпт → инструкции. Шапка (2 строки) и хвост `расписание:` отбрасываются."""
+    """Parse prompt lines into instructions (skipping header and trailing schedule marker)."""
     instrs: list[Instr] = []
     for line in prompt.split("\n")[2:]:
         line = line.strip()
-        if line == "расписание:":
+        if line in ("schedule:", "\u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435:"):
             break
         if not line:
             continue
@@ -64,12 +53,12 @@ def check_file(path: Path, profile: str, show: int) -> bool:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                # Номер строки печатаем СВОЙ, а не exc.lineno: разбираем по
-                # строке за раз, и внутри одной строки парсер всегда видит
-                # первую — на файле в 20 000 строк «строка 1» бесполезна.
-                print(f"\n{path.name}: строка {lineno} не разбирается как "
+                # Report file line number rather than exc.lineno (always 1 per line).
+                #
+                #
+                print(f"\n{path.name}: line {lineno} failed to parse as "
                       f"JSON ({exc.msg}).")
-                print("  здесь ждут по одному JSON-объекту на строку")
+                print("  expected one JSON object per line")
                 return False
             instrs = parse_prompt(row["prompt"])
             decoded = decode_completion(row["completion"])
@@ -82,10 +71,10 @@ def check_file(path: Path, profile: str, show: int) -> bool:
             errs = sched.validate()
             meta_n = row.get("meta", {}).get("n")
             if meta_n is not None and meta_n != len(instrs):
-                errs = errs + [f"граф разобран не целиком: {len(instrs)} из {meta_n}"]
+                errs = errs + [f"incomplete DAG parse: {len(instrs)} of {meta_n}"]
             stray = sorted(i for i in decoded if not (0 <= i < len(instrs)))
             if stray:
-                errs = errs + [f"id вне графа в ответе: {stray}"]
+                errs = errs + [f"out-of-range instruction IDs in completion: {stray}"]
 
             if errs:
                 bad += 1
@@ -93,7 +82,7 @@ def check_file(path: Path, profile: str, show: int) -> bool:
                     reasons.get(errs[0].split(":")[0][:48], 0) + 1
                 if shown < show:
                     shown += 1
-                    print(f"  [строка {lineno}] {errs[:3]}")
+                    print(f"  [line {lineno}] {errs[:3]}")
                 continue
 
             k = len(instrs)
@@ -102,35 +91,35 @@ def check_file(path: Path, profile: str, show: int) -> bool:
             if "makespan" in row.get("meta", {}):
                 gaps.append(sched.makespan - row["meta"]["makespan"])
 
-    # Пустой файл — это не «всё в порядке». Обрезанный при копировании или
-    # недокачанный датасет проходил как «ИТОГ: ОК» с нулём примеров, и
-    # проверка молча подтверждала то, чего не проверяла.
+    # Treat empty files as failures, not silent PASS.
+    #
+    #
     if n == 0:
-        print(f"\n{path.name}  (профиль {model.name})")
-        print("  примеров:             0")
-        print("  ИТОГ: ПУСТО — проверять нечего, ни одного примера в файле")
+        print(f"\n{path.name}  (profile {model.name})")
+        print("  examples:             0")
+        print("  RESULT: EMPTY — no examples to validate")
         return False
 
-    print(f"\n{path.name}  (профиль {model.name})")
-    print(f"  примеров:             {n}")
-    print(f"  невалидных:           {bad}")
+    print(f"\n{path.name}  (profile {model.name})")
+    print(f"  examples:             {n}")
+    print(f"  invalid:              {bad}")
     if reasons:
         for r, k in sorted(reasons.items(), key=lambda kv: -kv[1]):
             print(f"      {k:>6}  {r}")
     if gaps:
         avg = sum(gaps) / len(gaps)
-        print(f"  разрыв до оптимума:   min={min(gaps)} max={max(gaps)} "
-              f"среднее={avg:.4f}  (посчитан у {len(gaps)})")
+        print(f"  gap to optimum:       min={min(gaps)} max={max(gaps)} "
+              f"mean={avg:.4f}  (computed on {len(gaps)})")
         worse = sum(1 for g in gaps if g > 0)
         better = sum(1 for g in gaps if g < 0)
         if worse or better:
-            print(f"      хуже meta: {worse}, лучше meta: {better} "
-                  f"(<0 значит meta.makespan не оптимум)")
+            print(f"      worse than meta: {worse}, better than meta: {better} "
+                  f"(<0 means meta.makespan is not optimal)")
     if n_instr_min is not None:
-        print(f"  инструкций в графе:   {n_instr_min}..{n_instr_max}")
+        print(f"  instructions/graph:   {n_instr_min}..{n_instr_max}")
 
     ok = bad == 0 and (not gaps or max(gaps) == 0)
-    print(f"  ИТОГ: {'ОК' if ok else 'ЕСТЬ ПРОБЛЕМЫ'}")
+    print(f"  RESULT: {'OK' if ok else 'ISSUES FOUND'}")
     return ok
 
 
@@ -140,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("files", nargs="+", type=Path)
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--show", type=int, default=3,
-                    help="сколько первых сбойных примеров распечатать")
+                    help="number of failing examples to print")
     args = ap.parse_args(argv)
 
     ok = all([check_file(p, args.profile, args.show) for p in args.files])

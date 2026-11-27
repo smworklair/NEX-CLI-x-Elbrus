@@ -1,1 +1,1 @@
-"""Экраны NEX: выбор режима и три самостоятельных рабочих места."""
+"""NEX screens: mode picker and the four workspaces."""

@@ -1,10 +1,8 @@
-"""Скелет ограниченной генерации: что подставлено, что выбирает модель.
+"""Constrained decoding skeleton: forced literals vs. model-chosen issue ports.
 
-Проверяется чистая часть (`plan_segments`) — без torch и без GPU. Сам цикл
-инференса (`constrained_generate`) требует модели и проверяется на Kaggle;
-здесь закреплено то, ради чего ограничение и вводилось: структура ответа
-задана скелетом, а канал выбирается только из портов, на которых операция
-физически исполнима.
+Tests the pure-Python `plan_segments` planner without torch or GPU. Ensures the
+completion skeleton enforces structure and restricts issue-port choices strictly
+to functional units that physically support each operation class.
 """
 
 from __future__ import annotations
@@ -19,11 +17,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_validate_kaggle():
-    """validate_kaggle.py самодостаточен и не импортируется как пакет.
-
-    Грузим по пути: тяжёлые torch/peft там внутри main(), на уровне модуля
-    только stdlib — импорт дёшев и на машине без GPU.
-    """
+    """Load standalone `validate_kaggle.py` by path (torch/peft stay inside main())."""
     spec = importlib.util.spec_from_file_location(
         "validate_kaggle", _ROOT / "training" / "validate_kaggle.py")
     mod = importlib.util.module_from_spec(spec)
@@ -41,12 +35,12 @@ def instrs(*specs):
 class TestPlanSegments(unittest.TestCase):
     def test_skeleton_shape(self):
         segs = VK.plan_segments(instrs(("ADD", ()), ("MUL", (0,))))
-        # на инструкцию: «\nN: такт=» → цифры такта → « канал=» → цифра канала
+        # per op: "\nN: такт=" -> cycle digits -> " канал=" -> port digit
         self.assertEqual([s[0] for s in segs],
                          ["force", "digits", "force", "choice"] * 2)
 
     def test_forced_text_matches_training_format(self):
-        """prompt + '\\n' + completion, строки через '\\n', хвоста нет."""
+        """prompt + '\\n' + completion, lines joined by '\\n', no trailing junk."""
         segs = VK.plan_segments(instrs(("ADD", ()), ("ADD", ())))
         forced = [s[1] for s in segs if s[0] == "force"]
         self.assertEqual(forced[0], "\n0: такт=")
@@ -54,7 +48,7 @@ class TestPlanSegments(unittest.TestCase):
         self.assertTrue(all(f == " канал=" for f in forced[1::2]))
 
     def test_channels_limited_to_executable_ports(self):
-        """Канал выбирается лишь там, где операция исполнима — по model.py."""
+        """Issue port is restricted strictly to legal functional units from model.py."""
         for op in ("ADD", "MUL", "DIV", "LOAD", "STORE"):
             with self.subTest(op=op):
                 segs = VK.plan_segments(instrs((op, ())))
@@ -62,7 +56,7 @@ class TestPlanSegments(unittest.TestCase):
                 self.assertEqual(choice[1], MODEL.channels_for(op))
 
     def test_divider_choice_is_single_port(self):
-        """У деления выбора нет вовсе: единственный порт ,5."""
+        """DIV has no port choice at all: exclusive port ,5 only."""
         segs = VK.plan_segments(instrs(("DIV", ())))
         self.assertEqual(next(s for s in segs if s[0] == "choice")[1], (5,))
 
@@ -78,12 +72,12 @@ class TestPlanSegments(unittest.TestCase):
 
 
 class TestRenderedSkeleton(unittest.TestCase):
-    """Собранный из скелета ответ обязан разбираться штатным парсером."""
+    """A completion assembled from the skeleton must parse cleanly with the standard decoder."""
 
     def test_roundtrip_through_decoder(self):
         d = instrs(("ADD", ()), ("DIV", ()), ("MUL", (0,)))
         segs = VK.plan_segments(d)
-        # подставляем вместо модели: такт=0 и первый допустимый канал
+        # substitute for the model: cycle 0 and first legal issue port
         parts = []
         for s in segs:
             if s[0] == "force":
@@ -96,15 +90,15 @@ class TestRenderedSkeleton(unittest.TestCase):
 
         decoded = VK.decode_completion(text)
         self.assertEqual(sorted(decoded), [0, 1, 2])
-        self.assertEqual(decoded[1][1], 5, "деление обязано попасть на ,5")
+        self.assertEqual(decoded[1][1], 5, "DIV must be placed on exclusive port ,5")
         keep, extra = VK.clip_placements(decoded, len(d))
-        self.assertEqual(extra, [], "лишних id скелет породить не может")
-        self.assertEqual(len(keep), len(d), "дыр в id скелет породить не может")
+        self.assertEqual(extra, [], "skeleton cannot emit out-of-range op IDs")
+        self.assertEqual(len(keep), len(d), "skeleton cannot omit op IDs")
 
 
 class TestDigitTokens(unittest.TestCase):
     def test_rejects_multi_token_digits(self):
-        """Токенизатор, склеивающий цифры, обязан быть отвергнут явно."""
+        """A tokenizer that merges multi-digit tokens must be rejected explicitly."""
         class FakeTok:
             def __call__(self, s, add_special_tokens=True):
                 return {"input_ids": [1, 2] if s == "7" else [1]}

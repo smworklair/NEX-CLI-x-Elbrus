@@ -1,8 +1,7 @@
-"""Отрисовка структурного разбора (типизированный агент).
+"""Structured analysis renderer (typed analyst agent).
 
-У структуры фиксированные поля, поэтому и вид фиксированный: вердикт, причина,
-план с ожидаемым выигрышем, чего анализ не учитывает. Это не диалог — это
-отчёт, который каждый раз выглядит одинаково и потому читается по диагонали.
+Fixed schema fields give a consistent report layout: verdict, root cause,
+plan with expected cycle gains, and model caveats.
 """
 
 from __future__ import annotations
@@ -14,9 +13,9 @@ from .render import Style, paint, wrap
 BAR = "│"
 
 _CONF = {
-    "high": ("success", "высокая"),
-    "medium": ("warning", "средняя"),
-    "low": ("dim", "низкая"),
+    "high": ("success", "high"),
+    "medium": ("warning", "medium"),
+    "low": ("dim", "low"),
 }
 
 
@@ -25,20 +24,20 @@ def render_analysis(a: Analysis, scenario: str = "") -> list[str]:
     bar = paint("accent2", BAR)
     out: list[str] = []
 
-    out.append(f"  {bar} {paint('accent2', 'РАЗБОР')}"
+    out.append(f"  {bar} {paint('accent2', 'ANALYSIS')}"
                + Style.dim(f"   {scenario}" if scenario else ""))
     out.append(f"  {bar}")
     out += wrap(paint("title", a.verdict), render.W, f"  {bar} ")
     out.append(f"  {bar}")
 
-    out.append(f"  {bar} {Style.dim('причина')}")
+    out.append(f"  {bar} {Style.dim('root cause')}")
     out += wrap(a.root_cause, render.W, f"  {bar}   ")
 
     if a.plan:
         out.append(f"  {bar}")
-        out.append(f"  {bar} {Style.dim('план')}")
+        out.append(f"  {bar} {Style.dim('plan')}")
         for i, s in enumerate(a.plan, 1):
-            gain = (paint("success", f"-{s.gain_cycles} т.")
+            gain = (paint("success", f"-{s.gain_cycles} cyc")
                     if s.gain_cycles > 0 else Style.dim("—"))
             head = f"{i}. {s.step}"
             lines = wrap(head, render.W - 14, f"  {bar}   ")
@@ -49,17 +48,17 @@ def render_analysis(a: Analysis, scenario: str = "") -> list[str]:
 
     if a.risk:
         out.append(f"  {bar}")
-        out.append(f"  {bar} {Style.dim('чего анализ не учитывает')}")
+        out.append(f"  {bar} {Style.dim('model caveats')}")
         out += wrap(Style.dim(a.risk), render.W, f"  {bar}   ")
 
     out.append(f"  {bar}")
-    line = f"  {bar} {Style.dim('уверенность')} {paint(role, conf_word)}"
+    line = f"  {bar} {Style.dim('confidence')} {paint(role, conf_word)}"
     if a.total_gain > 0:
-        line += Style.dim(f"   ·   суммарно по плану ") + paint("success", f"-{a.total_gain} т.")
+        line += Style.dim("   ·   total plan gain ") + paint("success", f"-{a.total_gain} cyc")
     if a.tokens:
-        line += Style.dim(f"   ·   {a.tokens} токенов")
+        line += Style.dim(f"   ·   {a.tokens} tokens")
     if a.offline:
-        line += paint("warning", "   ·   офлайн (модель недоступна)")
+        line += paint("warning", "   ·   offline (model unavailable)")
     out.append(line)
     if a.offline and a.error:
         out += wrap(Style.dim(a.error), render.W, f"  {bar}   ")

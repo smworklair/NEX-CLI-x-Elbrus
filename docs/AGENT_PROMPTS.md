@@ -1,28 +1,25 @@
-# Агент: как спрашивать
+# Agent: How to Ask Questions
 
-> Этап 7 из 13 · [← ЯДРО](CORE_MODE.md) · [Маршрут](README.md) · [Оркестр →](ORCHESTRA.md)
+> Stage 7 of 13 · [← CORE](CORE_MODE.md) · [Roadmap](README.md) · [Orchestra →](ORCHESTRA.md)
 
-Агент отвечает по числам, которые планировщик уже посчитал для текущего участка. Перед ответом он может
-сам выполнить то, что явно следует из вопроса: загрузить файл, переключить сценарий, досчитать расписание.
+The agent answers based on the numbers the scheduler has already computed for the current block. Before answering, it can automatically perform actions implied by your question: load a file, switch scenarios, or finish computing the schedule.
 
-Спросить можно из рабочего места (вкладка АГЕНТ) или одной командой:
+You can ask from the workspace (AGENT tab) or with a single command:
 
 ```bash
-python -m vliw ask "почему этот участок медленный?"
+python -m vliw ask "why is this block slow?"
 ```
 
-## Ключ
+## API Key
 
-Без ключа агент не молчит: он отвечает офлайн по посчитанным данным (жадный, точный поиск и TINY AI).
-С ключом он объясняет те же факты свободным языком.
+Without a key, the agent does not stay silent: it answers offline from computed data (greedy, exact search, and TINY AI). With a key, it explains those same facts in natural language.
 
-- Ключ вставляется прямо в диалог или командой `/ai ПРОВАЙДЕР key=...`.
-- Живёт только до закрытия терминала: ни в `.env`, ни в git, ни в историю не пишется.
-- Провайдер часто угадывается по виду ключа.
-- Состояние: `/ai`. Второй провайдер: `/ai gemini`, затем `/key ...`.
+- Paste the key directly into the chat or run `/ai PROVIDER key=...`.
+- It lives only until the terminal closes: never written to `.env`, git, or command history.
+- The provider is often auto-detected from the key format.
+- Status: `/ai`. Switch provider: `/ai gemini`, then `/key ...`.
 
-Поддерживаются: `mistral` (по умолчанию), `gemini`, `openai`, `deepseek`, `qwen`, `kimi`, `vercel`,
-`grok`, `anthropic`, `glm`, `muse`, `openrouter`, `gigachat`, `yandex`, `local`, `local-server`, `custom`.
+Supported providers: `mistral` (default), `gemini`, `openai`, `deepseek`, `qwen`, `kimi`, `vercel`, `grok`, `anthropic`, `glm`, `muse`, `openrouter`, `gigachat`, `yandex`, `local`, `local-server`, `custom`.
 
 ```text
 /ai deepseek key=sk-...
@@ -31,37 +28,35 @@ python -m vliw ask "почему этот участок медленный?"
 /ai local-server url=http://localhost:11434/v1 model=qwen2.5:3b
 ```
 
-## Проверенные вопросы
+## Tested Prompts
 
-Эти формулировки показаны в приветствии и точно попадают в то, что агент понимает:
+These phrasings appear in the welcome message and match what the agent reliably handles:
 
 ```text
-почему этот участок медленный?
-где теряются такты и что менять?
-загрузи examples/probe.s и разбери
-сравни baseline с точным поиском
-что за монопольный порт ,5?
+why is this block slow?
+where are cycles lost and what should change?
+load examples/probe.s and analyze it
+compare baseline with exact search
+what is the monopoly port ,5?
 ```
 
-Можно спросить и своими словами — с подключённой моделью ответ будет живым, но не гарантированно верным.
+You can also ask in your own words — with a connected model the response will be conversational, though not guaranteed to be accurate.
 
-## Что происходит на самом деле
+## What Actually Happens
 
-- **«Загрузи ФАЙЛ и разбери»** — агент действительно парсит файл и ставит его текущим участком.
-- **«Переключись на сценарий ИМЯ»** — сценарий меняется по-настоящему.
-- **Содержательный вопрос** сначала досчитывает расписание, если оно ещё не посчитано.
-- **Приветствие** не запускает тяжёлый счёт.
+- **"Load FILE and analyze it"** — the agent actually parses the file and sets it as the current block.
+- **"Switch to scenario NAME"** — the active scenario actually changes.
+- **Substantive question** — computes the schedule first if it has not been computed yet.
+- **Greeting** — does not trigger heavy computation.
 
-## Честно про точность
+## Honest Note on Accuracy
 
-Числа в панели ЧИСЛА и на решётке не врут. Слова модели поверх них иногда могут.
-На проверке этого документа модель ответила, что `g1` стоит на канале `,2`, хотя на самом деле на `,1`.
-Поэтому конкретное число лучше перепроверять глазами по решётке.
+The numbers in the NUMBERS panel and on the schedule grid do not lie. A model's prose layered on top of them sometimes can.
+While verifying this document, a model claimed `g1` was scheduled on channel `,2`, when it was actually on `,1`. Always double-check specific figures visually against the grid.
 
-Это тот же вывод, что и в [архиве исследований](archive/CAB.md): модель не добавляет надёжности
-к тому, что уже посчитано точно.
+This echoes the conclusion in the [research archive](archive/CAB.md): an LLM does not add reliability to what has already been computed exactly.
 
-## Куда смотреть дальше
+## Where to Look Next
 
-- [`ORCHESTRA.md`](ORCHESTRA.md) — диалог, штаб, подключение моделей, крошки.
-- [`../vliw/agent/`](../vliw/agent/) — код агента.
+- [`ORCHESTRA.md`](ORCHESTRA.md) — dialogue, HQ, model connections, TINY AI.
+- [`../vliw/agent/`](../vliw/agent/) — agent source code.

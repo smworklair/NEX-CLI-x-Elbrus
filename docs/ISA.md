@@ -1,68 +1,64 @@
-# Эльбрус e2k-v6: во что обходятся операции
+# Elbrus e2k-v6: Operation Costs
 
-> Этап 10 из 13 · [← TINY AI](TINY.md) · [Маршрут](README.md) · [Настоящее против синтетики →](REAL_VS_SYNTH.md)
+> Stage 10 of 13 · [← TINY AI](TINY.md) · [Roadmap](README.md) · [Real vs. Synthetic →](REAL_VS_SYNTH.md)
 
-Профиль `e2k-v6-measured`: 24 класса операций, 160 размеченных мнемоник.
-Собрано генератором из `vliw/core/model.py`; проверить и пересобрать — `python -m vliw isa --out docs/ISA.md`.
+Profile `e2k-v6-measured`: 24 operation classes, 160 annotated mnemonics.
+Generated from `vliw/core/model.py`; verify and regenerate via `python -m vliw isa --out docs/ISA.md`.
 
-## Что это и чего здесь нет
+## What This Is and What It Isn't
 
-Это не описание системы команд. Здесь нет кодировок, форм операндов и псевдокода — только стоимость:
-на какие каналы уходит операция, какая у неё латентность и сколько тактов она занимает порт.
+This is a machine-model cost table, not an ISA reference manual. There are no encodings, operand formats, or semantics here — only scheduling parameters: which issue slots (functional units / channels `ALC0`..`ALC5`, written `,0`..`,5` in `e2k` assembly) an operation can target, its RAW (read-after-write) latency, and how many cycles it occupies its functional unit.
 
-Официальное «Руководство по эффективному программированию на платформе Эльбрус» (CC BY 4.0)
-описывает процессоры Е4С/Е8С и даёт задержки по классам. Тулчейн здесь целится в e2k-v6 — другое
-поколение, поэтому числа расходятся. Кроме того, здесь задержки даны поимённо по мнемоникам,
-а каждое число снято измерением и воспроизводится локально.
+The official "Elbrus Platform Efficient Programming Guide" (CC BY 4.0) covers E4C/E8C processors and reports latencies by class. The toolchain here targets `e2k-v6` — a later microarchitecture, so timings diverge. Moreover, latencies here are keyed by mnemonic, and every measured value is locally reproducible.
 
-## Как читать
+## How to Read the Table
 
-| колонка | смысл |
+| column | meaning |
 |---|---|
-| **каналы** | номера каналов широкой команды (`ALC0`..`ALC5`), в которых операция исполнима. Прямой аналог исполнительных портов у Intel |
-| **латентность** | через сколько тактов результат виден потребителю: зависимая операция не выдаётся раньше `t + латентность` |
-| **занятие** | сколько тактов операция монопольно держит свой канал. 1 — конвейер свободен уже в следующем такте |
-| **пик/такт** | каналов ÷ занятие: сколько таких операций машина принимает за такт в пределе. Это «throughput» из таблиц Агнера Фога |
-| **источник** | чем получено число. Читать обязательно — латентность измерена у 11 классов из 24 |
+| **channels** | VLIW bundle issue slots (`ALC0`..`ALC5`, assembly syntax `,0`..`,5`) where the operation can execute — the direct analogue of Intel execution ports or Hexagon issue slots |
+| **latency** | cycles until the result is visible to a consumer: issuing a dependent operation earlier than `t + latency` creates a RAW (read-after-write) latency hazard |
+| **occupancy** | cycles the operation exclusively reserves its functional unit (initiation interval). `1` means the unit is fully pipelined and accepts another operation on the next cycle |
+| **peak/cyc** | issue slots ÷ occupancy: peak throughput per cycle (equivalent to reciprocal throughput in Agner Fog's tables) |
+| **source** | provenance of the latency figure. Note that latency is empirically measured for 11 of 24 classes |
 
-## Сводная таблица
+## Summary Table
 
-Порядок — от узких классов к широким: сначала те, где планировщику тесно, потому что именно там теряются такты.
+Ordered from narrowest to widest resource classes: tightest functional-unit bottlenecks first, because that is where scheduling pressure and cycle loss originate.
 
-| класс | каналы | латентность | занятие | пик/такт | мнемоник | источник латентности |
+| class | channels | latency | occupancy | peak/cyc | mnemonics | latency source |
 |---|---|---:|---:|---:|---:|---|
-| `FDIV` | `5` | 14 | 2 | 0.5 | 2 | измерено (цепочка зависимых, lcc -O3) |
-| `DIV` | `5` | 11 | 2 | 0.5 | 6 | измерено (цепочка зависимых, lcc -O3) |
-| `RW` | `0` | 1 | 1 | 1.0 | 2 | **допущение** |
-| `STORE` | `2,5` | 2 | 1 | 2.0 | 6 | измерено (цепочка зависимых, lcc -O3) |
-| `AAU` | `2,5` | 1 | 1 | 2.0 | 11 | **допущение** |
-| `COMBO` | `1,4` | 1 | 1 | 2.0 | 6 | **допущение** |
-| `MOVAQ` | `0,2` | 1 | 1 | 2.0 | 1 | **допущение** |
-| `PACK` | `0,3` | 1 | 1 | 2.0 | 22 | **допущение** |
-| `LOAD` | `0,2,3,5` | 5 | 1 | 4.0 | 8 | измерено (цепочка зависимых, lcc -O3) |
-| `CONV` | `0,1,3,4` | 4 | 1 | 4.0 | 12 | измерено (цепочка зависимых, lcc -O3) |
-| `MUL` | `0,1,3,4` | 4 | 1 | 4.0 | 5 | измерено (цепочка зависимых, lcc -O3) |
-| `INSF` | `0,1,3,4` | 1 | 1 | 4.0 | 2 | **допущение** |
-| `MOVA` | `0,1,2,3` | 1 | 1 | 4.0 | 5 | **допущение** |
-| `PACKLOG` | `0,1,3,4` | 1 | 1 | 4.0 | 11 | **допущение** |
-| `PRED` | `0,1,3,4` | 1 | 1 | 4.0 | 12 | **допущение** |
-| `FMA` | `0,1,2,3,4,5` | 8 | 1 | 6.0 | 6 | измерено (цепочка зависимых, lcc -O3) |
-| `FADD` | `0,1,2,3,4,5` | 4 | 1 | 6.0 | 7 | измерено (цепочка зависимых, lcc -O3) |
-| `FMUL` | `0,1,2,3,4,5` | 4 | 1 | 6.0 | 4 | измерено (цепочка зависимых, lcc -O3) |
-| `ADD` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 8 | измерено (цепочка зависимых, lcc -O3) |
-| `AND` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 7 | **допущение** |
-| `INCR` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 1 | **допущение** |
-| `MERGE` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 4 | **допущение** |
-| `SHL` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 8 | **допущение** |
-| `SUB` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 4 | измерено (цепочка зависимых, lcc -O3) |
+| `FDIV` | `5` | 14 | 2 | 0.5 | 2 | measured (dependent chain, lcc -O3) |
+| `DIV` | `5` | 11 | 2 | 0.5 | 6 | measured (dependent chain, lcc -O3) |
+| `RW` | `0` | 1 | 1 | 1.0 | 2 | **assumption** |
+| `STORE` | `2,5` | 2 | 1 | 2.0 | 6 | measured (dependent chain, lcc -O3) |
+| `AAU` | `2,5` | 1 | 1 | 2.0 | 11 | **assumption** |
+| `COMBO` | `1,4` | 1 | 1 | 2.0 | 6 | **assumption** |
+| `MOVAQ` | `0,2` | 1 | 1 | 2.0 | 1 | **assumption** |
+| `PACK` | `0,3` | 1 | 1 | 2.0 | 22 | **assumption** |
+| `LOAD` | `0,2,3,5` | 5 | 1 | 4.0 | 8 | measured (dependent chain, lcc -O3) |
+| `CONV` | `0,1,3,4` | 4 | 1 | 4.0 | 12 | measured (dependent chain, lcc -O3) |
+| `MUL` | `0,1,3,4` | 4 | 1 | 4.0 | 5 | measured (dependent chain, lcc -O3) |
+| `INSF` | `0,1,3,4` | 1 | 1 | 4.0 | 2 | **assumption** |
+| `MOVA` | `0,1,2,3` | 1 | 1 | 4.0 | 5 | **assumption** |
+| `PACKLOG` | `0,1,3,4` | 1 | 1 | 4.0 | 11 | **assumption** |
+| `PRED` | `0,1,3,4` | 1 | 1 | 4.0 | 12 | **assumption** |
+| `FMA` | `0,1,2,3,4,5` | 8 | 1 | 6.0 | 6 | measured (dependent chain, lcc -O3) |
+| `FADD` | `0,1,2,3,4,5` | 4 | 1 | 6.0 | 7 | measured (dependent chain, lcc -O3) |
+| `FMUL` | `0,1,2,3,4,5` | 4 | 1 | 6.0 | 4 | measured (dependent chain, lcc -O3) |
+| `ADD` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 8 | measured (dependent chain, lcc -O3) |
+| `AND` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 7 | **assumption** |
+| `INCR` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 1 | **assumption** |
+| `MERGE` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 4 | **assumption** |
+| `SHL` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 8 | **assumption** |
+| `SUB` | `0,1,2,3,4,5` | 1 | 1 | 6.0 | 4 | measured (dependent chain, lcc -O3) |
 
-Классы с единственным каналом: `FDIV`, `DIV`, `RW`. Отсюда берётся вся трудность планирования — две такие операции в одном такте не разойдутся никак.
+Sole-issue functional-unit classes (single-slot bottlenecks): `FDIV`, `DIV`, `RW`. This is where non-trivial scheduling difficulty originates — two operations in the same sole-issue class can never co-issue in the same VLIW bundle.
 
-## Классы и мнемоники
+## Classes and Mnemonics
 
 ### `FDIV` — 5
 
-Латентность **14** (измерено (цепочка зависимых, lcc -O3)), занятие канала **2** (измерено (поток независимых, lcc -O3)), пик **0.5** операции в такт.
+Latency **14** (measured (dependent chain, lcc -O3)), channel occupancy **2** (measured (independent stream, lcc -O3)), peak **0.5** ops/cycle.
 
 ```
 fdivd fdivs
@@ -70,7 +66,7 @@ fdivd fdivs
 
 ### `DIV` — 5
 
-Латентность **11** (измерено (цепочка зависимых, lcc -O3)), занятие канала **2** (измерено (поток независимых, lcc -O3)), пик **0.5** операции в такт.
+Latency **11** (measured (dependent chain, lcc -O3)), channel occupancy **2** (measured (independent stream, lcc -O3)), peak **0.5** ops/cycle.
 
 ```
 divd divs sdivd sdivs udivd udivs
@@ -78,7 +74,7 @@ divd divs sdivd sdivs udivd udivs
 
 ### `RW` — 0
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **1.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **1.0** ops/cycle.
 
 ```
 rwd rws
@@ -86,7 +82,7 @@ rwd rws
 
 ### `STORE` — 2,5
 
-Латентность **2** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **2.0** операции в такт.
+Latency **2** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **2.0** ops/cycle.
 
 ```
 stapq stb std sth stqp stw
@@ -94,7 +90,7 @@ stapq stb std sth stqp stw
 
 ### `AAU` — 2,5
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **2.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **2.0** ops/cycle.
 
 ```
 aaurr aaurrd aaurw aaurwd mmurr mmurw staab staad
@@ -103,7 +99,7 @@ staah staaq staaw
 
 ### `COMBO` — 1,4
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **2.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **2.0** ops/cycle.
 
 ```
 getf_addd getf_adds shl_addd shl_adds shr_addd shr_adds
@@ -111,7 +107,7 @@ getf_addd getf_adds shl_addd shl_adds shr_addd shr_adds
 
 ### `MOVAQ` — 0,2
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **2.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **2.0** ops/cycle.
 
 ```
 movaq
@@ -119,7 +115,7 @@ movaq
 
 ### `PACK` — 0,3
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **2.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **2.0** ops/cycle.
 
 ```
 paddb paddd paddh paddw pcmpeqw pcmpgtw pmaxsw pminsw
@@ -129,7 +125,7 @@ qpcmpgtw qpmaxsw qpminsw qppackdl qpsubw qpswitchd
 
 ### `LOAD` — 0,2,3,5
 
-Латентность **5** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **4.0** операции в такт.
+Latency **5** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **4.0** ops/cycle.
 
 ```
 ldapq ldb ldd ldgdd ldgdw ldh ldqp ldw
@@ -137,7 +133,7 @@ ldapq ldb ldd ldgdd ldgdw ldh ldqp ldw
 
 ### `CONV` — 0,1,3,4
 
-Латентность **4** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (допущение), пик **4.0** операции в такт.
+Latency **4** (measured (dependent chain, lcc -O3)), channel occupancy **1** (assumption), peak **4.0** ops/cycle.
 
 ```
 fdtofs fdtoid fdtois fdtoistr fstofd fstoid fstois fstoistr
@@ -146,7 +142,7 @@ idtofd idtofs istofd istofs
 
 ### `MUL` — 0,1,3,4
 
-Латентность **4** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **4.0** операции в такт.
+Latency **4** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **4.0** ops/cycle.
 
 ```
 muld muls mulw umuld umuls
@@ -154,7 +150,7 @@ muld muls mulw umuld umuls
 
 ### `INSF` — 0,1,3,4
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **4.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **4.0** ops/cycle.
 
 ```
 insfd insfs
@@ -162,7 +158,7 @@ insfd insfs
 
 ### `MOVA` — 0,1,2,3
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **4.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **4.0** ops/cycle.
 
 ```
 movab movad movah movaqp movaw
@@ -170,7 +166,7 @@ movab movad movah movaqp movaw
 
 ### `PACKLOG` — 0,1,3,4
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **4.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **4.0** ops/cycle.
 
 ```
 pand por psllw psrlw pxor qpand qpor qpsllw
@@ -179,7 +175,7 @@ qpsraw qpsrlw qpxor
 
 ### `PRED` — 0,1,3,4
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **4.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **4.0** ops/cycle.
 
 ```
 cmpanddb cmpandedb cmpandesb cmpandsb cmpbdb cmpbsb cmpedb cmpesb
@@ -188,7 +184,7 @@ cmpldb cmpledb cmplesb cmplsb
 
 ### `FMA` — 0,1,2,3,4,5
 
-Латентность **8** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (проверено ассемблером (кодировка ALC)), пик **6.0** операции в такт.
+Latency **8** (measured (dependent chain, lcc -O3)), channel occupancy **1** (verified by assembler (ALC encoding)), peak **6.0** ops/cycle.
 
 ```
 fmul_addd fmul_adds fmul_rsubd fmul_rsubs fmul_subd fmul_subs
@@ -196,7 +192,7 @@ fmul_addd fmul_adds fmul_rsubd fmul_rsubs fmul_subd fmul_subs
 
 ### `FADD` — 0,1,2,3,4,5
 
-Латентность **4** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **6.0** операции в такт.
+Latency **4** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **6.0** ops/cycle.
 
 ```
 faddd fadds fsubd fsubs pfaddd pfadds pfsubs
@@ -204,7 +200,7 @@ faddd fadds fsubd fsubs pfaddd pfadds pfsubs
 
 ### `FMUL` — 0,1,2,3,4,5
 
-Латентность **4** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **6.0** операции в такт.
+Latency **4** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **6.0** ops/cycle.
 
 ```
 fmuld fmuls pfmuld pfmuls
@@ -212,7 +208,7 @@ fmuld fmuls pfmuld pfmuls
 
 ### `ADD` — 0,1,2,3,4,5
 
-Латентность **1** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **6.0** операции в такт.
+Latency **1** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **6.0** ops/cycle.
 
 ```
 addd adds addw incd incs movtd movts sxt
@@ -220,7 +216,7 @@ addd adds addw incd incs movtd movts sxt
 
 ### `AND` — 0,1,2,3,4,5
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **6.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **6.0** ops/cycle.
 
 ```
 andd andns ands ord ors xord xors
@@ -228,7 +224,7 @@ andd andns ands ord ors xord xors
 
 ### `INCR` — 0,1,2,3,4,5
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **6.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **6.0** ops/cycle.
 
 ```
 incr
@@ -236,7 +232,7 @@ incr
 
 ### `MERGE` — 0,1,2,3,4,5
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **6.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **6.0** ops/cycle.
 
 ```
 getfd getfs merged merges
@@ -244,7 +240,7 @@ getfd getfs merged merges
 
 ### `SHL` — 0,1,2,3,4,5
 
-Латентность **1** (допущение), занятие канала **1** (допущение), пик **6.0** операции в такт.
+Latency **1** (assumption), channel occupancy **1** (assumption), peak **6.0** ops/cycle.
 
 ```
 sard sars scls scrs shld shls shrd shrs
@@ -252,108 +248,88 @@ sard sars scls scrs shld shls shrd shrs
 
 ### `SUB` — 0,1,2,3,4,5
 
-Латентность **1** (измерено (цепочка зависимых, lcc -O3)), занятие канала **1** (измерено (поток независимых, lcc -O3)), пик **6.0** операции в такт.
+Latency **1** (measured (dependent chain, lcc -O3)), channel occupancy **1** (measured (independent stream, lcc -O3)), peak **6.0** ops/cycle.
 
 ```
 decs subd subs subw
 ```
 
-## Запреты на сочетания в широкой команде
+## Prohibited VLIW Bundle Combinations
 
-Матрица портов отвечает про одну операцию за раз. Тем же приёмом можно
-спросить и про пары: собрать команду из двух по отдельности законных
-операций и посмотреть, примет ли её ассемблер. Полный перебор находит
-ровно 2 запрета:
+The issue-slot matrix answers legality for one operation in isolation. The same probing technique extends to pairs: assemble a VLIW bundle containing two individually legal operations and check whether the assembler accepts it. Exhaustive probing reveals exactly 2 structural prohibitions:
 
 ```
 Error: the combination of STORE in ALC2 with LOAD in ALC3 is prohibited
 Error: the combination of STORE in ALC5 with LOAD in ALC0 is prohibited
 ```
 
-Остальные сочетания законны — включая `STORE,2 + LOAD,0` и `STORE,5 + LOAD,3`. То есть запрещена не «запись вместе с загрузкой», а именно эти две пары каналов: `(2,3)` и `(5,0)`.
+Every other pair is legal — including `STORE,2 + LOAD,0` and `STORE,5 + LOAD,3`. The restriction is not "store co-issued with load", but specifically these two issue-slot pairs: `(2,3)` and `(5,0)`.
 
-Это швы между кластерами `0,1,2` и `3,4,5`. **Кластерность машины существует и наблюдаема — но проявляется как структурный запрет в широкой команде, а не как межкластерная задержка.** Саму задержку локальным тулчейном снять нельзя, и это проверено, а не предположено.
+Those are the boundaries between clusters `,0 ,1 ,2` and `,3 ,4 ,5`. **Machine clustering is real and observable — here it manifests as an intra-bundle structural hazard rather than an inter-cluster bypass latency.** Inter-cluster latency itself cannot be extracted from the local toolchain alone, and that limitation was verified rather than assumed.
 
-## Сверка с официальной документацией МЦСТ
+## Cross-Check Against Official MCST Documentation
 
-Источник: «Руководство по эффективному программированию на платформе
-«Эльбрус»», выпуск 1.2 от 2024-02-28, CC BY 4.0, раздел 6.1 —
-[mcst.ru/elbrus_prog](http://www.mcst.ru/elbrus_prog). Числа
-оттуда в модель НЕ подставлены — это сверка, а не источник: документ про
-Е4С/Е8С, модель про e2k-v6.
+Source: "Guide to Efficient Programming on the Elbrus Platform", release 1.2 (2024-02-28), CC BY 4.0, Section 6.1 — [mcst.ru/elbrus_prog](http://www.mcst.ru/elbrus_prog). Numbers from that guide were NOT substituted into the model — this is an independent cross-check, not a data source: the guide describes E4C/E8C, whereas the model targets `e2k-v6`.
 
-| класс | измерено здесь | у МЦСТ | как названо там | вердикт |
+| class | measured here | MCST guide | name in guide | verdict |
 |---|---:|---:|---|---|
-| `FDIV` | 14 | 14 | Fdivd — 64 бита | **совпало** (измерено и подтверждено) |
-| `DIV` | 11 | 11 | Fdivs — 32 бита | **совпало** (измерено и подтверждено) |
-| `COMBO` | 1 | 2 | Int_combined | у нас допущение, документ даёт другое |
-| `LOAD` | 5 | 3 | Ld L1 hit (L2 — 11, L3 — 40, память — ~100) | **расхождение** |
-| `MUL` | 4 | 4 | Fp (целочисленное умножение отнесено к классу Fp) | **совпало** (измерено и подтверждено) |
-| `PRED` | 1 | 0.5…3 | logic->logic 0.5, Cmp->logic 1, ->qual 2, ->ct 3 | у нас допущение, документ даёт другое |
-| `FMA` | 8 | 8 | Fp_combined | **совпало** (измерено и подтверждено) |
-| `FADD` | 4 | 4 | Fp | **совпало** (измерено и подтверждено) |
-| `FMUL` | 4 | 4 | Fp | **совпало** (измерено и подтверждено) |
-| `ADD` | 1 | 1 | Int, Bitwise | **совпало** (измерено и подтверждено) |
-| `AND` | 1 | 1 | Int, Bitwise | допущение подтвердилось документом |
-| `SHL` | 1 | 1 | Int, Bitwise | допущение подтвердилось документом |
-| `SUB` | 1 | 1 | Int, Bitwise | **совпало** (измерено и подтверждено) |
+| `FDIV` | 14 | 14 | Fdivd — 64-bit | **match** (measured and confirmed) |
+| `DIV` | 11 | 11 | Fdivs — 32-bit | **match** (measured and confirmed) |
+| `COMBO` | 1 | 2 | Int_combined | assumption here; guide gives different value |
+| `LOAD` | 5 | 3 | Ld L1 hit (L2 — 11, L3 — 40, RAM — ~100) | **divergence** |
+| `MUL` | 4 | 4 | Fp (integer multiply grouped under Fp) | **match** (measured and confirmed) |
+| `PRED` | 1 | 0.5…3 | logic->logic 0.5, Cmp->logic 1, ->qual 2, ->ct 3 | assumption here; guide gives different value |
+| `FMA` | 8 | 8 | Fp_combined | **match** (measured and confirmed) |
+| `FADD` | 4 | 4 | Fp | **match** (measured and confirmed) |
+| `FMUL` | 4 | 4 | Fp | **match** (measured and confirmed) |
+| `ADD` | 1 | 1 | Int, Bitwise | **match** (measured and confirmed) |
+| `AND` | 1 | 1 | Int, Bitwise | assumption confirmed by guide |
+| `SHL` | 1 | 1 | Int, Bitwise | assumption confirmed by guide |
+| `SUB` | 1 | 1 | Int, Bitwise | **match** (measured and confirmed) |
 
-Сошлось по **10** классам, разошлось по **3**.
+Matched on **10** classes, diverged on **3**.
 
-**`LOAD`: 5 против 3 — разница поколений, а не ошибка.** Документ даёт
-3 такта на попадание в L1 для Е4С/Е8С. Измерение на настоящем выводе
-`lcc -O3` для e2k-v6 даёт 5: по 36 зависимым парам минимальный шаг — 5,
-двенадцать пар ровно на пяти. Проверено и цепочкой через адрес
-(`load_latency.c`), и потреблением как данных (`load_data_latency.c`) —
-обе дают 5. Модель описывает ту машину, под которую собирает тулчейн.
+**`LOAD`: 5 vs. 3 is a generational difference, not a measurement bug.** The guide lists 3 cycles for an L1 hit on E4C/E8C. Measuring real `lcc -O3` output for `e2k-v6` yields 5: across 36 dependent pairs the minimum bundle spacing is 5, with twelve pairs at exactly 5. Confirmed via both address chains (`load_latency.c`) and data-consumption chains (`load_data_latency.c`) — both yield 5. The model reflects the microarchitecture the toolchain actually compiles for.
 
-**Чего в модели нет, а в документе есть.** Оба эффекта зависят от ПАРЫ
-«источник-потребитель», а не от одной операции, поэтому одним числом в
-`OpClass.latency` не выражаются:
+**What the guide documents that the model omits.** Both effects depend on a producer–consumer PAIR rather than a single operation, so they cannot be encoded as a scalar in `OpClass.latency`:
 
-* штраф на передачу между целочисленными и вещественными операциями:
-  `fp→int` +2 такта. Документ разбирает пример: «задержка от `muls` до
-  `add` — 6 тактов: 4 своей длительности плюс 2 за передачу»;
-* межкластерные задержки (глава 12): в своём кластере через байпас
-  1 такт, в чужой — 2, через регистровый файл — 3–4. Кластеры `,0 ,1 ,2`
-  и `,3 ,4 ,5` в документе названы прямо.
+* cross-domain transfer penalty between integer and floating-point pipes: `fp→int` +2 cycles. The guide cites an explicit example: "latency from `muls` to `add` is 6 cycles: 4 of its own latency plus 2 for the transfer";
+* inter-cluster bypass delays (Chapter 12): 1 cycle via same-cluster bypass, 2 cycles across clusters, 3–4 cycles through the register file. Clusters `,0 ,1 ,2` and `,3 ,4 ,5` are called out explicitly in the guide.
 
-Это известное упрощение модели, а не забытое: см. `OpClass.occupancy`,
-где та же одномерность разобрана для занятости порта.
+This is a deliberate simplification of the machine model, not an oversight: see `OpClass.occupancy`, where the same scalar abstraction is documented for functional-unit reservation cycles.
 
-## Методика
+## Methodology
 
-Все числа получены снаружи, без описания системы команд. Приёмов три, и у каждого своя сила утверждения.
+Every parameter was derived externally, without an official ISA manual, using three techniques of differing evidential strength.
 
-**Каналы — спрошены у ассемблера.** Собирается крошечный `.s` с операцией в конкретном канале; если канал ей не положен, ассемблер отвечает `cannot be encoded in ALCn`. Перебор по всем шести каналам даёт строку матрицы. Это самый надёжный из трёх приёмов: отвечает железо через инструмент, а не наблюдение за компилятором.
+**Issue slots (channels) — queried from the assembler.** Assemble a minimal `.s` stub placing an operation in a specific channel (`,0`..`,5`); if illegal, the assembler rejects it with `cannot be encoded in ALCn`. Sweeping all six slots yields one row of the capability matrix. This is the strongest of the three methods: hardware encoding rules answer directly through the assembler rather than indirectly through compiler heuristics.
 
-**Латентность — цепочкой зависимых операций.** `x = x * b` в цикле: компилятор обязан развести соседние умножения ровно на латентность, и шаг между bundle в листинге её и показывает.
+**Latency — dependent-operation chain.** `x = x * b` in a loop: the compiler must space consecutive multiplies by at least their RAW latency, and the bundle-to-bundle delta in the listing exposes it.
 
-**Темп приёма — потоком независимых.** Шестнадцать независимых умножений подряд: шаг между выдачами показывает, через сколько тактов устройство готово принять следующую операцию.
+**Issue rate (occupancy) — independent-operation stream.** Sixteen independent multiplies in a row: the spacing between issues reveals how many cycles elapse before the functional unit accepts the next operation.
 
-**Чего так снять нельзя.** По листингу видно, что компилятор ЗАХОТЕЛ сделать, а не что железо МОЖЕТ. Первая версия этой модели строилась по листингу, где четыре умножения легли в один канал подряд — и это прочли как «умножитель один». На самом деле четырёх операций просто не хватило, чтобы жадному планировщику понадобился второй канал. Отсюда правило: матрица портов — только у ассемблера.
+**What cannot be inferred from compiler listings.** A compiler listing shows what the compiler *chose* to schedule, not what the hardware *can* issue. The first version of this model was built from a listing where four multiplies landed sequentially on a single channel — misread as "only one multiplier." In reality, four operations were simply not enough to push the greedy list scheduler onto a second functional unit. Hence the rule: issue-slot matrices must come exclusively from the assembler.
 
-## Чего не измерено
+## What Has Not Been Measured
 
-Латентность измерена у **11** классов из **24**. У остальных 13 стоит единица, и это допущение, а не результат:
+Latency is measured for **11** of **24** classes. The remaining 13 use 1 cycle as a placeholder assumption, not an empirical measurement:
 
-| класс | каналы | мнемоник | что нужно измерить |
+| class | channels | mnemonics | what needs measuring |
 |---|---|---:|---|
-| `RW` | `0` | 2 | латентность цепочкой зависимых |
-| `AAU` | `2,5` | 11 | латентность цепочкой зависимых |
-| `COMBO` | `1,4` | 6 | латентность цепочкой зависимых |
-| `MOVAQ` | `0,2` | 1 | латентность цепочкой зависимых |
-| `PACK` | `0,3` | 22 | латентность цепочкой зависимых |
-| `INSF` | `0,1,3,4` | 2 | латентность цепочкой зависимых |
-| `MOVA` | `0,1,2,3` | 5 | латентность цепочкой зависимых |
-| `PACKLOG` | `0,1,3,4` | 11 | латентность цепочкой зависимых |
-| `PRED` | `0,1,3,4` | 12 | латентность цепочкой зависимых |
-| `AND` | `0,1,2,3,4,5` | 7 | латентность цепочкой зависимых |
-| `INCR` | `0,1,2,3,4,5` | 1 | латентность цепочкой зависимых |
-| `MERGE` | `0,1,2,3,4,5` | 4 | латентность цепочкой зависимых |
-| `SHL` | `0,1,2,3,4,5` | 8 | латентность цепочкой зависимых |
+| `RW` | `0` | 2 | latency via dependent chain |
+| `AAU` | `2,5` | 11 | latency via dependent chain |
+| `COMBO` | `1,4` | 6 | latency via dependent chain |
+| `MOVAQ` | `0,2` | 1 | latency via dependent chain |
+| `PACK` | `0,3` | 22 | latency via dependent chain |
+| `INSF` | `0,1,3,4` | 2 | latency via dependent chain |
+| `MOVA` | `0,1,2,3` | 5 | latency via dependent chain |
+| `PACKLOG` | `0,1,3,4` | 11 | latency via dependent chain |
+| `PRED` | `0,1,3,4` | 12 | latency via dependent chain |
+| `AND` | `0,1,2,3,4,5` | 7 | latency via dependent chain |
+| `INCR` | `0,1,2,3,4,5` | 1 | latency via dependent chain |
+| `MERGE` | `0,1,2,3,4,5` | 4 | latency via dependent chain |
+| `SHL` | `0,1,2,3,4,5` | 8 | latency via dependent chain |
 
-Приём известен и описан выше — не хватает только настоящей машины. Если у вас есть доступ к железу, это ровно тот вклад, который закрывает дыру целиком: прогнать цепочку зависимых операций класса и посмотреть шаг между bundle.
+The methodology is established and documented above — only physical silicon is missing. If you have access to an Elbrus machine, running a dependent chain for each class and inspecting bundle spacing closes this gap completely.
 
-Каналы при этом измерены у всех классов без исключения: ассемблер отвечает на вопрос про кодировку локально, машина для этого не нужна.
-
+Issue-slot legality, by contrast, is measured for every class without exception: the assembler validates encodings locally, with no hardware required.

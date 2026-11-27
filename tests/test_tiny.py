@@ -1,4 +1,4 @@
-"""Тесты крошки-1: размер, законность, фолбэк, никогда не хуже baseline."""
+"""TINY-1 scheduler tests: parameter budget, legality, fallback, and never-worse-than-baseline."""
 
 import unittest
 
@@ -62,7 +62,7 @@ class TestTiny(unittest.TestCase):
         from pathlib import Path
         p = Path(__file__).resolve().parent.parent / "vliw" / "tiny" / "weights.json"
         if not p.exists():
-            self.skipTest("весов нет — только после обучения")
+            self.skipTest("weights not present — available after training")
         s = TinyScheduler(str(p))
         self.assertIsNotNone(s.tiny)
         m = get_profile("e2k-v6-measured")
@@ -72,13 +72,11 @@ class TestTiny(unittest.TestCase):
 
 
 class TestRuleHolds(unittest.TestCase):
-    """Ручные держки монопольного порта: формат и законность варианта.
+    """Manual exclusive-port hold rule: format and legality of the deferred variant.
 
-    Правило чинит класс «дырка под DIV» (граф 7 eval_hard: жадный забивает
-    порт ,5 некритичным DIV, критичный ждёт). Портфель берёт вариант,
-    только если он строго лучше, — здесь проверяем, что вариант всегда
-    считается и законен, когда держки есть. Выигрыш меряют eval/verify,
-    а не юниты.
+    Fixes the 'DIV bubble' trap where greedy occupies exclusive port ,5 with a
+    non-critical DIV while a critical-path DIV waits. Verifies the variant is
+    always computed and legal.
     """
 
     def test_holds_shape_and_variant_legal(self):
@@ -106,7 +104,7 @@ class TestRuleHolds(unittest.TestCase):
 
 
 class TestEvalFlags(unittest.TestCase):
-    """Флаги эвала для абляции: --beam и --ignore-weights."""
+    """Evaluation CLI ablation flags: --beam and --ignore-weights."""
 
     def _run_eval(self, argv):
         import contextlib

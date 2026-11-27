@@ -1,14 +1,14 @@
-"""Генератор ассемблера: он не имеет права выдать незаконный код.
+"""Assembly generator tests: generated e2k assembly must always be legal.
 
-Весь смысл генератора в одном: каналы он берёт из модели машины, а не из
-головы, поэтому `muls,2` (где умножение не исполняется) получиться не может
-в принципе. Если это сломается, инструмент начнёт выдавать код, который
-ассемблер отвергнет, — и станет тратить время инженера вместо того, чтобы
-его экономить, то есть будет делать ровно противоположное задуманному.
+The generator's core invariant is that issue slots / functional unit ports come
+from the machine model, never hardcoded assumptions, so an illegal encoding like
+`muls,2` (where integer multiply has no FU) can never be emitted. Breaking this
+would produce assembly rejected by the e2k assembler, wasting engineer time
+instead of saving it.
 
-Проверка идёт двумя слоями. Здесь — против модели, быстро и везде. В
-`tools/probe_matrix.py` — против настоящего ассемблера e2k, но только там,
-где установлен тулчейн.
+Verification has two layers: here against the machine model (fast, runs
+everywhere), and in `tools/probe_matrix.py` against the real e2k assembler
+wherever the toolchain is installed.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class TestOnlyLegalChannels(unittest.TestCase):
         self.machine = get_profile("e2k-v6-measured")
 
     def _channels_used(self, text: str) -> dict[str, set[int]]:
-        """Какие каналы реально встретились у каждого класса операций."""
+        """Return the set of issue ports actually emitted for each operation class."""
         out: dict[str, set[int]] = {}
         for op in parse_asm(text).ops:
             if op.channel is not None:
@@ -33,7 +33,7 @@ class TestOnlyLegalChannels(unittest.TestCase):
         return out
 
     def test_generated_channels_are_legal_for_every_class(self):
-        """Главный сторож: ни одной операции в чужом канале."""
+        """Primary guard: never emit an operation on an unsupported issue port."""
         for name in asmgen.known_names():
             for packed in (False, True):
                 text = asmgen.independent(self.machine, name, 8, packed=packed)
@@ -42,8 +42,8 @@ class TestOnlyLegalChannels(unittest.TestCase):
                     with self.subTest(op=name, packed=packed):
                         self.assertTrue(
                             channels <= legal,
-                            f"{op} выдан в каналы {sorted(channels - legal)}, "
-                            f"а исполним только в {sorted(legal)}")
+                            f"{op} emitted on illegal ports {sorted(channels - legal)}, "
+                            f"supported ports are {sorted(legal)}")
 
     def test_chain_channels_are_legal_too(self):
         for name in ("MUL", "DIV", "FMUL", "ADD"):
@@ -53,10 +53,10 @@ class TestOnlyLegalChannels(unittest.TestCase):
                     self.assertTrue(channels <= set(self.machine.channels_for(op)))
 
     def test_nothing_unknown_gets_generated(self):
-        """Сгенерированное обязано разбираться СВОИМ же парсером.
+        """Generated assembly must round-trip through our own parser without UNKNOWN ops.
 
-        UNKNOWN здесь означал бы, что генератор пишет мнемонику, которой нет
-        в разметке, — и весь дальнейший разбор поедет на заглушке.
+        An UNKNOWN op would mean the generator emitted a mnemonic not covered by
+        the opcode table, causing downstream scheduling analysis to degrade.
         """
         for text in (asmgen.independent(self.machine, "MUL", 6),
                      asmgen.chain(self.machine, "FMUL", 4),
@@ -68,12 +68,12 @@ class TestOnlyLegalChannels(unittest.TestCase):
 
 
 class TestRegisterFile(unittest.TestCase):
-    """Регистры обязаны укладываться в окно: %r0…%r63.
+    """Registers must stay within the valid window: %r0..%r63.
 
-    Проверено перебором у настоящего ассемблера — предел один при любом
-    `wsz`. Первая версия генератора выдавала %r70 и дальше, и ассемблер
-    отвечал `Illegal register index`. Тест стоит здесь, чтобы это не
-    вернулось незамеченным: своя модель такую ошибку не ловит вовсе.
+    Verified empirically against the real e2k assembler — the limit is fixed
+    regardless of `wsz`. An earlier version emitted %r70+ and triggered
+    `Illegal register index`. This test prevents regressions that the abstract
+    machine model alone does not catch.
     """
 
     def setUp(self):
@@ -92,25 +92,24 @@ class TestRegisterFile(unittest.TestCase):
 
 class TestHonestHeader(unittest.TestCase):
     def test_wraparound_is_announced(self):
-        """Когда приёмники пошли по кругу, операции перестали быть независимыми.
+        """When destination registers wrap around, ops are no longer independent.
 
-        Молча выдать «40 независимых операций», из которых независимы первые
-        32, — это ровно тот сорт неправды, который инструмент существует
-        ловить у других.
+        Silently labeling 40 ops as independent when only the first 32 have
+        distinct destinations would hide WAW/RAW hazards.
         """
         machine = get_profile("e2k-v6-measured")
         few = asmgen.independent(machine, "ADD", 8)
         many = asmgen.independent(machine, "ADD", 40)
-        self.assertNotIn("ВНИМАНИЕ", few)
-        self.assertIn("ВНИМАНИЕ", many)
+        self.assertNotIn("WARNING", few)
+        self.assertIn("WARNING", many)
 
     def test_header_states_the_measured_facts(self):
-        """В шапке стоят каналы и латентность — из модели, а не из текста."""
+        """Header comments must report issue ports and latency from the machine model."""
         machine = get_profile("e2k-v6-measured")
         text = asmgen.independent(machine, "DIV", 4)
-        self.assertIn(",5", text)                     # единственный канал деления
+        self.assertIn(",5", text)                     # exclusive divider port
         self.assertIn(str(machine.latency("DIV")), text)
-        self.assertIn("держит порт", text)            # occupancy 2 у делителя
+        self.assertIn("port occupancy", text)         # 2-cycle divider occupancy
 
 
 if __name__ == "__main__":

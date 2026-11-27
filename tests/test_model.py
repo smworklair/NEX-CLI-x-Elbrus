@@ -1,16 +1,9 @@
-"""Инварианты модели машины.
+"""Machine model invariants for `e2k-v6-measured`.
 
-Профиль e2k-v6-measured — источник истины для генератора датасета, валидатора
-и обучения. Здесь закреплено то, что ломать нельзя молча: матрица портов,
-единственность делителя и ОТСУТСТВИЕ монополии умножителя.
-
-Последнее — не придирка. Первая версия модели считала умножитель монопольным
-(порт `,0`, держит 8 тактов), из этого следовали все выводы демо, и это
-оказалось неверно. Тест стоит здесь, чтобы опровергнутая версия не вернулась
-обратно тихой правкой.
-
-Матрицу против настоящего ассемблера переснимает tools/probe_matrix.py —
-там проверка железа, здесь проверка кода.
+Locks down the hardware port matrix, exclusive divider port `,5`, and the fact
+that integer multiply is NOT exclusive (it executes on 4 ports: ,0 ,1 ,3 ,4).
+Hardware verification lives in `tools/probe_matrix.py`; this suite guards code
+invariants.
 """
 
 from __future__ import annotations
@@ -54,13 +47,9 @@ class TestMeasuredProfile(unittest.TestCase):
         self.assertEqual(M.latency("LOAD"), 5)
         for op in ("ADD", "SUB", "AND", "SHL"):
             self.assertEqual(M.latency(op), 1, op)
-        # STORE — отдельно: измерена 31.08.2026 цепочкой store→load через
-        # одну volatile-ячейку (examples/probes/store_latency.c), а не
-        # регистровым потребителем, как остальные. Была допущением-единицей.
+        # STORE latency (2c) was measured via a volatile store->load chain.
         self.assertEqual(M.latency("STORE"), 2)
-        # Делители — единственные устройства, которые держат порт дольше такта.
-        # С 30.08.2026 их два: целочисленный и с плавающей точкой, и оба
-        # сидят на одном и том же ,5 — измерено потоком независимых делений.
+        # Integer DIV and floating-point FDIV are the only ops with 2-cycle port occupancy on ,5.
         self.assertEqual(M.occupancy("DIV"), 2)
         self.assertEqual(M.occupancy("FDIV"), 2)
         for op in M.ops:
@@ -68,52 +57,36 @@ class TestMeasuredProfile(unittest.TestCase):
                 self.assertEqual(M.occupancy(op), 1, op)
 
     def test_monopolies_are_where_the_assembler_says(self):
-        """Монопольных портов ДВА, и оба установлены измерением.
-
-        История строки: сперва здесь было `{5: ["DIV"]}`. Потом измерение
-        плавающей точки поставило на тот же ,5 второй делитель — монополия
-        стала плотнее, а не размылась. Потом обнаружился ,0: запись в
-        регистры состояния (`rwd`/`rws`, например счётчик цикла %lsr)
-        ассемблер принимает ТОЛЬКО там.
-
-        Дважды правленный тест — не признак шаткости проверки, а признак
-        того, что модель растёт измерениями. Проверяем состав, а не число.
-        """
+        """Exactly two exclusive ports exist: ,0 (RW) and ,5 (DIV/FDIV)."""
         sole = M.sole_host_ops()
         self.assertEqual(set(sole), {0, 5})
         self.assertEqual(set(sole[5]), {"DIV", "FDIV"})
         self.assertEqual(set(sole[0]), {"RW"})
 
     def test_multiplier_is_not_a_monopoly(self):
-        """Опровергнутая версия модели не должна вернуться."""
+        """Refuted assumption (exclusive MUL) must never regress into the measured profile."""
         self.assertGreater(len(M.channels_for("MUL")), 1)
         self.assertEqual(M.occupancy("MUL"), 1)
         self.assertNotIn("MUL", M.sole_host_ops().get(0, []))
 
     def test_every_op_has_a_host(self):
         for op in M.ops:
-            self.assertTrue(M.channels_for(op), f"{op} негде исполнить")
+            self.assertTrue(M.channels_for(op), f"{op} has no capable execution port")
 
     def test_not_uniform(self):
-        """Если бы каналы были равноправны, планировать было бы нечего."""
+        """Issue ports are asymmetric: port ,5 has fewer ops than wide ALU ports."""
         self.assertFalse(M.uniform_channels())
         self.assertTrue(M.has_blocking_ops())
 
     def test_unknown_op_raises_with_hint(self):
-        # Имя нарочно бессмысленное: прежний пример «FMA» перестал быть
-        # несуществующим 02.09.2026, когда класс завели по-настоящему.
+        # Intentionally fictional op class name to avoid colliding with real opcodes.
         with self.assertRaises(KeyError) as cm:
             M.op("NO_SUCH_OP")
         self.assertIn("NO_SUCH_OP", str(cm.exception))
 
 
 class TestWithWidth(unittest.TestCase):
-    """Сужение машины не должно делать граф непланируемым.
-
-    У записи всего два порта, у деления один. При width 1-2 они легко теряют
-    всех носителей — в модели на этот случай стоит доводка вручную, и она
-    обязана срабатывать на КАЖДОЙ ширине, а не «обычно».
-    """
+    """Narrowing issue width (1..6) must always preserve at least one port per op class."""
 
     def test_every_op_keeps_a_host_at_any_width(self):
         for w in range(1, 9):
@@ -121,7 +94,7 @@ class TestWithWidth(unittest.TestCase):
             self.assertEqual(m.width, w)
             for op in m.ops:
                 self.assertTrue(m.channels_for(op),
-                                f"ширина {w}: {op} негде исполнить")
+                                f"width {w}: {op} has no capable port")
 
     def test_channels_are_renumbered_contiguously(self):
         for w in (1, 3, 6, 8):
@@ -134,11 +107,11 @@ class TestWithWidth(unittest.TestCase):
 
 class TestProfiles(unittest.TestCase):
     def test_firstprobe_kept_as_counterexample(self):
-        """Опровергнутый профиль оставлен намеренно — он нужен для контраста."""
+        """The legacy refuted profile is retained solely for educational contrast."""
         self.assertIn(E2K_V6_FIRSTPROBE.name, PROFILES)
         self.assertEqual(E2K_V6_FIRSTPROBE.channels_for("MUL"), (0,))
         self.assertEqual(E2K_V6_FIRSTPROBE.occupancy("MUL"), 8)
-        # И он не должен подменять собой измеренный.
+        # And it must never replace the measured default.
         self.assertNotEqual(E2K_V6_FIRSTPROBE.name, DEFAULT_PROFILE)
 
     def test_unknown_profile_exits_with_list(self):
@@ -152,7 +125,7 @@ class TestProfiles(unittest.TestCase):
         ops, grid = capability_matrix(M)
         self.assertEqual(len(grid), M.width)
         self.assertTrue(all(len(row) == len(ops) for row in grid))
-        # Матрица и channels_for обязаны рассказывать одно и то же.
+        # Port matrix and channels_for() must agree exactly.
         for pi, row in enumerate(grid):
             for oi, can in enumerate(row):
                 self.assertEqual(can, pi in M.channels_for(ops[oi]))

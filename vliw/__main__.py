@@ -1,4 +1,4 @@
-"""Тонкая точка входа: вся логика CLI — в vliw/cli.py."""
+"""Thin entry point: all CLI logic lives in vliw/cli.py."""
 
 from __future__ import annotations
 

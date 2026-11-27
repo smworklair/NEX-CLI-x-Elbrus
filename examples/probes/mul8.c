@@ -1,11 +1,11 @@
 #include <stdio.h>
 
-/* 8 независимых int32-умножений. volatile — чтобы компилятор ничего не
-   свернул и не выбросил как мёртвый код. Задача: если умножитель есть на
-   нескольких каналах, компилятору НЕЧЕГО мешает засунуть несколько muls
-   в одну широкую команду сразу (данные не зависят друг от друга). Если
-   умножитель один — они всё равно растянутся по тактам с фиксированным
-   шагом, как в первой пробе с четырьмя. */
+/* 8 independent int32 multiplications. volatile prevents the compiler from
+   folding or eliminating them as dead code. Goal: if a multiplier exists on
+   multiple channels, NOTHING prevents the compiler from packing several muls
+   into one wide instruction at once (data are independent). If there is
+   only one multiplier, they will still stretch across cycles with a fixed
+   stride, as in the first four-op probe. */
 
 volatile int a[8] = {2, 3, 4, 5, 6, 7, 8, 9};
 volatile int b[8] = {11, 12, 13, 14, 15, 16, 17, 18};

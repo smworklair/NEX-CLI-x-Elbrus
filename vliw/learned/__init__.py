@@ -1,17 +1,18 @@
-"""Обученная модель планирования: запуск локально, тем же протоколом.
+"""Learned scheduling model: local execution over the same protocol.
 
-`LearnedScheduler` реализует протокол `Scheduler` из `vliw.core.api` — тот же
-`schedule(dag, model) -> SchedulingResult`, что у baseline и oracle, поэтому
-CLI и визуализация про него ничего особенного не знают.
+`LearnedScheduler` implements the `Scheduler` protocol from `vliw.core.api` —
+the same `schedule(dag, model) -> SchedulingResult` as baseline and oracle,
+so CLI and visualization need no special handling for it.
 
-Одно отличие принципиально: baseline и oracle по построению выдают ЗАКОННОЕ
-расписание, а обученная модель — не обязательно. Её ошибки не прячутся, а
-складываются в `notes`/`search_stats` и печатаются. Подробности — в
+One key difference: baseline and oracle produce a VALID schedule by
+construction, whereas the learned model does not necessarily do so. Its
+errors are never hidden; they are recorded in `notes`/`search_stats` and
+printed. Details in
 `scheduler.py`.
 
-Тяжёлые зависимости (torch/transformers/peft) грузятся лениво, внутри
-`runtime.py`: `import vliw` их не требует, и без них инструмент работает как
-раньше — просто без команды `/learned`.
+Heavy dependencies (torch/transformers/peft) are loaded lazily inside
+`runtime.py`: `import vliw` does not require them, and without them the tool
+works normally — simply without the `/learned` command.
 """
 
 from .scheduler import LearnedScheduler

@@ -1,15 +1,15 @@
-"""ES fine-tune крошки-1 — алгоритм Evolution Strategies из MLGO-статьи
-(Trofin et al., arxiv 2101.04808: PG и ES как два алгоритма обучения политик).
+"""ES fine-tuning for Tiny-1 — Evolution Strategies from the MLGO paper
+(Trofin et al., arXiv 2101.04808: PG and ES as two policy-training algorithms).
 
-Зачем: behavioral cloning копирует порядок оракула, но наша метрика —
-makespan после list_schedule (недифференцируемо: сортировка + упаковка).
-ES работает с такой наградой напрямую: шумим веса, меряем makespan,
-шагаем в сторону лучших возмущений.
+Why: behavioral cloning copies the oracle order, but our metric is
+makespan after list_schedule (non-differentiable: sorting + packing).
+ES optimizes this reward directly: perturb weights, measure makespan,
+and step toward the better perturbations.
 
-Фитнес = средний makespan STANDALONE prio-варианта (без веера: веер бы
-размыл сигнал весов — его добавляет портфель сверху, см. scheduler.py).
+Fitness = mean makespan of the STANDALONE prio variant (no beam: beam would
+dilute the weight signal — the portfolio adds it on top, see scheduler.py).
 
-Нужен numpy ТОЛЬКО для обучения. Формат весов — тот же JSON.
+Requires numpy ONLY for training. Weight format is the same JSON.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def load_batch(path: str):
 
 
 def fitness(w: np.ndarray, shape: tuple, batch) -> float:
-    """Средний makespan prio-варианта. Меньше = лучше."""
+    """Mean makespan of the prio variant. Lower is better."""
     t = unpack(w, shape)
     tot = 0.0
     for row in batch:
@@ -92,9 +92,9 @@ def fitness(w: np.ndarray, shape: tuple, batch) -> float:
 
 
 def fitness_hold(w: np.ndarray, shape: tuple, batch) -> float:
-    """Средний makespan варианта prio + держки кандидата. Порядок фиксирован
-    (доводим только голову держек), держки — asap + hold с клипом по greedy.
-    Меньше = лучше."""
+    """Mean makespan of prio + candidate holds. Order is fixed
+    (tuning only the hold head); holds are asap + hold clipped to greedy.
+    Lower is better."""
     t = unpack(w, shape)
     tot = 0.0
     for dag, prof, X, height, asap, base_ms, prio in batch:
@@ -114,11 +114,11 @@ def main() -> None:
     ap.add_argument("--init", default="vliw/tiny/weights.json")
     ap.add_argument("--out", default="vliw/tiny/weights_es.json")
     ap.add_argument("--mode", choices=["prio", "hold"], default="prio",
-                    help="prio: доводить порядок (standalone); hold: доводить "
-                         "держки при фиксированном порядке (--prio-weights)")
+                    help="prio: tune ordering (standalone); hold: tune "
+                         "holds with a fixed ordering (--prio-weights)")
     ap.add_argument("--prio-weights", default="vliw/tiny/weights.json")
     ap.add_argument("--iters", type=int, default=20)
-    ap.add_argument("--pop", type=int, default=16, help="четное: антитезные пары")
+    ap.add_argument("--pop", type=int, default=16, help="even: antithetic pairs")
     ap.add_argument("--sigma", type=float, default=0.01)
     ap.add_argument("--lr", type=float, default=0.1)
     ap.add_argument("--batch", type=int, default=96)
@@ -135,7 +135,7 @@ def main() -> None:
     dim = w.size
     print(f"params={dim}", flush=True)
     if a.mode == "hold":
-        # Порядок фиксируем (текущие prio-веса), эволюционируют держки.
+        # Keep ordering fixed (current prio weights); evolve holds.
         pt = TinyPriority.load(rp(a.prio_weights))
         data = [row + (forward_np(row[2], pt).tolist(),) for row in data]
         fit = fitness_hold
@@ -155,7 +155,7 @@ def main() -> None:
         for k in range(half):
             fs[2 * k] = fit(w + eps[k], shape, batch)
             fs[2 * k + 1] = fit(w - eps[k], shape, batch)
-        adv = fs.mean() - fs  # плюс за улучшение (makespan ниже среднего)
+        adv = fs.mean() - fs  # positive for improvement (makespan below mean)
         step = (adv[:, None] * np.vstack([eps, -eps])).sum(0) / (half * 2 * a.sigma)
         w = w + a.lr * step
         f = fit(w, shape, batch)
@@ -168,7 +168,7 @@ def main() -> None:
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     net = unpack(best, shape)
     if a.mode == "hold":
-        # Без маркера планировщик прочтёт держки как legacy cycle.
+        # Without this marker the scheduler would read holds as legacy cycle.
         net.target = "hold"
     net.save(out)
     print(f"saved {out} best={best_f:.3f} (init {f0:.3f})", flush=True)

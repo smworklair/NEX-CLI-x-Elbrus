@@ -1,9 +1,8 @@
-"""Отрисовка справочника системы команд: экран и Markdown.
+"""ISA reference renderer: terminal summary and Markdown document.
 
-Один и тот же набор фактов уезжает в два вида. В терминале — сводка, чтобы
-посмотреть, не выходя из инструмента. В Markdown — документ, который можно
-отдать наружу; он собирается генератором, а не руками, поэтому не может
-разъехаться с моделью, по которой инструмент считает.
+The same facts feed both outputs. In the terminal, a compact table without
+leaving the tool; in Markdown, a generated document that never drifts from
+`vliw/core/model.py`.
 """
 
 from __future__ import annotations
@@ -19,24 +18,24 @@ def _chan(channels: tuple[int, ...]) -> str:
 
 
 def _src_short(source: str) -> str:
-    """Источник числа одним словом — для узкой колонки."""
-    if "ассемблером" in source:
-        return "ассемблер"
-    if "цепочка" in source:
-        return "цепочка"
-    if "поток" in source:
-        return "поток"
-    return "допущение"
+    """One-word provenance label for the narrow terminal column."""
+    low = source.lower()
+    if "assembler" in low:
+        return "assembler"
+    if "chain" in low:
+        return "chain"
+    if "burst" in low or "stream" in low:
+        return "burst"
+    return "assumed"
 
 
 def render_terminal(rows: list[IsaClass]) -> list[str]:
-    out = [paint("title", "  система команд e2k: измеренная часть"), ""]
+    out = [paint("title", "  e2k ISA: measured subset"), ""]
     out.append("  " + Style.dim(
-        "каналы — как порты у Intel; пик — сколько таких операций машина "
-        "принимает за такт"))
+        "channels correspond to Intel execution ports; peak is max ops accepted per cycle"))
     out.append("")
-    head = (f"  {'класс':<9}{'каналы':<14}{'лат.':>5}{'занят':>7}"
-            f"{'пик/такт':>10}   {'мнемоник':>8}  источник латентности")
+    head = (f"  {'class':<9}{'channels':<14}{'lat.':>5}{'occ.':>7}"
+            f"{'peak/cyc':>10}   {'mnem.':>8}  latency source")
     out.append(paint("lab", head))
     for r in rows:
         colour = "success" if r.latency_measured else "warning"
@@ -48,10 +47,10 @@ def render_terminal(rows: list[IsaClass]) -> list[str]:
     holes = gaps(rows)
     out.append("")
     out.append("  " + paint("warning",
-                            f"латентность измерена у {len(rows) - len(holes)} классов "
-                            f"из {len(rows)}") + Style.dim(
-        " — остальные стоят единицей по допущению"))
-    out.append("  " + Style.dim("документ целиком: /isa --out docs/ISA.md"))
+                            f"latency measured for {len(rows) - len(holes)} of "
+                            f"{len(rows)} classes") + Style.dim(
+        " — remaining classes default to 1 by assumption"))
+    out.append("  " + Style.dim("full document: /isa --out docs/ISA.md"))
     return out
 
 
@@ -61,80 +60,72 @@ def render_markdown(rows: list[IsaClass], model, version: str) -> str:
     L: list[str] = []
     a = L.append
 
-    a(f"# Эльбрус e2k-v6: во что обходятся операции")
+    a("# Elbrus e2k-v6: Operation Costs")
     a("")
-    a(f"Профиль `{model.name}`, {len(rows)} классов операций, "
-      f"{sum(len(r.mnemonics) for r in rows)} размеченных мнемоник. "
-      f"Собрано генератором из `vliw/core/model.py` — NEX CLI {version}.")
+    a(f"Profile `{model.name}`, {len(rows)} operation classes, "
+      f"{sum(len(r.mnemonics) for r in rows)} annotated mnemonics. "
+      f"Generated from `vliw/core/model.py` — NEX CLI {version}.")
     a("")
-    a("## Что это и чего здесь нет")
+    a("## Scope and Limitations")
     a("")
-    a("У Intel документа два, и путать их нельзя.")
+    a("Intel splits documentation into two volumes that should not be confused:")
     a("")
-    a("**SDM том 2** описывает, что инструкция ДЕЛАЕТ: кодировка опкода, формы")
-    a("операндов, псевдокод, флаги, исключения. **Здесь этого нет и не будет.**")
-    a("МЦСТ систему команд не публикует, а придумать кодировки значит выдать")
-    a("догадку за факт.")
+    a("**SDM Volume 2** specifies instruction semantics: opcode encodings, operand")
+    a("forms, pseudocode, flags, exceptions. **That is not here.**")
     a("")
-    a("**Приложение к оптимизационному руководству** описывает, сколько")
-    a("инструкция СТОИТ: на какие порты уходит, латентность, темп приёма.")
-    a("Народный эквивалент — таблицы Агнера Фога и uops.info. Вот это здесь.")
+    a("**Optimization Manual Appendix** specifies instruction COSTS: execution")
+    a("ports, latency, and throughput (analogous to Agner Fog's tables and uops.info).")
+    a("That is what this reference documents.")
     a("")
-    a("**Важная поправка (02.09.2026).** Ранее в этом документе стояло, что")
-    a("МЦСТ систему команд не публикует. Это неверно: «Руководство по")
-    a("эффективному программированию на платформе Эльбрус» выходит с 2020 года")
-    a("под CC BY 4.0, сейчас выпуск 1.2. Там есть и состав каждого АЛУ")
-    a("(глава 4), и таблица задержек классов операций (раздел 6.1), и матрица")
-    a("задержек передачи между операциями (глава 12).")
+    a("**Correction (2026-09-02).** MCST publishes the *Elbrus Effective Programming")
+    a("Guide* (CC BY 4.0, release 1.2), which covers ALU composition (ch. 4),")
+    a("class latencies (sec. 6.1), and bypass/transfer delays (ch. 12).")
     a("")
-    a("Тогда зачем этот справочник. Во-первых, **официальная таблица описывает")
-    a("процессоры Е4С/Е8С**, а тулчейн здесь целится в e2k-v6 — другое")
-    a("поколение, и числа расходятся (см. сверку ниже). Во-вторых, там задержки")
-    a("даны по КЛАССАМ («Int, Bitwise», «Fp»), а здесь — поимённо по 148")
-    a("мнемоникам с указанием каналов у каждой. В-третьих, всё здесь снято")
-    a("измерением и воспроизводится локально: это независимая проверка, а не")
-    a("пересказ.")
+    a("Why this reference still exists: (1) the official guide covers **E4C/E8C**,")
+    a("whereas this toolchain targets **e2k-v6** and numbers differ (see comparison")
+    a("below); (2) the guide groups by coarse classes, while this table maps 148")
+    a("mnemonics individually with exact channel masks; (3) everything here is")
+    a("measured locally and reproducible.")
     a("")
-    a("## Как читать")
+    a("## How to Read")
     a("")
-    a("| колонка | смысл |")
+    a("| column | meaning |")
     a("|---|---|")
-    a("| **каналы** | номера каналов широкой команды (`ALC0`..`ALC5`), в которых "
-      "операция исполнима. Прямой аналог исполнительных портов у Intel |")
-    a("| **латентность** | через сколько тактов результат виден потребителю: "
-      "зависимая операция не выдаётся раньше `t + латентность` |")
-    a("| **занятие** | сколько тактов операция монопольно держит свой канал. "
-      "1 — конвейер свободен уже в следующем такте |")
-    a("| **пик/такт** | каналов / занятие: сколько таких операций машина "
-      "принимает за такт в пределе. Это «throughput» из таблиц Агнера Фога |")
-    a("| **источник** | чем получено число. Читать обязательно — "
-      f"латентность измерена у {measured} классов из {len(rows)} |")
+    a("| **channels** | wide-instruction channels (`ALC0`..`ALC5`) where the op "
+      "can execute (analogous to Intel execution ports) |")
+    a("| **latency** | cycles until the result is visible to a consumer: "
+      "a dependent op cannot issue before `t + latency` |")
+    a("| **occupancy** | cycles the op exclusively holds its channel "
+      "(1 = pipelined, free next cycle) |")
+    a("| **peak/cyc** | channels / occupancy: theoretical peak issue rate "
+      "(throughput in Agner Fog's tables) |")
+    a("| **source** | how the value was obtained — "
+      f"latency is measured for {measured} of {len(rows)} classes |")
     a("")
-    a("## Сводная таблица")
+    a("## Summary Table")
     a("")
-    a("Порядок — от узких классов к широким: сначала те, где планировщику "
-      "тесно, потому что именно там теряются такты.")
+    a("Ordered from narrowest to widest channel masks: narrow classes are where "
+      "the scheduler faces contention and loses cycles.")
     a("")
-    a("| класс | каналы | латентность | занятие | пик/такт | мнемоник | источник латентности |")
+    a("| class | channels | latency | occupancy | peak/cyc | mnemonics | latency source |")
     a("|---|---|---:|---:|---:|---:|---|")
     for r in rows:
-        src = r.latency_source if r.latency_measured else "**допущение**"
+        src = r.latency_source if r.latency_measured else "**assumed**"
         a(f"| `{r.name}` | `{_chan(r.channels)}` | {r.latency} | {r.occupancy} | "
           f"{r.peak_per_cycle:.1f} | {len(r.mnemonics)} | {src} |")
     a("")
     mono = [r.name for r in rows if r.monopoly]
-    a(f"Классы с единственным каналом: {', '.join('`' + m + '`' for m in mono)}. "
-      "Отсюда берётся вся трудность планирования — две такие операции в одном "
-      "такте не разойдутся никак.")
+    a(f"Single-channel (exclusive) classes: {', '.join('`' + m + '`' for m in mono)}. "
+      "Two operations from the same exclusive class can never issue in the same cycle.")
     a("")
-    a("## Классы и мнемоники")
+    a("## Classes and Mnemonics")
     a("")
     for r in rows:
         a(f"### `{r.name}` — {_chan(r.channels)}")
         a("")
-        a(f"Латентность **{r.latency}** ({r.latency_source}), "
-          f"занятие канала **{r.occupancy}** ({r.occupancy_source}), "
-          f"пик **{r.peak_per_cycle:.1f}** операции в такт.")
+        a(f"Latency **{r.latency}** ({r.latency_source}), "
+          f"channel occupancy **{r.occupancy}** ({r.occupancy_source}), "
+          f"peak **{r.peak_per_cycle:.1f}** ops/cycle.")
         a("")
         if r.mnemonics:
             a("```")
@@ -148,39 +139,34 @@ def render_markdown(rows: list[IsaClass], model, version: str) -> str:
                 a(" ".join(line))
             a("```")
         else:
-            a("_Мнемоники не размечены._")
+            a("_No mnemonics tagged._")
         a("")
-    a("## Запреты на сочетания в широкой команде")
+    a("## Wide-Instruction Combination Bans")
     a("")
-    a("Матрица портов отвечает про одну операцию за раз. Тем же приёмом можно")
-    a("спросить и про пары: собрать команду из двух по отдельности законных")
-    a("операций и посмотреть, примет ли её ассемблер. Полный перебор находит")
-    a(f"ровно {len(COMBINATION_BANS)} запрета:")
+    a("Exhaustive pairwise assembler probing of individually valid operations")
+    a(f"reveals exactly {len(COMBINATION_BANS)} forbidden combinations:")
     a("")
     a("```")
     for *_ignored, text in COMBINATION_BANS:
         a(text)
     a("```")
     a("")
-    a("Остальные сочетания законны — включая `STORE,2 + LOAD,0` и "
-      "`STORE,5 + LOAD,3`. То есть запрещена не «запись вместе с загрузкой», а "
-      "именно эти две пары каналов: `(2,3)` и `(5,0)`.")
+    a("All other combinations are valid — including `STORE,2 + LOAD,0` and "
+      "`STORE,5 + LOAD,3`. The ban targets specifically channel pairs `(2,3)` and `(5,0)`.")
     a("")
     ca, cb = CLUSTERS
-    a(f"Это швы между кластерами `{_chan(ca)}` и `{_chan(cb)}`. **Кластерность "
-      "машины существует и наблюдаема — но проявляется как структурный запрет "
-      "в широкой команде, а не как межкластерная задержка.** Саму задержку "
-      "локальным тулчейном снять нельзя, и это проверено, а не предположено.")
+    a(f"These are the seams between clusters `{_chan(ca)}` and `{_chan(cb)}`. "
+      "**Clustering exists and is observable as a structural encoding ban in a "
+      "wide instruction**, while inter-cluster bypass latency cannot be probed "
+      "from the local toolchain alone.")
     a("")
-    a("## Сверка с официальной документацией МЦСТ")
+    a("## Cross-Check Against Official MCST Documentation")
     a("")
-    a("Источник: «Руководство по эффективному программированию на платформе")
-    a("«Эльбрус»», выпуск 1.2 от 2024-02-28, CC BY 4.0, раздел 6.1 —")
-    a("[mcst.ru/elbrus_prog](http://www.mcst.ru/elbrus_prog). Числа")
-    a("оттуда в модель НЕ подставлены — это сверка, а не источник: документ про")
-    a("Е4С/Е8С, модель про e2k-v6.")
+    a("Source: *Elbrus Effective Programming Guide*, release 1.2 (2024-02-28),")
+    a("CC BY 4.0, sec. 6.1 — [mcst.ru/elbrus_prog](http://www.mcst.ru/elbrus_prog).")
+    a("Those numbers are NOT substituted into the model (E4C/E8C vs e2k-v6).")
     a("")
-    a("| класс | измерено здесь | у МЦСТ | как названо там | вердикт |")
+    a("| class | measured here | MCST doc | MCST name | verdict |")
     a("|---|---:|---:|---|---|")
     from ..core.isa import DOC_LATENCY
     agree = disagree = 0
@@ -191,81 +177,52 @@ def render_markdown(rows: list[IsaClass], model, version: str) -> str:
         value, doc_name = doc
         same = str(r.latency) == value
         if same and r.latency_measured:
-            verdict, agree = "**совпало** (измерено и подтверждено)", agree + 1
+            verdict, agree = "**match** (measured & confirmed)", agree + 1
         elif same:
-            verdict, agree = "допущение подтвердилось документом", agree + 1
+            verdict, agree = "assumption confirmed by doc", agree + 1
         elif r.latency_measured:
-            verdict, disagree = "**расхождение**", disagree + 1
+            verdict, disagree = "**mismatch**", disagree + 1
         else:
-            verdict, disagree = "у нас допущение, документ даёт другое", disagree + 1
+            verdict, disagree = "assumed here; doc gives different value", disagree + 1
         a(f"| `{r.name}` | {r.latency} | {value} | {doc_name} | {verdict} |")
     a("")
-    a(f"Сошлось по **{agree}** классам, разошлось по **{disagree}**.")
+    a(f"Matches: **{agree}** classes; mismatches: **{disagree}**.")
     a("")
-    a("**`LOAD`: 5 против 3 — разница поколений, а не ошибка.** Документ даёт")
-    a("3 такта на попадание в L1 для Е4С/Е8С. Измерение на настоящем выводе")
-    a("`lcc -O3` для e2k-v6 даёт 5: по 36 зависимым парам минимальный шаг — 5,")
-    a("двенадцать пар ровно на пяти. Проверено и цепочкой через адрес")
-    a("(`load_latency.c`), и потреблением как данных (`load_data_latency.c`) —")
-    a("обе дают 5. Модель описывает ту машину, под которую собирает тулчейн.")
+    a("**`LOAD`: 5 vs 3 — generational difference, not a bug.** The guide lists 3")
+    a("cycles for L1 hits on E4C/E8C. Real `lcc -O3` output for e2k-v6 consistently")
+    a("schedules dependent loads 5 cycles apart (both address and data chains).")
     a("")
-    a("**Чего в модели нет, а в документе есть.** Оба эффекта зависят от ПАРЫ")
-    a("«источник-потребитель», а не от одной операции, поэтому одним числом в")
-    a("`OpClass.latency` не выражаются:")
+    a("**Effects in the guide not modeled here** (pair-dependent, cannot be")
+    a("expressed as a single scalar in `OpClass.latency`):")
     a("")
-    a("* штраф на передачу между целочисленными и вещественными операциями:")
-    a("  `fp→int` +2 такта. Документ разбирает пример: «задержка от `muls` до")
-    a("  `add` — 6 тактов: 4 своей длительности плюс 2 за передачу»;")
-    a("* межкластерные задержки (глава 12): в своём кластере через байпас")
-    a("  1 такт, в чужой — 2, через регистровый файл — 3–4. Кластеры `,0 ,1 ,2`")
-    a("  и `,3 ,4 ,5` в документе названы прямо.")
+    a("* `fp→int` transfer penalty (+2 cycles);")
+    a("* inter-cluster bypass delays (ch. 12: 1 cycle intra-cluster, 2 cross-cluster,")
+    a("  3–4 via register file; clusters `,0 ,1 ,2` and `,3 ,4 ,5`).")
     a("")
-    a("Это известное упрощение модели, а не забытое: см. `OpClass.occupancy`,")
-    a("где та же одномерность разобрана для занятости порта.")
+    a("## Methodology")
     a("")
-    a("## Методика")
+    a("Three black-box probing methods against the local toolchain:")
     a("")
-    a("Все числа получены снаружи, без описания системы команд. Приёмов три, и "
-      "у каждого своя сила утверждения.")
+    a("**Channels — assembler probing.** Assemble a minimal `.s` placing each op "
+      "in each channel; invalid encodings return `cannot be encoded in ALCn`.")
     a("")
-    a("**Каналы — спрошены у ассемблера.** Собирается крошечный `.s` с "
-      "операцией в конкретном канале; если канал ей не положен, ассемблер "
-      "отвечает `cannot be encoded in ALCn`. Перебор по всем шести каналам "
-      "даёт строку матрицы. Это самый надёжный из трёх приёмов: отвечает "
-      "железо через инструмент, а не наблюдение за компилятором.")
+    a("**Latency — dependent chains.** `x = x * b` in a loop forces `lcc` to space "
+      "adjacent dependent bundles by the exact latency.")
     a("")
-    a("**Латентность — цепочкой зависимых операций.** `x = x * b` в цикле: "
-      "компилятор обязан развести соседние умножения ровно на латентность, и "
-      "шаг между bundle в листинге её и показывает.")
+    a("**Issue rate — independent streams.** 16 independent ops reveal minimum "
+      "channel occupancy between consecutive issues.")
     a("")
-    a("**Темп приёма — потоком независимых.** Шестнадцать независимых "
-      "умножений подряд: шаг между выдачами показывает, через сколько тактов "
-      "устройство готово принять следующую операцию.")
+    a("## Unmeasured Latencies")
     a("")
-    a("**Чего так снять нельзя.** По листингу видно, что компилятор ЗАХОТЕЛ "
-      "сделать, а не что железо МОЖЕТ. Первая версия этой модели строилась по "
-      "листингу, где четыре умножения легли в один канал подряд — и это "
-      "прочли как «умножитель один». На самом деле четырёх операций просто не "
-      "хватило, чтобы жадному планировщику понадобился второй канал. Отсюда "
-      "правило: матрица портов — только у ассемблера.")
+    a(f"Latency is measured for **{measured}** of **{len(rows)}** classes. The "
+      f"remaining {len(holes)} default to 1 by assumption:")
     a("")
-    a("## Чего не измерено")
-    a("")
-    a(f"Латентность измерена у **{measured}** классов из **{len(rows)}**. У "
-      f"остальных {len(holes)} стоит единица, и это допущение, а не результат:")
-    a("")
-    a("| класс | каналы | мнемоник | что нужно измерить |")
+    a("| class | channels | mnemonics | needed measurement |")
     a("|---|---|---:|---|")
     for r in holes:
         a(f"| `{r.name}` | `{_chan(r.channels)}` | {len(r.mnemonics)} | "
-          f"латентность цепочкой зависимых |")
+          f"dependent-chain latency |")
     a("")
-    a("Приём известен и описан выше — не хватает только настоящей машины. Если "
-      "у вас есть доступ к железу, это ровно тот вклад, который закрывает дыру "
-      "целиком: прогнать цепочку зависимых операций класса и посмотреть шаг "
-      "между bundle.")
-    a("")
-    a("Каналы при этом измерены у всех классов без исключения: ассемблер "
-      "отвечает на вопрос про кодировку локально, машина для этого не нужна.")
+    a("Channels are measured for every class without exception via the assembler.")
     a("")
     return "\n".join(L) + "\n"
